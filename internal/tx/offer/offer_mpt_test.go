@@ -102,11 +102,12 @@ func putOfferMPTIssuance(
 	view.data[keylet.MPTIssuance(id).Key] = raw
 }
 
-func putOfferMPTHolding(t *testing.T, view *offerMPTLedgerView, id [24]byte, holder [20]byte, amount uint64) {
+func putOfferMPTHolding(t *testing.T, view *offerMPTLedgerView, id [24]byte, holder [20]byte, amount uint64, flags uint32) {
 	t.Helper()
 	raw, err := state.SerializeMPToken(&state.MPTokenData{
 		Account:           holder,
 		MPTokenIssuanceID: id,
+		Flags:             flags,
 		MPTAmount:         amount,
 	})
 	require.NoError(t, err)
@@ -316,11 +317,43 @@ func TestOfferMPTPreclaimPermissionsAndFunding(t *testing.T) {
 		putOfferMPTAccount(t, view, issuer)
 		putOfferMPTAccount(t, view, holder)
 		putOfferMPTIssuance(t, view, id, entry.LsfMPTCanTrade|entry.LsfMPTCanTransfer, 100, 1_000)
-		putOfferMPTHolding(t, view, id, holder, 100)
+		putOfferMPTHolding(t, view, id, holder, 100, 0)
 
 		offer := newOffer(holder, tx.NewXRPAmount(1_000), offerMPTAmount(id, 10))
 		require.Equal(t, ter.TesSUCCESS, offer.Preclaim(view, config))
 	})
+
+	for _, test := range []struct {
+		name  string
+		rules *amendment.Rules
+	}{
+		{"strong authorization", amendment.AllSupportedRules()},
+		{"issuance flags", amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported).
+			Disable(amendment.FeatureSingleAssetVault).Disable(amendment.FeatureConfidentialTransfer).Build()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			view := newOfferMPTLedgerView()
+			view.rules = test.rules
+			cfg := config
+			cfg.Rules = test.rules
+			cfg.ParentCloseTime = 2
+			putOfferMPTAccount(t, view, issuer)
+			putOfferMPTAccount(t, view, holder)
+			putOfferMPTIssuance(t, view, id, entry.LsfMPTCanTrade|entry.LsfMPTCanTransfer|entry.LsfMPTRequireAuth, 100, 1_000)
+			putOfferMPTHolding(t, view, id, holder, 100, entry.LsfMPTAuthorized)
+
+			offer := newOffer(holder, tx.NewXRPAmount(1_000), offerMPTAmount(id, 10))
+			require.Equal(t, ter.TesSUCCESS, offer.Preclaim(view, cfg))
+			expiration := uint32(1)
+			offer.Expiration = &expiration
+			require.Equal(t, ter.TecEXPIRED, offer.Preclaim(view, cfg))
+
+			putOfferMPTHolding(t, view, id, holder, 100, 0)
+			require.Equal(t, ter.TecUNFUNDED_OFFER, offer.Preclaim(view, cfg))
+			offer.Expiration = nil
+			require.Equal(t, ter.TecUNFUNDED_OFFER, offer.Preclaim(view, cfg))
+		})
+	}
 
 	t.Run("corrupt holding is internal error", func(t *testing.T) {
 		view := newOfferMPTLedgerView()
@@ -338,7 +371,7 @@ func TestOfferMPTPreclaimPermissionsAndFunding(t *testing.T) {
 		putOfferMPTAccount(t, view, issuer)
 		putOfferMPTAccount(t, view, holder)
 		putOfferMPTIssuance(t, view, id, entry.LsfMPTCanTransfer, 100, 1_000)
-		putOfferMPTHolding(t, view, id, holder, 100)
+		putOfferMPTHolding(t, view, id, holder, 100, 0)
 
 		offer := newOffer(holder, tx.NewXRPAmount(1_000), offerMPTAmount(id, 10))
 		require.Equal(t, ter.TecNO_PERMISSION, offer.Preclaim(view, config))
@@ -349,7 +382,7 @@ func TestOfferMPTPreclaimPermissionsAndFunding(t *testing.T) {
 		putOfferMPTAccount(t, view, issuer)
 		putOfferMPTAccount(t, view, holder)
 		putOfferMPTIssuance(t, view, id, entry.LsfMPTCanTrade|entry.LsfMPTCanTransfer|entry.LsfMPTLocked, 100, 1_000)
-		putOfferMPTHolding(t, view, id, holder, 100)
+		putOfferMPTHolding(t, view, id, holder, 100, 0)
 
 		offer := newOffer(holder, tx.NewXRPAmount(1_000), offerMPTAmount(id, 10))
 		require.Equal(t, ter.TecLOCKED, offer.Preclaim(view, config))

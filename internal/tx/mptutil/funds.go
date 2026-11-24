@@ -25,11 +25,20 @@ const (
 // for accountID because either pool asset is frozen. Callers gate this helper on
 // the fixFrozenLPTokenTransfer amendment.
 func LPTokenFrozenForIssuer(view state.ReadOnlyLedgerView, accountID, issuerID [20]byte) LPTokenFreezeStatus {
-	account, err := tx.ReadAccountRoot(view, issuerID)
-	if err != nil || account == nil || !account.HasAMMID() {
+	issuer, err := tx.ReadAccountRoot(view, issuerID)
+	if err != nil {
 		return LPTokenIssuerNotAMM
 	}
-	ammData, err := view.Read(keylet.AMMByID(account.AMMID))
+	return LPTokenFrozenOf(view, accountID, issuer)
+}
+
+// LPTokenFrozenOf is LPTokenFrozenForIssuer for a caller that already read the
+// token issuer's AccountRoot from view (nil when it does not exist).
+func LPTokenFrozenOf(view state.ReadOnlyLedgerView, accountID [20]byte, issuer *state.AccountRoot) LPTokenFreezeStatus {
+	if issuer == nil || !issuer.HasAMMID() {
+		return LPTokenIssuerNotAMM
+	}
+	ammData, err := view.Read(keylet.AMMByID(issuer.AMMID))
 	if err != nil || ammData == nil {
 		return LPTokenAMMUnresolvable
 	}
@@ -106,36 +115,43 @@ func AccountFunds(view tx.ReadOnlyLedgerView, accountID [20]byte, amount tx.Amou
 		return amount
 	}
 
+	var (
+		line     *state.RippleState
+		lineErr  error
+		lineRead bool
+	)
 	if fhZeroIfFrozen {
 		// Reference: rippled View.cpp accountHolds() — checks isFrozen || isDeepFrozen.
-		if tx.IsGlobalFrozen(view, amount.Issuer) {
+		issuer, issuerErr := tx.ReadAccountRoot(view, issuerID)
+		if tx.IsAccountGlobalFrozen(issuer) {
 			return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 		}
-		// Check individual trustline freeze.
-		if tx.IsTrustlineFrozen(view, accountID, issuerID, amount.Currency) {
-			return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
-		}
-		// Check deep freeze — either side of the trust line can deep-freeze it.
-		if tx.IsDeepFrozen(view, accountID, issuerID, amount.Currency) {
-			return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
+		if amount.Currency != "" && amount.Currency != "XRP" {
+			line, lineErr = tx.ReadRippleState(view, accountID, issuerID, amount.Currency)
+			lineRead = true
+			if lineErr == nil && (tx.IsRippleStateFrozenBy(line, issuerID, accountID) || tx.IsRippleStateDeepFrozen(line)) {
+				return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
+			}
 		}
 		// LP tokens count as zero funds when the underlying AMM assets are frozen.
 		// An unresolvable AMM SLE also zeroes funds here, mirroring rippled's
 		// `!sleAmm || isLPTokenFrozen(...)` → return false.
 		// Reference: rippled View.cpp accountHolds() lines 415-439.
 		if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixFrozenLPTokenTransfer) {
-			switch LPTokenFrozenForIssuer(view, accountID, issuerID) {
+			switch LPTokenFrozenOf(view, accountID, issuer) {
 			case LPTokenFrozen, LPTokenAMMUnresolvable:
 				return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 			}
 		}
-		if CanTransferLPToken(view, accountID, accountID, issuerID) != ter.TesSUCCESS {
+		if issuerErr != nil || CanTransferLPTokenOf(view, accountID, accountID, issuer) != ter.TesSUCCESS {
 			return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 		}
 	}
 
-	line, err := tx.ReadRippleState(view, accountID, issuerID, amount.Currency)
-	if err != nil || line == nil {
+	if !lineRead {
+		line, lineErr = tx.ReadRippleState(view, accountID, issuerID, amount.Currency)
+	}
+	if lineErr != nil || line == nil {
 		return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 	}
 	balance := line.Balance

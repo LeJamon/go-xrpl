@@ -45,7 +45,7 @@ func TestFlowCrossReserveBoundary(t *testing.T) {
 			require.NoError(t, tx.DecreaseOwnerCountOnView(cancel, cancelOwner, sponsor, 1))
 			require.NoError(t, cancel.Apply(outer))
 			gets := tx.NewXRPAmount(3_000_000)
-			funds, result := AccountFundsInSandbox(outer, taker, gets, true, 1_000_000, 200_000)
+			funds, result := AccountFundsInSandbox(outer, taker, gets, true, 1_000_000, 200_000, 0)
 			require.Equal(t, ter.TesSUCCESS, result)
 			require.Equal(t, int64(2_743_827), funds.Drops())
 
@@ -54,7 +54,7 @@ func TestFlowCrossReserveBoundary(t *testing.T) {
 				[32]byte{}, 1, FlowCrossParams{ReserveBase: 1_000_000, ReserveIncrement: 200_000})
 			require.Equal(t, ter.TecPATH_DRY, cross.Result)
 			require.NotNil(t, cross.Sandbox)
-			funds, result = AccountFundsInSandbox(cross.Sandbox, taker, gets, true, 1_000_000, 200_000)
+			funds, result = AccountFundsInSandbox(cross.Sandbox, taker, gets, true, 1_000_000, 200_000, 0)
 			require.Equal(t, ter.TesSUCCESS, result)
 			require.Equal(t, int64(2_943_827), funds.Drops())
 
@@ -62,7 +62,7 @@ func TestFlowCrossReserveBoundary(t *testing.T) {
 			child := NewChildSandbox(cross.Sandbox)
 			require.NoError(t, tx.DecreaseOwnerCountOnView(child, taker, "", 1))
 			require.NoError(t, child.Apply(cross.Sandbox))
-			funds, result = AccountFundsInSandbox(cross.Sandbox, taker, gets, true, 1_000_000, 200_000)
+			funds, result = AccountFundsInSandbox(cross.Sandbox, taker, gets, true, 1_000_000, 200_000, 0)
 			require.Equal(t, ter.TesSUCCESS, result)
 			require.Equal(t, int64(2_943_827), funds.Drops())
 		})

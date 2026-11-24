@@ -302,8 +302,16 @@ func TestPseudoAccountSigningAmendmentGates(t *testing.T) {
 			common := txn.GetCommon()
 			common.Sponsor = precedenceGenesisAddr
 			common.SponsorSignature = &txcore.SponsorSignature{SigningPubKey: precedenceGenesisPubKey}
-			if got := e.checkSign(txn, common); got != test.want {
+			_, source, _, _ := e.preclaimLoadAccount(common)
+			if got := e.checkSign(txn, common, source); got != test.want {
 				t.Fatalf("Sponsor signer pseudo-account gate = %v, want %v", got, test.want)
+			}
+
+			self := newAccountSet(precedenceGenesisAddr)
+			selfCommon := self.GetCommon()
+			_, pseudoSource, _, _ := e.preclaimLoadAccount(selfCommon)
+			if got := e.checkSign(self, selfCommon, pseudoSource); got != test.want {
+				t.Fatalf("source pseudo-account gate = %v, want %v", got, test.want)
 			}
 		})
 	}
@@ -335,7 +343,8 @@ func TestPseudoSponsorRejectedBeforeDryRunSignatureBypass(t *testing.T) {
 	common.Sponsor = precedenceSourceAddr
 	common.SponsorSignature = &txcore.SponsorSignature{}
 
-	if got := e.checkSign(txn, common); got != ter.TefBAD_AUTH {
+	_, source, _, _ := e.preclaimLoadAccount(common)
+	if got := e.checkSign(txn, common, source); got != ter.TefBAD_AUTH {
 		t.Fatalf("dry-run pseudo-account Sponsor = %v, want TefBAD_AUTH", got)
 	}
 }

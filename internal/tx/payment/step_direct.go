@@ -90,6 +90,7 @@ func (s *DirectStepI) Rev(
 	// Get maximum flow and debt direction
 	var maxSrcToDst tx.Amount
 	var srcDebtDir DebtDirection
+	line := &trustLineRef{step: s, sb: sb}
 
 	if s.offerCrossing && s.isLast {
 		// Offer crossing last step: ignore trust line limits.
@@ -98,11 +99,11 @@ func (s *DirectStepI) Rev(
 		maxSrcToDst = out.IOU
 		srcDebtDir = DebtDirectionIssues
 	} else {
-		maxSrcToDst, srcDebtDir = s.maxPaymentFlow(sb)
+		maxSrcToDst, srcDebtDir = s.maxPaymentFlow(sb, line.get())
 	}
 
 	// Get qualities
-	srcQOut, dstQIn := s.qualities(sb, srcDebtDir, StrandDirectionReverse)
+	srcQOut, dstQIn := s.qualities(sb, line, srcDebtDir, StrandDirectionReverse)
 
 	// Determine issuer for srcToDst
 	var issuer string
@@ -178,6 +179,7 @@ func (s *DirectStepI) Fwd(
 	// Get maximum flow and debt direction
 	var maxSrcToDst tx.Amount
 	var srcDebtDir DebtDirection
+	line := &trustLineRef{step: s, sb: sb}
 
 	if s.offerCrossing && s.isLast {
 		// Offer crossing last step: ignore trust line limits.
@@ -186,11 +188,11 @@ func (s *DirectStepI) Fwd(
 		maxSrcToDst = s.cache.srcToDst
 		srcDebtDir = DebtDirectionIssues
 	} else {
-		maxSrcToDst, srcDebtDir = s.maxPaymentFlow(sb)
+		maxSrcToDst, srcDebtDir = s.maxPaymentFlow(sb, line.get())
 	}
 
 	// Get qualities
-	srcQOut, dstQIn := s.qualities(sb, srcDebtDir, StrandDirectionForward)
+	srcQOut, dstQIn := s.qualities(sb, line, srcDebtDir, StrandDirectionForward)
 
 	// Determine issuer
 	var issuer string
@@ -315,12 +317,16 @@ func (s *DirectStepI) CachedOut() *EitherAmount {
 
 // DebtDirection returns whether this step redeems or issues
 func (s *DirectStepI) DebtDirection(sb *PaymentSandbox, dir StrandDirection) DebtDirection {
+	return s.debtDirection(&trustLineRef{step: s, sb: sb}, dir)
+}
+
+func (s *DirectStepI) debtDirection(line *trustLineRef, dir StrandDirection) DebtDirection {
 	if dir == StrandDirectionForward && s.cache != nil {
 		return s.cache.srcDebtDir
 	}
 
 	// Check src's balance toward dst
-	srcOwed := s.accountHolds(sb)
+	srcOwed := s.accountHolds(line.sb, line.get())
 	zeroAmt := tx.NewIssuedAmount(0, -100, s.currency, "")
 	if srcOwed.Compare(zeroAmt) > 0 {
 		return DebtDirectionRedeems
@@ -343,7 +349,8 @@ func (s *DirectStepI) QualityUpperBound(v *PaymentSandbox, prevStepDir DebtDirec
 		return &q, s.DebtDirection(v, StrandDirectionForward)
 	}
 
-	srcDebtDir := s.DebtDirection(v, StrandDirectionForward)
+	line := &trustLineRef{step: s, sb: v}
+	srcDebtDir := s.debtDirection(line, StrandDirectionForward)
 
 	// Use the PROPAGATED prevStepDir from the quality-upper-bound walk rather
 	// than re-querying the previous step's direction. When this step redeems,
@@ -351,9 +358,9 @@ func (s *DirectStepI) QualityUpperBound(v *PaymentSandbox, prevStepDir DebtDirec
 	// transfer rate. Reference: rippled DirectStep.cpp lines 865-867.
 	var srcQOut, dstQIn uint32
 	if Redeems(srcDebtDir) {
-		srcQOut, dstQIn = s.qualitiesSrcRedeems(v)
+		srcQOut, dstQIn = s.qualitiesSrcRedeems(v, line)
 	} else {
-		srcQOut, dstQIn = s.qualitiesSrcIssuesDir(v, prevStepDir)
+		srcQOut, dstQIn = s.qualitiesSrcIssuesDir(v, line, prevStepDir)
 	}
 
 	// Quality = srcQOut / dstQIn using precise STAmount division
@@ -423,7 +430,7 @@ func (s *DirectStepI) BookStepBook() *Book {
 
 // LineQualityIn returns the QualityIn for the dst's trust line
 func (s *DirectStepI) LineQualityIn(v *PaymentSandbox) uint32 {
-	return s.quality(v, true) // true = QualityDirection::in
+	return s.quality(&trustLineRef{step: s, sb: v}, true) // true = QualityDirection::in
 }
 
 // ValidFwd validates that the step can correctly execute in forward
@@ -436,7 +443,7 @@ func (s *DirectStepI) ValidFwd(sb *PaymentSandbox, afView *PaymentSandbox, in Ei
 		return false, ZeroIOUEitherAmount(s.currency, "")
 	}
 
-	maxSrcToDst, _ := s.maxPaymentFlow(sb)
+	maxSrcToDst, _ := s.maxPaymentFlow(sb, s.trustLine(sb))
 
 	if maxSrcToDst.Compare(s.cache.srcToDst) < 0 {
 		// Exceeded max
@@ -446,9 +453,10 @@ func (s *DirectStepI) ValidFwd(sb *PaymentSandbox, afView *PaymentSandbox, in Ei
 	return true, NewIOUEitherAmount(s.cache.out)
 }
 
-// maxPaymentFlow returns the maximum amount that can flow and the debt direction
-func (s *DirectStepI) maxPaymentFlow(sb *PaymentSandbox) (tx.Amount, DebtDirection) {
-	srcOwed := s.accountHolds(sb)
+// maxPaymentFlow returns the maximum amount that can flow and the debt
+// direction, given the step's trust line as read by trustLine.
+func (s *DirectStepI) maxPaymentFlow(sb *PaymentSandbox, line *state.RippleState) (tx.Amount, DebtDirection) {
+	srcOwed := s.accountHolds(sb, line)
 	zeroAmt := tx.NewIssuedAmount(0, -100, s.currency, "")
 
 	if srcOwed.Compare(zeroAmt) > 0 {
@@ -458,22 +466,22 @@ func (s *DirectStepI) maxPaymentFlow(sb *PaymentSandbox) (tx.Amount, DebtDirecti
 
 	// Source has issued IOUs to dst (srcOwed is negative or zero)
 	// They can issue up to (credit limit - what they've already issued)
-	creditLimit := s.creditLimit(sb)
+	creditLimit := s.creditLimit(line)
 	// srcOwed is negative, so creditLimit + srcOwed = creditLimit - |srcOwed|
 	maxIssue, _ := creditLimit.AddWithNumberContext(srcOwed, sb.NumberContext(), state.RoundToNearest)
 	return maxIssue, DebtDirectionIssues
 }
 
 // qualities returns srcQOut and dstQIn based on debt direction
-func (s *DirectStepI) qualities(sb *PaymentSandbox, srcDebtDir DebtDirection, dir StrandDirection) (uint32, uint32) {
+func (s *DirectStepI) qualities(sb *PaymentSandbox, line *trustLineRef, srcDebtDir DebtDirection, dir StrandDirection) (uint32, uint32) {
 	if Redeems(srcDebtDir) {
-		return s.qualitiesSrcRedeems(sb)
+		return s.qualitiesSrcRedeems(sb, line)
 	}
-	return s.qualitiesSrcIssues(sb, dir)
+	return s.qualitiesSrcIssues(sb, line, dir)
 }
 
 // qualitiesSrcRedeems returns qualities when source redeems
-func (s *DirectStepI) qualitiesSrcRedeems(sb *PaymentSandbox) (uint32, uint32) {
+func (s *DirectStepI) qualitiesSrcRedeems(sb *PaymentSandbox, line *trustLineRef) (uint32, uint32) {
 	if s.prevStep == nil {
 		return QualityOne, QualityOne
 	}
@@ -481,19 +489,19 @@ func (s *DirectStepI) qualitiesSrcRedeems(sb *PaymentSandbox) (uint32, uint32) {
 	prevStepQIn := s.prevStep.LineQualityIn(sb)
 	srcQOut := max(
 		// QualityDirection::out
-		prevStepQIn, s.quality(sb, false))
+		prevStepQIn, s.quality(line, false))
 	return srcQOut, QualityOne
 }
 
 // qualitiesSrcIssues returns qualities when source issues. It resolves the
 // previous step's debt direction by re-querying it for the given strand
 // direction (used by the Rev/Fwd paths).
-func (s *DirectStepI) qualitiesSrcIssues(sb *PaymentSandbox, dir StrandDirection) (uint32, uint32) {
+func (s *DirectStepI) qualitiesSrcIssues(sb *PaymentSandbox, line *trustLineRef, dir StrandDirection) (uint32, uint32) {
 	prevDebtDir := DebtDirectionIssues
 	if s.prevStep != nil {
 		prevDebtDir = s.prevStep.DebtDirection(sb, dir)
 	}
-	return s.qualitiesSrcIssuesDir(sb, prevDebtDir)
+	return s.qualitiesSrcIssuesDir(sb, line, prevDebtDir)
 }
 
 // qualitiesSrcIssuesDir returns qualities when source issues, charging the
@@ -502,14 +510,14 @@ func (s *DirectStepI) qualitiesSrcIssues(sb *PaymentSandbox, dir StrandDirection
 // takes the direction directly rather than re-deriving it — required by the
 // quality-upper-bound walk so the propagated direction is honoured.
 // Reference: rippled DirectStep.cpp lines 783-806.
-func (s *DirectStepI) qualitiesSrcIssuesDir(sb *PaymentSandbox, prevStepDir DebtDirection) (uint32, uint32) {
+func (s *DirectStepI) qualitiesSrcIssuesDir(sb *PaymentSandbox, line *trustLineRef, prevStepDir DebtDirection) (uint32, uint32) {
 	// Charge transfer rate when issuing and previous step redeems
 	var srcQOut uint32 = QualityOne
 	if Redeems(prevStepDir) {
 		srcQOut = tx.GetTransferRateByID(sb, s.src)
 	}
 
-	dstQIn := s.quality(sb, true) // QualityDirection::in
+	dstQIn := s.quality(line, true) // QualityDirection::in
 
 	// If this is the last step, cap dstQIn at QUALITY_ONE
 	if s.isLast && dstQIn > QualityOne {
@@ -519,9 +527,40 @@ func (s *DirectStepI) qualitiesSrcIssuesDir(sb *PaymentSandbox, prevStepDir Debt
 	return srcQOut, dstQIn
 }
 
+// trustLine returns the src/dst trust line, or nil when it is absent or
+// unreadable.
+func (s *DirectStepI) trustLine(sb *PaymentSandbox) *state.RippleState {
+	data, err := sb.Read(keylet.Line(s.src, s.dst, s.currency))
+	if err != nil || data == nil {
+		return nil
+	}
+	rs, err := state.ParseRippleState(data)
+	if err != nil {
+		return nil
+	}
+	return rs
+}
+
+// trustLineRef reads a step's trust line on first use and reuses it for the
+// rest of one Rev, Fwd or quality query, none of which writes the line before
+// its last use. The parsed line is read-only.
+type trustLineRef struct {
+	step *DirectStepI
+	sb   *PaymentSandbox
+	rs   *state.RippleState
+	read bool
+}
+
+func (r *trustLineRef) get() *state.RippleState {
+	if !r.read {
+		r.rs, r.read = r.step.trustLine(r.sb), true
+	}
+	return r.rs
+}
+
 // quality returns the quality setting from the trust line
 // isIn: true for QualityIn (dst's perspective), false for QualityOut (src's perspective)
-func (s *DirectStepI) quality(sb *PaymentSandbox, isIn bool) uint32 {
+func (s *DirectStepI) quality(line *trustLineRef, isIn bool) uint32 {
 	// Offer crossing ignores trust line Quality fields.
 	// Reference: rippled DirectIOfferCrossingStep::quality() lines 370-375
 	if s.offerCrossing {
@@ -532,15 +571,8 @@ func (s *DirectStepI) quality(sb *PaymentSandbox, isIn bool) uint32 {
 		return QualityOne
 	}
 
-	// Read trust line
-	trustLineKey := keylet.Line(s.dst, s.src, s.currency)
-	data, err := sb.Read(trustLineKey)
-	if err != nil || data == nil {
-		return QualityOne
-	}
-
-	rs, err := state.ParseRippleState(data)
-	if err != nil {
+	rs := line.get()
+	if rs == nil {
 		return QualityOne
 	}
 
@@ -575,15 +607,8 @@ func (s *DirectStepI) quality(sb *PaymentSandbox, isIn bool) uint32 {
 // The result is adjusted by the BalanceHook to account for deferred credits,
 // preventing double-counting across payment paths.
 // Reference: rippled View.cpp accountHolds() lines 385-465
-func (s *DirectStepI) accountHolds(sb *PaymentSandbox) tx.Amount {
-	trustLineKey := keylet.Line(s.src, s.dst, s.currency)
-	data, err := sb.Read(trustLineKey)
-	if err != nil || data == nil {
-		return tx.NewIssuedAmount(0, -100, s.currency, "")
-	}
-
-	rs, err := state.ParseRippleState(data)
-	if err != nil {
+func (s *DirectStepI) accountHolds(sb *PaymentSandbox, rs *state.RippleState) tx.Amount {
+	if rs == nil {
 		return tx.NewIssuedAmount(0, -100, s.currency, "")
 	}
 
@@ -610,15 +635,8 @@ func (s *DirectStepI) accountHolds(sb *PaymentSandbox) tx.Amount {
 }
 
 // creditLimit returns the credit limit dst has extended to src
-func (s *DirectStepI) creditLimit(sb *PaymentSandbox) tx.Amount {
-	trustLineKey := keylet.Line(s.src, s.dst, s.currency)
-	data, err := sb.Read(trustLineKey)
-	if err != nil || data == nil {
-		return tx.NewIssuedAmount(0, -100, s.currency, "")
-	}
-
-	rs, err := state.ParseRippleState(data)
-	if err != nil {
+func (s *DirectStepI) creditLimit(rs *state.RippleState) tx.Amount {
+	if rs == nil {
 		return tx.NewIssuedAmount(0, -100, s.currency, "")
 	}
 
@@ -637,7 +655,6 @@ func (s *DirectStepI) DirectStepSrcAcct() *[20]byte {
 	return &s.src
 }
 
-// Check validates the DirectStepI before use
 func (s *DirectStepI) Check(sb *PaymentSandbox) ter.Result {
 	// Check freeze status — applies to BOTH payments and offer crossing.
 	// Skip for pure issue/redeem (single-step strand).
@@ -646,16 +663,20 @@ func (s *DirectStepI) Check(sb *PaymentSandbox) ter.Result {
 	//       checkFreeze(ctx.view, src_, dst_, currency_);
 	// This runs in the BASE class check(), before delegating to derived class.
 	if !(s.isFirst && s.isLast) {
-		if result := checkFreeze(sb, s.src, s.dst, s.currency); result != ter.TesSUCCESS {
-			return result
-		}
-		if result := mptutil.CanTransferLPToken(sb, s.src, s.dst, s.dst); result != ter.TesSUCCESS {
+		if result := checkFreezeAndLPToken(sb, s.src, s.dst, s.currency); result != ter.TesSUCCESS {
 			return result
 		}
 	}
 
-	// Offer crossing: skip trust line existence and authorization checks.
-	// Trust lines are created on demand during crossing via rippleCredit.
+	if prev, ok := s.prevStep.(*DirectStepI); ok {
+		if result := checkNoRipple(sb, prev.src, s.src, s.dst, s.currency); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+
+	// Offer crossing skips trust line existence and authorization checks after
+	// the common base checks above. Trust lines are created on demand during
+	// crossing via rippleCredit.
 	// Reference: rippled DirectIOfferCrossingStep::check() lines 462-470
 	if s.offerCrossing {
 		return ter.TesSUCCESS
@@ -670,10 +691,11 @@ func (s *DirectStepI) Check(sb *PaymentSandbox) ter.Result {
 	if data == nil {
 		return ter.TerNO_LINE
 	}
+	rs, parseErr := state.ParseRippleState(data)
 
 	// Check authorization
 	// Reference: rippled DirectStep.cpp checkAuth()
-	if result := checkAuth(sb, s.src, s.dst, s.currency); result != ter.TesSUCCESS {
+	if result := checkAuth(sb, s.src, s.dst, rs); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -683,7 +705,6 @@ func (s *DirectStepI) Check(sb *PaymentSandbox) ter.Result {
 	//       check src's NoRipple on the src↔dst trust line
 	if s.prevStep != nil {
 		if s.prevStep.BookStepBook() != nil {
-			rs, parseErr := state.ParseRippleState(data)
 			if parseErr != nil {
 				return ter.TefINTERNAL
 			}
@@ -708,7 +729,6 @@ func (s *DirectStepI) Check(sb *PaymentSandbox) ter.Result {
 	//     → dst_ < src_ ? sfLowLimit : sfHighLimit
 	//   if (owed <= 0 && -owed >= limit) → tecPATH_DRY
 	{
-		rs, parseErr := state.ParseRippleState(data)
 		if parseErr == nil {
 			// creditBalance(dst_, src_): negate when dst_ < src_ (dst is low account)
 			owed := rs.Balance
@@ -742,8 +762,9 @@ func (s *DirectStepI) Check(sb *PaymentSandbox) ter.Result {
 //
 //	(src > dst) ? lsfHighAuth : lsfLowAuth
 //
-// Auth is only checked when the balance is zero.
-func checkAuth(view *PaymentSandbox, src, dst [20]byte, currency string) ter.Result {
+// Auth is only checked when the balance is zero. rs is the src/dst trust line
+// the caller read from view, nil when it does not parse.
+func checkAuth(view *PaymentSandbox, src, dst [20]byte, rs *state.RippleState) ter.Result {
 	// Read source account to check RequireAuth
 	srcKey := keylet.Account(src)
 	srcData, err := view.Read(srcKey)
@@ -761,15 +782,7 @@ func checkAuth(view *PaymentSandbox, src, dst [20]byte, currency string) ter.Res
 		return ter.TesSUCCESS
 	}
 
-	// Get the trust line
-	trustLineKey := keylet.Line(src, dst, currency)
-	data, err := view.Read(trustLineKey)
-	if err != nil || data == nil {
-		return ter.TerNO_LINE
-	}
-
-	rs, err := state.ParseRippleState(data)
-	if err != nil {
+	if rs == nil {
 		return ter.TefINTERNAL
 	}
 
@@ -793,20 +806,30 @@ func checkAuth(view *PaymentSandbox, src, dst [20]byte, currency string) ter.Res
 	return ter.TesSUCCESS
 }
 
-// checkFreeze checks if a trust line is frozen.
+// checkFreezeAndLPToken runs the freeze and LP-token transfer checks common to
+// payment and offer-crossing direct steps, reading dst's AccountRoot once.
+// Reference: rippled DirectStepI<TDerived>::check() lines 906-912.
+func checkFreezeAndLPToken(view *PaymentSandbox, src, dst [20]byte, currency string) ter.Result {
+	dstAccount, dstErr := tx.ReadAccountRoot(view, dst)
+	if result := checkFreeze(view, src, dst, currency, dstAccount); result != ter.TesSUCCESS {
+		return result
+	}
+	if dstErr != nil {
+		return ter.TecINTERNAL
+	}
+	return mptutil.CanTransferLPTokenOf(view, src, dst, dstAccount)
+}
+
+// checkFreeze checks if a trust line is frozen. dstAccount is dst's
+// AccountRoot as read from view, nil when absent or unreadable.
 // Reference: rippled StepChecks.h checkFreeze()
 // Returns terNO_LINE if frozen, tesSUCCESS otherwise.
 // Order matches rippled: global freeze → individual freeze → deep freeze.
-func checkFreeze(view *PaymentSandbox, src, dst [20]byte, currency string) ter.Result {
+func checkFreeze(view *PaymentSandbox, src, dst [20]byte, currency string, dstAccount *state.AccountRoot) ter.Result {
 	// 1. Check global freeze on destination account
 	// Reference: rippled StepChecks.h:43-49
-	dstKey := keylet.Account(dst)
-	dstData, _ := view.Read(dstKey)
-	if dstData != nil {
-		dstAccount, err := state.ParseAccountRoot(dstData)
-		if err == nil && (dstAccount.Flags&state.LsfGlobalFreeze) != 0 {
-			return ter.TerNO_LINE
-		}
+	if tx.IsAccountGlobalFrozen(dstAccount) {
+		return ter.TerNO_LINE
 	}
 
 	// 2. Read trust line — if it doesn't exist, skip trust-line freeze checks.
@@ -840,34 +863,11 @@ func checkFreeze(view *PaymentSandbox, src, dst [20]byte, currency string) ter.R
 	// tecINTERNAL, before the frozen test.
 	// Reference: rippled StepChecks.h:65-83.
 	if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixFrozenLPTokenTransfer) {
-		switch mptutil.LPTokenFrozenForIssuer(view, src, dst) {
+		switch mptutil.LPTokenFrozenOf(view, src, dstAccount) {
 		case mptutil.LPTokenAMMUnresolvable:
 			return ter.TecINTERNAL
 		case mptutil.LPTokenFrozen:
 			return ter.TerNO_LINE
-		}
-	}
-
-	return ter.TesSUCCESS
-}
-
-// CheckWithPrevStep validates the DirectStepI with NoRipple checking against previous step.
-// Reference: rippled DirectStep.cpp make_DirectStepI() lines 918-923
-func (s *DirectStepI) CheckWithPrevStep(sb *PaymentSandbox, prevStep Step) ter.Result {
-	// First do basic check
-	if result := s.Check(sb); result != ter.TesSUCCESS {
-		return result
-	}
-
-	// If there's a previous DirectStep, check NoRipple constraint
-	// Reference: rippled DirectStep.cpp:918-923
-	if prevStep != nil {
-		if prevDirectStep, ok := prevStep.(*DirectStepI); ok {
-			prevSrc := prevDirectStep.src
-			result := checkNoRipple(sb, prevSrc, s.src, s.dst, s.currency)
-			if result != ter.TesSUCCESS {
-				return result
-			}
 		}
 	}
 

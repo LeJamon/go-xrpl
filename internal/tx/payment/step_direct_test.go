@@ -134,9 +134,9 @@ func TestDirectStepICreditFailuresAbortEveryBranch(t *testing.T) {
 		fault   directCreditFault
 		faultAt int
 	}{
-		{name: "read", fault: directCreditReadFault, faultAt: 4},
-		{name: "parse", fault: directCreditParseFault, faultAt: 4},
-		{name: "update preimage", fault: directCreditUpdateFault, faultAt: 5},
+		{name: "read", fault: directCreditReadFault, faultAt: 2},
+		{name: "parse", fault: directCreditParseFault, faultAt: 2},
+		{name: "update preimage", fault: directCreditUpdateFault, faultAt: 3},
 	}
 
 	for _, branch := range branches {
@@ -171,6 +171,47 @@ func TestDirectStepICreditFailuresAbortEveryBranch(t *testing.T) {
 	}
 }
 
+func TestDirectStepCheckNoRipplePrecedesCreditLimit(t *testing.T) {
+	prev := [20]byte{1}
+	cur := [20]byte{2}
+	next := [20]byte{3}
+
+	view := newPaymentMockLedgerView()
+	view.createAccount(prev, 1_000_000_000, 0)
+	view.createAccount(cur, 1_000_000_000, 0)
+	view.createAccount(next, 1_000_000_000, 0)
+	view.createTrustLine(prev, cur, "USD", 0, 100, 100)
+	view.createTrustLine(cur, next, "USD", -10, 100, 10)
+
+	setFlags := func(lineKey [32]byte, flags uint32) {
+		rs, err := state.ParseRippleState(view.data[lineKey])
+		require.NoError(t, err)
+		rs.Flags = flags
+		view.data[lineKey], err = state.SerializeRippleState(rs)
+		require.NoError(t, err)
+	}
+	// cur is the high side of prev↔cur and the low side of cur↔next.
+	setFlags(keylet.Line(prev, cur, "USD").Key, state.LsfHighNoRipple)
+	setFlags(keylet.Line(cur, next, "USD").Key, state.LsfLowNoRipple)
+
+	sb := NewPaymentSandbox(view)
+	first := NewDirectStepI(prev, cur, "USD", nil, true, false)
+	second := NewDirectStepI(cur, next, "USD", first, false, true)
+
+	// The second line is at the destination's credit limit, which would return
+	// tecPATH_DRY. Rippled evaluates both NoRipple flags first and returns the
+	// retry result for both payment and offer crossing.
+	require.Equal(t, ter.TerNO_RIPPLE, second.Check(sb))
+	second.offerCrossing = true
+	require.Equal(t, ter.TerNO_RIPPLE, second.Check(sb))
+
+	setFlags(keylet.Line(prev, cur, "USD").Key, 0)
+	second.offerCrossing = false
+	require.Equal(t, ter.TecPATH_DRY, second.Check(sb))
+	second.offerCrossing = true
+	require.Equal(t, ter.TesSUCCESS, second.Check(sb))
+}
+
 func TestDirectStepICreditFailureDiscardsStrandSandbox(t *testing.T) {
 	src := [20]byte{1}
 	dst := [20]byte{2}
@@ -180,9 +221,9 @@ func TestDirectStepICreditFailureDiscardsStrandSandbox(t *testing.T) {
 		fault   directCreditFault
 		faultAt int
 	}{
-		{name: "read", fault: directCreditReadFault, faultAt: 4},
-		{name: "parse", fault: directCreditParseFault, faultAt: 4},
-		{name: "update preimage", fault: directCreditUpdateFault, faultAt: 5},
+		{name: "read", fault: directCreditReadFault, faultAt: 2},
+		{name: "parse", fault: directCreditParseFault, faultAt: 2},
+		{name: "update preimage", fault: directCreditUpdateFault, faultAt: 3},
 	}
 
 	for _, fault := range faults {
