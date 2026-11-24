@@ -52,14 +52,14 @@ func TestXRPLiquidUsesSponsoredReserveCounts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeAccountID: %v", err)
 	}
-	data, err := state.SerializeAccountRoot(&state.AccountRoot{
-		Account:                accountAddress,
-		Balance:                30,
-		OwnerCount:             5,
-		SponsoredOwnerCount:    2,
-		SponsoringOwnerCount:   1,
-		SponsoringAccountCount: 0,
-	})
+	account := &state.AccountRoot{
+		Account:              accountAddress,
+		Balance:              30,
+		OwnerCount:           5,
+		SponsoredOwnerCount:  2,
+		SponsoringOwnerCount: 1,
+	}
+	data, err := state.SerializeAccountRoot(account)
 	if err != nil {
 		t.Fatalf("SerializeAccountRoot: %v", err)
 	}
@@ -67,6 +67,9 @@ func TestXRPLiquidUsesSponsoredReserveCounts(t *testing.T) {
 	view.rules = amendment.NewRules([][32]byte{amendment.FeatureSponsor})
 	view.data[keylet.Account(accountID).Key] = data
 
+	if got := XRPLiquidOf(nil, accountID, account, 0, 10, 2).Drops(); got != 12 {
+		t.Fatalf("XRPLiquidOf(nil) = %d, want 12", got)
+	}
 	if got := XRPLiquid(view, accountID, 0, 10, 2).Drops(); got != 12 {
 		t.Fatalf("XRPLiquid = %d, want 12", got)
 	}

@@ -5,7 +5,6 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -302,19 +301,11 @@ func XRPLiquidOf(view ReadOnlyLedgerView, accountID [20]byte, account *state.Acc
 		return NewXRPAmount(0)
 	}
 	hooked := accountWithOwnerCountHook(view, accountID, account)
-	ownerCount, accountCount := hooked.OwnerCount, uint32(1)
-	var rules *amendment.Rules
-	if view != nil {
-		rules = view.Rules()
+	if hooked.SponsoredOwnerCount > hooked.OwnerCount {
+		return NewXRPAmount(0)
 	}
-	if rules != nil && rules.Enabled(amendment.FeatureSponsor) {
-		if hooked.SponsoredOwnerCount > hooked.OwnerCount {
-			return NewXRPAmount(0)
-		}
-		ownerCount = ownerCounts(&hooked).effective()
-		accountCount = reserveAccountCount(&hooked, 0)
-	}
-	ownerCount = ConfineOwnerCount(ownerCount, int(ownerCountAdj))
+	ownerCount := ConfineOwnerCount(ownerCounts(&hooked).effective(), int(ownerCountAdj))
+	accountCount := reserveAccountCount(&hooked, 0)
 	reserve, ok := checkedAccountReserve(EngineConfig{ReserveBase: reserveBase, ReserveIncrement: reserveIncrement}, ownerCount, accountCount)
 	if !ok {
 		return NewXRPAmount(0)
