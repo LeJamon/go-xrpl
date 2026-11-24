@@ -10,6 +10,7 @@ import (
 
 func TestFinalOutcomeRegressionSnapshots(t *testing.T) {
 	cases := map[string]string{
+		"batch-inner-loanset-counterparty.json":                "81440558316bbbbbe44c4c1ee2807c246d7b6846ae08cfbef5fe8ea670f84b62",
 		"loan-broker-cover-withdraw-legacy-freeze.json":        "6b7b4c166282f1ef927cd6cd36c3f87efb038ed5c9c86dbfd8bfa2a61290c133",
 		"amm-withdraw-reversed-owner-directory-boundary.json":  "73c9bb0e31c2524bdf851c79eec46e007def1b376a1c7a8efcc1d31ee61bb9e9",
 		"amm-create-two-iou-directory-boundary.json":           "8d54f572c5285ad9fe29bcbdf3c4daf5decddc8697ce027080b96910af5a7026",

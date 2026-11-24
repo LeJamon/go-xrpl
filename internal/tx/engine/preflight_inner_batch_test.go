@@ -1,10 +1,12 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/lending"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
@@ -21,6 +23,49 @@ func innerFlaggedTx() *txcore.Common {
 	flags := txcore.TfInnerBatchTxn
 	tx.Flags = &flags
 	return tx.GetCommon()
+}
+
+func TestLoanSetCounterpartyPreflight(t *testing.T) {
+	rules := amendment.NewRulesBuilder().Enable(amendment.FeatureLendingProtocol).
+		Enable(amendment.FeatureSingleAssetVault).Enable(amendment.FeatureMPTokensV1)
+	legacy := preflightEngine(rules.Build())
+	current := preflightEngine(rules.Enable(amendment.FeatureBatchV1_1).Build())
+	tests := []struct {
+		name         string
+		engine       *Engine
+		inner        bool
+		counterparty string
+		signature    bool
+		principal    string
+		want         ter.Result
+	}{
+		{name: "inner requires counterparty", engine: current, inner: true, principal: "1", want: ter.TemBAD_SIGNER},
+		{name: "counterparty precedes principal check", engine: current, inner: true, signature: true, principal: "0", want: ter.TemBAD_SIGNER},
+		{name: "inner with counterparty", engine: current, inner: true, counterparty: precedenceGenesisAddr, principal: "1", want: ter.TesSUCCESS},
+		{name: "before BatchV1_1", engine: legacy, inner: true, principal: "1", want: ter.TesSUCCESS},
+		{name: "standalone requires signature", engine: current, counterparty: precedenceGenesisAddr, principal: "1", want: ter.TemBAD_SIGNER},
+		{name: "standalone with signature", engine: current, signature: true, principal: "1", want: ter.TesSUCCESS},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			loan := lending.NewLoanSet(precedenceSourceAddr, strings.Repeat("1", 64), tc.principal)
+			loan.SetSequence(1)
+			loan.Fee = "20"
+			loan.Counterparty = tc.counterparty
+			if tc.signature {
+				loan.CounterpartySignature = &txcore.CounterpartySignature{}
+			}
+			preflight := tc.engine.preflight
+			if tc.inner {
+				loan.SetFlags(txcore.TfInnerBatchTxn)
+				loan.Fee = "0"
+				preflight = tc.engine.preflightInner
+			}
+			if got := preflight(loan); got != tc.want {
+				t.Fatalf("preflight = %s, want %s", got, tc.want)
+			}
+		})
+	}
 }
 
 // TestPreflightInnerBatchFlag exercises the tfInnerBatchTxn rejection on a

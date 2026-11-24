@@ -339,6 +339,10 @@ func (l *LoanSet) GetFlagsMask(rules *amendment.Rules) uint32 {
 }
 
 func (l *LoanSet) Validate() error {
+	return l.PreflightWithRules(nil)
+}
+
+func (l *LoanSet) PreflightWithRules(rules *amendment.Rules) error {
 	if err := l.BaseTx.Validate(); err != nil {
 		return err
 	}
@@ -348,9 +352,11 @@ func (l *LoanSet) Validate() error {
 	if l.PrincipalRequested == "" {
 		return ter.Errorf(ter.TemMALFORMED, "PrincipalRequested is required")
 	}
-	// A LoanSet must carry a CounterpartySignature, except as a batch inner tx.
-	hasCounterSig := l.GetCommon().CounterpartySignature != nil
-	if l.GetFlags()&tx.TfInnerBatchTxn == 0 && !hasCounterSig {
+	if l.GetFlags()&tx.TfInnerBatchTxn != 0 {
+		if rules != nil && rules.Enabled(amendment.FeatureBatchV1_1) && !l.FieldPresent("Counterparty", l.Counterparty != "") {
+			return ter.Errorf(ter.TemBAD_SIGNER, "inner LoanSet requires a Counterparty")
+		}
+	} else if l.CounterpartySignature == nil {
 		return ter.Errorf(ter.TemBAD_SIGNER, "LoanSet requires a CounterpartySignature")
 	}
 	if l.Data != nil && !validDataLength(*l.Data, maxDataPayloadLength) {
