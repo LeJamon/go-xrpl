@@ -236,6 +236,9 @@ func TestPreflightAdmissionBatchInnerNonnativeFeeReturnsBadFee(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse Batch inner with nonnative fee: %v", err)
 	}
+	if got := preflightEngine(allRules()).preflightInner(inner); got != ter.TemBAD_FEE {
+		t.Fatalf("direct inner preflight with nonnative fee = %v, want temBAD_FEE", got)
+	}
 	second := txcore.NewBaseTx(txcore.TypeAccountSet, admissionPreflightAccount)
 	second.Fee = "0"
 	second.SetSequence(3)

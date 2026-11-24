@@ -298,6 +298,9 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if result := checkFlagsMask(innerTx, common, rules); result != ter.TesSUCCESS {
 		return result
 	}
+	if common.HasRawNonnativeFee() {
+		return ter.TemBAD_FEE
+	}
 	if result := checkSigningKeyShape(common); result != ter.TesSUCCESS {
 		return result
 	}
