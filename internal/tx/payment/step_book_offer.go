@@ -127,6 +127,9 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 								}
 							}
 						}
+						if !groomable && s.offerDomainMismatch(sb, probeOffer) {
+							throwFlowError(ter.TecINTERNAL)
+						}
 						if !groomable {
 							groomable = s.offerOutOfDomain(sb, probeOffer)
 						}
@@ -180,10 +183,6 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 			continue
 		}
 
-		if rules := sb.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0) && s.domainID != nil && offer.DomainID != *s.domainID {
-			throwFlowError(ter.TecINTERNAL)
-		}
-
 		// The single funded/groom rule, applied to every offer the walk
 		// steps onto and read from the live working sandbox — rippled's
 		// OfferStream::step. A deep-frozen or zero-amount offer is a
@@ -211,6 +210,9 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 		if deepFrozen {
 			s.removeSteppedOffer(sb, offer, offerKey, offerOwner, ofrsToRm)
 			continue
+		}
+		if s.offerDomainMismatch(sb, offer) {
+			throwFlowError(ter.TecINTERNAL)
 		}
 
 		// Domain membership check: if the offer has a DomainID (domain or
@@ -363,6 +365,12 @@ func (s *BookStep) offerExpired(offer *state.LedgerOffer) bool {
 		offer.Expiration <= s.parentCloseTime
 }
 
+func (s *BookStep) offerDomainMismatch(sb *PaymentSandbox, offer *state.LedgerOffer) bool {
+	rules := sb.Rules()
+	return rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_4_0) &&
+		s.domainID != nil && (!offer.HasDomainID() || offer.DomainID != *s.domainID)
+}
+
 // offerOutOfDomain reports whether a domain/hybrid offer's owner has left the
 // offer's DomainID (or lost the gating credential), which rippled treats as
 // unfunded and grooms quality-blind, ahead of the crossing quality threshold.
@@ -375,8 +383,7 @@ func (s *BookStep) offerOutOfDomain(sb *PaymentSandbox, offer *state.LedgerOffer
 			return false
 		}
 	}
-	var zeroDomainID [32]byte
-	if offer.DomainID == zeroDomainID {
+	if !offer.HasDomainID() {
 		return false
 	}
 	return !permissioneddomain.OfferInDomain(sb, offer, offer.DomainID, s.parentCloseTime)
