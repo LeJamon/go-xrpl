@@ -29,8 +29,6 @@ var amountErrSentinels = []error{
 	errInvalidMPTLength, errInvalidIssuanceIDLen, hex.ErrLength,
 }
 
-// sameAmountErr compares type, message and value, and the identity of both
-// errors against every sentinel the amount serializers can return.
 func sameAmountErr(got, want error) bool {
 	if got == nil || want == nil {
 		return got == want
@@ -73,11 +71,6 @@ func checkXrpMatchesReference(t testing.TB, value string) {
 	}
 }
 
-// integralAmountInputs covers the grammar and range of signed integer amounts:
-// every short string over digits, signs, decimal and exponent markers,
-// whitespace, non-ASCII digits and invalid UTF-8; the neighbourhood of every
-// limit; very long digit strings; random and mutated digit strings; and every
-// amount value in the pinned conformance corpus.
 func integralAmountInputs(t testing.TB) []string {
 	t.Helper()
 	rng := rand.New(rand.NewPCG(2192, 10))
@@ -392,8 +385,6 @@ func checkMPTValueMatchesReference(t testing.TB, value string) {
 	checkMPTAmountMatchesReference(t, value, diffIssuanceID)
 }
 
-// checkMPTDecodeMatchesReference decodes data as the leading value bytes of an
-// MPT amount, directly and through Amount.ToJSON.
 func checkMPTDecodeMatchesReference(t testing.TB, data []byte) {
 	t.Helper()
 
