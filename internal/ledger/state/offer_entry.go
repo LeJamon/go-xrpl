@@ -48,6 +48,9 @@ func (offer *LedgerOffer) HasDomainID() bool {
 }
 
 func (offer *LedgerOffer) AdditionalBookCount() (int, bool) {
+	if offer.AdditionalBookDirectory != ([32]byte{}) && len(offer.decoded.AdditionalBooks) <= 1 {
+		return 1, true
+	}
 	entry := offer.decoded
 	if err := setOfferAdditionalBooks(&entry, offer); err != nil {
 		return 0, false
