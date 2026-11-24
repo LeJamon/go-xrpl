@@ -146,31 +146,20 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TesSUCCESS
 	}
 
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-	if ctx.Account.Balance < reserve {
-		return ter.TecINSUFFICIENT_RESERVE
-	}
-
 	did := &state.DIDData{
-		Account:   ctx.AccountID,
-		OwnerNode: 0,
+		Account:     ctx.AccountID,
+		URI:         d.URI,
+		DIDDocument: d.DIDDocument,
+		Data:        d.Data,
 	}
-
-	if d.URI != "" {
-		did.URI = d.URI
-	}
-	if d.DIDDocument != "" {
-		did.DIDDocument = d.DIDDocument
-	}
-	if d.Data != "" {
-		did.Data = d.Data
-	}
-
-	// Check that at least one field is set (only when fixEmptyDID is enabled)
-	// Reference: rippled DID.cpp lines 163-169
 	if ctx.Rules().Enabled(amendment.FeatureFixEmptyDID) &&
 		did.URI == "" && did.DIDDocument == "" && did.Data == "" {
 		return ter.TecEMPTY_DID
+	}
+
+	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
+	if ctx.Account.Balance < reserve {
+		return ter.TecINSUFFICIENT_RESERVE
 	}
 
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)

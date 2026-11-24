@@ -1,6 +1,9 @@
 package did_test
 
 import (
+	"encoding/hex"
+	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -8,6 +11,9 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/did"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 func TestEnabled(t *testing.T) {
@@ -40,6 +46,68 @@ func testEnabled(t *testing.T, fixEmptyDID bool) {
 	result = env.Submit(tx2)
 	jtx.RequireTxFail(t, result, jtx.TemDISABLED)
 	env.Close()
+}
+
+func TestEmptyDIDWithoutReserve(t *testing.T) {
+	type outcome struct {
+		Metadata        string `json:"metadata"`
+		TransactionRoot string `json:"transaction_root"`
+	}
+	var fixture struct {
+		LedgerIndex      uint32  `json:"ledger_index"`
+		NetworkID        uint32  `json:"network_id"`
+		ReserveBase      uint64  `json:"reserve_base"`
+		ReserveIncrement uint64  `json:"reserve_increment"`
+		Fee              uint64  `json:"fee"`
+		ParentAccount    string  `json:"parent_account"`
+		Transaction      string  `json:"transaction"`
+		WithFix          outcome `json:"with_fix"`
+		WithoutFix       outcome `json:"without_fix"`
+	}
+	data, err := os.ReadFile("testdata/empty_did_without_reserve.json")
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(data, &fixture))
+	blob, err := hex.DecodeString(fixture.Transaction)
+	require.NoError(t, err)
+	parentAccount, err := hex.DecodeString(fixture.ParentAccount)
+	require.NoError(t, err)
+
+	runWithFeatureSets(t, func(t *testing.T, fixEmptyDID bool) {
+		env := setupEnv(t, fixEmptyDID)
+		env.SetNetworkID(fixture.NetworkID)
+		env.SetReserves(fixture.ReserveBase, fixture.ReserveIncrement)
+		env.SetVerifySignatures(true)
+		for env.LedgerSeq() < fixture.LedgerIndex {
+			env.Close()
+		}
+		env.SetOpenLedger(false)
+
+		txn, err := tx.ParseFromBinary(blob)
+		require.NoError(t, err)
+		owner := jtx.NewAccountWithAddress("owner", txn.GetCommon().Account)
+		require.NoError(t, env.Ledger().Insert(keylet.Account(owner.ID), parentAccount))
+		balance := env.Balance(owner)
+		require.Less(t, balance-fixture.Fee, env.ReserveBase()+env.ReserveIncrement())
+		result := env.SubmitWithOptions(txn, jtx.SubmitOptions{SkipSignature: true})
+		wantCode, want := jtx.TecINSUFFICIENT_RESERVE, fixture.WithoutFix
+		if fixEmptyDID {
+			wantCode, want = "tecEMPTY_DID", fixture.WithFix
+		}
+		jtx.RequireTxClaimed(t, result, wantCode)
+		require.Equal(t, fixture.Fee, result.Fee)
+		require.Equal(t, balance-fixture.Fee, env.Balance(owner))
+		requireDIDAbsent(t, env, owner)
+
+		meta, err := tx.SerializeMetadata(result.Metadata)
+		require.NoError(t, err)
+		wantMeta, err := hex.DecodeString(want.Metadata)
+		require.NoError(t, err)
+		require.Equal(t, wantMeta, meta)
+		env.Close()
+		wantRoot, err := protocol.Hash256FromHex(want.TransactionRoot)
+		require.NoError(t, err)
+		require.Equal(t, wantRoot, env.LastClosedLedger().Header().TxHash)
+	})
 }
 
 func TestAccountReserve(t *testing.T) {
