@@ -167,6 +167,7 @@ func transactionFromFields(fields map[string]any) (Transaction, error) {
 	if parsed != nil {
 		jsonFields = binaryTransactionJSONFields(parsed, fields)
 	}
+	jsonFields = sanitizeRawFee(jsonFields)
 	if decoder, ok := parsed.(binaryFieldsUnmarshaler); ok {
 		if err := decoder.UnmarshalBinaryFields(jsonFields); err != nil {
 			return nil, fmt.Errorf("failed to parse transaction: %w", err)
@@ -215,6 +216,15 @@ func sanitizeRawXRPAmounts(value any) any {
 	default:
 		return value
 	}
+}
+
+func sanitizeRawFee(fields map[string]any) map[string]any {
+	if _, ok := fields["Fee"].(map[string]any); !ok {
+		return fields
+	}
+	adjusted := cloneFields(fields)
+	adjusted["Fee"] = "0"
+	return adjusted
 }
 
 const noCurrencyHex = "0000000000000000000000000000000000000001"
@@ -288,10 +298,12 @@ func batchInnerObject(wrapper map[string]any) (string, map[string]any) {
 }
 
 func restoreBinaryAmounts(transaction Transaction, fields map[string]any) {
+	common := transaction.GetCommon()
 	if raw, ok := fields["Fee"].(binarytypes.RawXRPAmount); ok {
-		common := transaction.GetCommon()
 		common.Fee = rawXRPAmountDecimal(raw)
 		common.rawFee = &raw
+	} else if raw, ok := fields["Fee"].(map[string]any); ok {
+		common.setRawNonnativeFee(raw)
 	}
 	if base, ok := transaction.(*BaseTx); ok {
 		for name, original := range fields {

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
@@ -91,6 +92,35 @@ func TestAdapterSubmissionZeroSourceReachesEngineTER(t *testing.T) {
 	require.NotNil(t, result)
 	require.Equal(t, ter.TemBAD_SRC_ACCOUNT.String(), result.EngineResult)
 	require.Equal(t, int(ter.TemBAD_SRC_ACCOUNT), result.EngineResultCode)
+	require.False(t, result.Applied)
+}
+
+func TestAdapterSubmissionRejectsNonNativeFee(t *testing.T) {
+	svc := newAdmissionAdapterService(t)
+	privateKey, publicKey, err := ed25519.Algorithm{}.DeriveKeypair(bytes.Repeat([]byte{0x42}, 16), false)
+	require.NoError(t, err)
+	fields := map[string]any{
+		"TransactionType": "AccountSet",
+		"Account":         admissionAdapterSource,
+		"Sequence":        uint32(1),
+		"SigningPubKey":   publicKey,
+		"Fee": map[string]any{
+			"mpt_issuance_id": "000000010000000000000000000000000000000000000001",
+			"value":           "0",
+		},
+	}
+	transaction, err := tx.ParseFromDecodedFields(fields)
+	require.NoError(t, err)
+	fields["TxnSignature"], err = txsign.SignTransaction(transaction, privateKey)
+	require.NoError(t, err)
+	blob, err := binarycodec.Encode(fields)
+	require.NoError(t, err)
+
+	result, err := NewLedgerServiceAdapter(svc).SubmitTransaction(nil, blob)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, ter.TemBAD_FEE.String(), result.EngineResult)
+	require.Equal(t, int(ter.TemBAD_FEE), result.EngineResultCode)
 	require.False(t, result.Applied)
 }
 
