@@ -195,6 +195,11 @@ Smaller recorded fixtures assert the pinned commit and must be re-recorded
 against the new release. Each directory documents or carries its recorder:
 `ORACLE_FINAL_OUTCOMES`, `internal/testing/batch/testdata/wrapper-oracle/`,
 `internal/tx/payment/testdata/`, `internal/tx/vault/testdata/send_assets_oracle/`.
+For `internal/ledger/service/testdata/unl_modify_vote.json`, start a standalone
+validator with a trusted offline validator and enable `NegativeUNL` and
+`fixPreviousTxnID` in the ledger. Close ledgers until a flag ledger contains the
+disable vote. Capture both headers, the parent state and the child's Negative UNL
+entry with binary `ledger_data`, and the vote and metadata with binary `ledger`.
 `internal/testing/enginefuzz` freezes a named amendment profile and its
 fingerprint; rename and re-fingerprint it for the new release.
 

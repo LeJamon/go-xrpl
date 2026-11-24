@@ -110,6 +110,7 @@ var pinnedIdentityAllowed = map[string]string{
 	"scripts/engine-coverage/inventory.json":                     "generated coverage inventory",
 	"internal/rpc/testdata/server_definitions_final_hashes.json": "generated definitions fixture",
 	"internal/testing/batch/testdata/wrapper-oracle/":            "recorded batch fixtures and recorder patch",
+	"internal/ledger/service/testdata/unl_modify_vote.json":      "recorded Negative UNL vote and ledger state",
 	"internal/tx/payment/testdata/":                              "recorded amount fixture and its recorder",
 	"internal/tx/vault/testdata/":                                "recorded vault fixture and its recorder",
 

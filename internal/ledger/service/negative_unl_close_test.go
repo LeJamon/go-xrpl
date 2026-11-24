@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
@@ -107,6 +108,7 @@ func TestAcceptConsensusResult_FlagLedgerAppliesNegativeUNL(t *testing.T) {
 func TestAcceptConsensusResult_UNLModifyVote(t *testing.T) {
 	all.RegisterAll()
 	var fixture struct {
+		OracleCommit string
 		ParentHeader string
 		ParentState  []struct{ Index, Data string }
 		ChildHeader  string
@@ -118,6 +120,7 @@ func TestAcceptConsensusResult_UNLModifyVote(t *testing.T) {
 	data, err := os.ReadFile("testdata/unl_modify_vote.json")
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(data, &fixture))
+	require.Equal(t, rippled.Pin.Commit, fixture.OracleCommit)
 	decode := func(s string) []byte {
 		t.Helper()
 		b, err := hex.DecodeString(s)

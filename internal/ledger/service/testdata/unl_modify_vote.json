@@ -1,5 +1,6 @@
 {
-  "Oracle": "rippled 3.4.1 (d147fccf54a500fce586522f28d6044c37fd8d29), standalone with NegativeUNL and fixPreviousTxnID enabled on-ledger. The local validator proposed disabling its offline peer at ledger 768. Captured with binary ledger and ledger_data RPCs.",
+  "OracleCommit": "d147fccf54a500fce586522f28d6044c37fd8d29",
+  "Capture": "Standalone with NegativeUNL and fixPreviousTxnID enabled on-ledger. The local validator proposed disabling its offline peer at ledger 768. Captured with binary ledger and ledger_data RPCs.",
   "ParentHeader": "000002FF016345785D8A000095AEE34D0A74DDB3024D0D33CF1CA479B157BF59441F4E3E3A88AF1E6F44FF8A0000000000000000000000000000000000000000000000000000000000000000BCD696EDCD4D25A4834E3495C8F749333D97FCAB36F0F56541FFC39AA29B5F383298595B3298595E0A00",
   "ParentState": [
     {
