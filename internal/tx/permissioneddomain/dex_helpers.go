@@ -62,22 +62,14 @@ func AccountInDomain(view tx.ReadOnlyLedgerView, accountID [20]byte, domainID [3
 // owner is still in the domain (i.e., still holds the required credential).
 // Reference: rippled app/misc/PermissionedDEXHelpers.cpp offerInDomain()
 func OfferInDomain(view tx.ReadOnlyLedgerView, offer *state.LedgerOffer, domainID [32]byte, parentCloseTime uint32) bool {
-	var zeroDomain [32]byte
-	if offer.DomainID == zeroDomain {
-		return false
-	}
-	if offer.DomainID != domainID {
+	if !offer.HasDomainID() || offer.DomainID != domainID {
 		return false
 	}
 
-	// A hybrid offer must carry its AdditionalBooks entry to be in-domain.
-	// rippled requires the field present (3.1.2) and, post-fixCleanup3_1_3,
-	// exactly one entry. The parsed offer collapses AdditionalBooks to a single
-	// book directory, so an on-ledger hybrid offer either has it (non-zero) or
-	// is malformed; the presence check covers both amendment eras.
 	if offer.Flags&entry.LsfHybrid != 0 {
-		var zeroDir [32]byte
-		if offer.AdditionalBookDirectory == zeroDir {
+		count, present := offer.AdditionalBookCount()
+		rules := view.Rules()
+		if !present || (rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_1_3) && count != 1) {
 			return false
 		}
 	}

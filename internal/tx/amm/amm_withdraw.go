@@ -727,10 +727,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 				withdrawAmount1 = adjAmt
 			}
 		} else {
-			var amount2Ptr *tx.Amount
-			if !withdrawAmount2.IsZero() {
-				amount2Ptr = &withdrawAmount2
-			}
+			amount2Ptr := &withdrawAmount2
 			withdrawAmount1, amount2Ptr, lpTokensToRedeem = adjustAmountsByLPTokens(math,
 				assetBalance1, withdrawAmount1, amount2Ptr, lptBalance, lpTokensToRedeem, tfee, false, fixV1_3)
 			if amount2Ptr != nil {
@@ -794,36 +791,30 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 		}
 	}
 
-	isXRP1 := isXRPAsset(applyAsset1)
-	isXRP2 := isXRPAsset(applyAsset2)
-
 	newLPBalance, err := amm.LPTokenBalance.SubWithNumberContext(lpTokensToRedeem, math.ctx, state.RoundToNearest)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	if isXRP1 && !withdrawAmount1.IsZero() {
-		// Convert to drops, handling IOU representation from calculations
-		drops := uint64(withdrawAmount1.Drops())
-		ammAccount.Balance -= drops
-		ctx.Account.Balance += drops
-	}
-	if isXRP2 && !withdrawAmount2.IsZero() {
-		// Convert to drops, handling IOU representation from calculations
-		drops := uint64(withdrawAmount2.Drops())
-		ammAccount.Balance -= drops
-		ctx.Account.Balance += drops
-	}
 
-	// For IOU transfers: check reserve if trust line creation is needed,
-	// then transfer tokens.
-	// Reference: rippled AMMWithdraw.cpp lines 581-647
-	if !isXRP1 && !withdrawAmount1.IsZero() {
-		if result := withdrawAssetToAccount(ctx, accountID, ammAccountID, applyAsset1, withdrawAmount1, withdrawalOptions{}); result != ter.TesSUCCESS {
-			return result
-		}
+	// Assets are sent in the order of the Amount field when present, so XRP
+	// sent second does not count toward the reserve check of the first asset.
+	sends := [2]struct {
+		asset  tx.Asset
+		amount tx.Amount
+	}{{applyAsset1, withdrawAmount1}, {applyAsset2, withdrawAmount2}}
+	if a.Amount != nil && !matchesAsset(a.Amount, applyAsset1) {
+		sends[0], sends[1] = sends[1], sends[0]
 	}
-	if !isXRP2 && !withdrawAmount2.IsZero() {
-		if result := withdrawAssetToAccount(ctx, accountID, ammAccountID, applyAsset2, withdrawAmount2, withdrawalOptions{}); result != ter.TesSUCCESS {
+	sendCount := len(sends)
+	if isSingleAssetWithdraw {
+		sendCount = 1
+	}
+	for _, send := range sends[:sendCount] {
+		if isXRPAsset(send.asset) {
+			drops := uint64(send.amount.Drops())
+			ammAccount.Balance -= drops
+			ctx.Account.Balance += drops
+		} else if result := withdrawAssetToAccount(ctx, accountID, ammAccountID, send.asset, send.amount, withdrawalOptions{}); result != ter.TesSUCCESS {
 			return result
 		}
 	}
@@ -954,32 +945,37 @@ func withdrawAssetToAccount(
 		if result != ter.TesSUCCESS {
 			return result
 		}
-		if accountID != mptutil.Issuer(id) {
+		if ctx.Rules().Enabled(amendment.FeatureFixAMMv1_2) {
 			tokenKey := keylet.MPTokenByID(id, accountID)
 			exists, err := ctx.View.Exists(tokenKey)
 			if err != nil {
 				return ter.TefINTERNAL
 			}
-			if !exists && ctx.Rules().Enabled(amendment.FeatureFixAMMv1_2) {
+			if !exists {
 				if result := checkWithdrawalReserve(ctx, accountID, options); result != ter.TesSUCCESS {
 					return result
 				}
-				createFlags := uint32(0)
-				if result := mptutil.RequireAuthAt(ctx.View, id, accountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
-					if options.clawbackIssuer == nil || result != ter.TecNO_AUTH {
+				if accountID != mptutil.Issuer(id) {
+					createFlags := uint32(0)
+					if result := mptutil.RequireAuthAt(ctx.View, id, accountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
+						if options.clawbackIssuer == nil || result != ter.TecNO_AUTH {
+							return result
+						}
+						if mptutil.Issuer(id) == *options.clawbackIssuer {
+							createFlags = entry.LsfMPTAuthorized
+						}
+					}
+					if result := mptutil.EnsureHolding(ctx.View, id, accountID, createFlags, true); result != ter.TesSUCCESS {
 						return result
 					}
-					if mptutil.Issuer(id) == *options.clawbackIssuer {
-						createFlags = entry.LsfMPTAuthorized
+					if accountID == ctx.AccountID {
+						ctx.SyncSenderOwnerCount()
 					}
 				}
-				if result := mptutil.EnsureHolding(ctx.View, id, accountID, createFlags, true); result != ter.TesSUCCESS {
-					return result
-				}
-				if accountID == ctx.AccountID {
-					ctx.SyncSenderOwnerCount()
-				}
 			}
+		}
+		if amount.IsZero() {
+			return ter.TesSUCCESS
 		}
 		return sendMPT(ctx.View, ammAccountID, accountID, amount, true)
 	}
@@ -1002,19 +998,6 @@ func withdrawIOUToAccount(
 	amount tx.Amount,
 	options withdrawalOptions,
 ) ter.Result {
-	// The issuer never holds a trust line to itself, so the reserve check for a
-	// missing line still applies to it, even though no line is created and only
-	// the AMM's trust line is debited.
-	if accountID == issuerID {
-		if result := checkWithdrawalReserve(ctx, accountID, options); result != ter.TesSUCCESS {
-			return result
-		}
-		if err := debitAMMTrustline(ammAccountID, asset, amount, ctx.View, ctx.NumberContext()); err != nil {
-			return ammResultFromError(err, ter.TefINTERNAL)
-		}
-		return ter.TesSUCCESS
-	}
-
 	// Check if withdrawer already has a trust line for this IOU.
 	trustLineKey := keylet.Line(accountID, issuerID, asset.Currency)
 	trustLineExists, err := ctx.View.Exists(trustLineKey)
@@ -1027,14 +1010,20 @@ func withdrawIOUToAccount(
 		if result := checkWithdrawalReserve(ctx, accountID, options); result != ter.TesSUCCESS {
 			return result
 		}
-
-		// Create trust line for the withdrawer.
-		// Reference: rippled uses accountSend → rippleCredit → trustCreate
-		if result := createWithdrawTrustLine(ctx, accountID, issuerID, asset, amount); result != ter.TesSUCCESS {
+	}
+	if amount.IsZero() {
+		return ter.TesSUCCESS
+	}
+	if accountID != issuerID {
+		if !trustLineExists {
+			// Create trust line for the withdrawer.
+			// Reference: rippled uses accountSend → rippleCredit → trustCreate
+			if result := createWithdrawTrustLine(ctx, accountID, issuerID, asset, amount); result != ter.TesSUCCESS {
+				return result
+			}
+		} else if result := tx.RippleCreditWithNumberContext(ctx.View, issuerID, accountID, amount, ctx.NumberContext()); result != ter.TesSUCCESS {
 			return result
 		}
-	} else if result := tx.RippleCreditWithNumberContext(ctx.View, issuerID, accountID, amount, ctx.NumberContext()); result != ter.TesSUCCESS {
-		return result
 	}
 
 	// Debit AMM's trust line (negative delta)

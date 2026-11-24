@@ -59,6 +59,7 @@ METHODS = (
     "Validate",
     "PreflightRules",
     "PreflightWithRules",
+    "PreflightWithFlags",
     "CheckExtraFeatures",
     "PreflightSigValidated",
     "Preclaim",
@@ -405,7 +406,8 @@ def common_field_stage_mapping() -> list[dict[str, Any]]:
             "classification": "signature shape + verification",
             "stages": ["preflight1", "preflight2", "preclaim"],
             "go": [
-                {"path": "internal/tx/engine/preflight.go", "symbols": ["checkSigningKeyShape", "Engine.verifySignatures"]},
+                {"path": "internal/tx/validate.go", "symbols": ["CheckSigningPubKey"]},
+                {"path": "internal/tx/engine/preflight.go", "symbols": ["Engine.verifySignatures"]},
                 {"path": "internal/tx/sign/signature.go", "symbols": ["VerifySignature"]},
             ],
             "oracle": [
@@ -1111,7 +1113,7 @@ def build_inventory(repo: Path, oracle: Path) -> dict[str, Any]:
                     "validate": "typed Validate method" if "Validate" in row_methods else "embedded BaseTx.Validate",
                     "preflight": {
                         "common": True,
-                        "typed": [name for name in ["PreflightRules", "PreflightWithRules", "CheckExtraFeatures", "PreflightSigValidated"] if name in row_methods],
+                        "typed": [name for name in ["PreflightRules", "PreflightWithRules", "PreflightWithFlags", "CheckExtraFeatures", "PreflightSigValidated"] if name in row_methods],
                     },
                     "preclaim": "pseudo gate" if pseudo else ("typed Preclaim" if "Preclaim" in row_methods else "engine common checks only"),
                     "apply": "pseudo ApplyPseudo dispatch" if pseudo else "Appliable.Apply",
