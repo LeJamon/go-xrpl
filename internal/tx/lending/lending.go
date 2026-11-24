@@ -339,6 +339,10 @@ func (l *LoanSet) GetFlagsMask(rules *amendment.Rules) uint32 {
 }
 
 func (l *LoanSet) Validate() error {
+	return l.PreflightWithFlags(nil, tx.TapNONE)
+}
+
+func (l *LoanSet) PreflightWithFlags(rules *amendment.Rules, flags tx.ApplyFlags) error {
 	if err := l.BaseTx.Validate(); err != nil {
 		return err
 	}
@@ -348,10 +352,18 @@ func (l *LoanSet) Validate() error {
 	if l.PrincipalRequested == "" {
 		return ter.Errorf(ter.TemMALFORMED, "PrincipalRequested is required")
 	}
-	// A LoanSet must carry a CounterpartySignature, except as a batch inner tx.
-	hasCounterSig := l.GetCommon().CounterpartySignature != nil
-	if l.GetFlags()&tx.TfInnerBatchTxn == 0 && !hasCounterSig {
+	counterSig := l.CounterpartySignature
+	if l.GetFlags()&tx.TfInnerBatchTxn != 0 {
+		if rules != nil && rules.Enabled(amendment.FeatureBatchV1_1) && !l.FieldPresent("Counterparty", l.Counterparty != "") {
+			return ter.Errorf(ter.TemBAD_SIGNER, "inner LoanSet requires a Counterparty")
+		}
+	} else if counterSig == nil {
 		return ter.Errorf(ter.TemBAD_SIGNER, "LoanSet requires a CounterpartySignature")
+	}
+	if counterSig != nil {
+		if err := tx.CheckSigningPubKey(counterSig.SigningPubKey); err != nil {
+			return err
+		}
 	}
 	if l.Data != nil && !validDataLength(*l.Data, maxDataPayloadLength) {
 		return ter.Errorf(ter.TemINVALID, "Data too long")
@@ -390,6 +402,13 @@ func (l *LoanSet) Validate() error {
 		if *l.GracePeriod < defaultGracePeriod || *l.GracePeriod > maxGrace {
 			return ter.Errorf(ter.TemINVALID, "GracePeriod out of range")
 		}
+	}
+	if flags&tx.TapDRY_RUN != 0 && counterSig != nil {
+		var key *string
+		if counterSig.SigningPubKey != "" || counterSig.HasField("SigningPubKey") {
+			key = &counterSig.SigningPubKey
+		}
+		return tx.CheckSimulateKeys(key, counterSig.TxnSignature, counterSig.Signers, counterSig.HasField("Signers"))
 	}
 	if isZeroHashStr(l.LoanBrokerID) {
 		return ter.Errorf(ter.TemINVALID, "LoanBrokerID cannot be zero")

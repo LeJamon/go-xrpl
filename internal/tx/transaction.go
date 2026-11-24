@@ -84,6 +84,10 @@ type RulesAwarePreflighter interface {
 	PreflightWithRules(rules *amendment.Rules) error
 }
 
+type FlagsAwarePreflighter interface {
+	PreflightWithFlags(rules *amendment.Rules, flags ApplyFlags) error
+}
+
 // ExtraFeaturesChecker is implemented by transaction types with an amendment
 // gate that rippled evaluates in T::checkExtraFeatures — which runs in
 // invokePreflight BEFORE preflight1's common checks (flags mask, NetworkID,
@@ -490,8 +494,7 @@ type Common struct {
 	txIDCached bool
 
 	// preflightedRules records the amendment rules under which this
-	// transaction's non-signature structural preflight last succeeded. This stage
-	// is a pure function of the transaction fields and the active rules, so when
+	// transaction's cacheable structural preflight last succeeded. When
 	// the engine re-preflights the same parsed transaction under identical rules —
 	// as the open-ledger apply strand does, preflighting once in TxQ.Apply and
 	// again in Engine.Apply under modifyMu — the second run skips the repeat.

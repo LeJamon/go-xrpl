@@ -768,9 +768,14 @@
         ],
         "go": [
           {
+            "path": "internal/tx/validate.go",
+            "symbols": [
+              "CheckSigningPubKey"
+            ]
+          },
+          {
             "path": "internal/tx/engine/preflight.go",
             "symbols": [
-              "checkSigningKeyShape",
               "Engine.verifySignatures"
             ]
           },
@@ -14222,6 +14227,7 @@
         "Apply",
         "GetFlagsMask",
         "Preclaim",
+        "PreflightWithFlags",
         "RequiredAmendments",
         "Validate"
       ],
@@ -14240,10 +14246,17 @@
             "symbol": "LoanSet.Validate"
           }
         ],
+        "PreflightWithFlags": [
+          {
+            "path": "internal/tx/lending/lending.go",
+            "line": 345,
+            "symbol": "LoanSet.PreflightWithFlags"
+          }
+        ],
         "RequiredAmendments": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 401,
+            "line": 420,
             "symbol": "LoanSet.RequiredAmendments"
           }
         ],
@@ -14266,7 +14279,9 @@
         "validate": "typed Validate method",
         "preflight": {
           "common": true,
-          "typed": []
+          "typed": [
+            "PreflightWithFlags"
+          ]
         },
         "preclaim": "typed Preclaim",
         "apply": "Appliable.Apply",
@@ -14308,7 +14323,7 @@
           "tests": [
             {
               "name": "TestDelegateRejectsNonDelegatableTypesWithoutGranularPermissions",
-              "line": 243
+              "line": 244
             }
           ],
           "kind": "Go source reference; execution is tracked separately"
