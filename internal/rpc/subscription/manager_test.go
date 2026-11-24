@@ -162,7 +162,7 @@ func TestBookNumericRealZeroIsMalformed(t *testing.T) {
 }
 
 func TestBookIssuerHexForms(t *testing.T) {
-	issuerID, ok := parseIssuer(testIssuer)
+	issuerID, ok := types.ParseIssuer(testIssuer)
 	require.True(t, ok)
 	hexIssuer := strings.ToUpper(hex.EncodeToString(issuerID[:]))
 
