@@ -136,11 +136,7 @@ func NewPaymentSandbox(view tx.LedgerView) *PaymentSandbox {
 
 // NewPaymentSandboxForApply uses the parent ledger's schedule for the whole close.
 func NewPaymentSandboxForApply(ctx *tx.ApplyContext) *PaymentSandbox {
-	return newPaymentSandbox(ctx.View, drops.Fees{
-		Base:      drops.XRPAmount(ctx.Config.BaseFee),
-		Reserve:   drops.XRPAmount(ctx.Config.ReserveBase),
-		Increment: drops.XRPAmount(ctx.Config.ReserveIncrement),
-	})
+	return newPaymentSandbox(ctx.View, ctx.Config.Fees())
 }
 
 func newPaymentSandbox(view tx.LedgerView, fees drops.Fees) *PaymentSandbox {

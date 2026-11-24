@@ -286,17 +286,6 @@ func XRPLiquid(view ReadOnlyLedgerView, accountID [20]byte, ownerCountAdj int64,
 	return XRPLiquidOf(view, accountID, account, ownerCountAdj, fees)
 }
 
-// ReserveFeesFromUint64 converts a legacy unsigned reserve schedule to the
-// signed ledger representation, rejecting values outside XRPAmount's range.
-func ReserveFeesFromUint64(reserveBase, reserveIncrement uint64) (drops.Fees, bool) {
-	if reserveBase > uint64(math.MaxInt64) || reserveIncrement > uint64(math.MaxInt64) {
-		return drops.Fees{}, false
-	}
-	return drops.Fees{
-		Reserve: drops.XRPAmount(reserveBase), Increment: drops.XRPAmount(reserveIncrement),
-	}, true
-}
-
 // XRPLiquidOf is XRPLiquid for an AccountRoot the caller already read from
 // view; account is not modified. Reserve values come from the signed ledger
 // fee schedule so modern negative fields are preserved.
@@ -428,18 +417,4 @@ func AccountFundsNoFreezeStrict(view ReadOnlyLedgerView, accountID [20]byte, amo
 		return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer), nil
 	}
 	return state.NewIssuedAmountFromValue(balance.IOU().Mantissa(), balance.IOU().Exponent(), amount.Currency, amount.Issuer), nil
-}
-
-// AccountFundsNoFreezeStrictUnsigned preserves the legacy uint64 boundary for
-// callers that have not yet migrated from EngineConfig. Reserve conversion is
-// checked only for native amounts; issued-asset queries do not use reserves.
-func AccountFundsNoFreezeStrictUnsigned(view ReadOnlyLedgerView, accountID [20]byte, amount Amount, reserveBase, reserveIncrement uint64) (Amount, error) {
-	if !amount.IsNative() {
-		return AccountFundsNoFreezeStrict(view, accountID, amount, drops.Fees{})
-	}
-	fees, ok := ReserveFeesFromUint64(reserveBase, reserveIncrement)
-	if !ok {
-		return Amount{}, fmt.Errorf("account funds: reserve exceeds int64")
-	}
-	return AccountFundsNoFreezeStrict(view, accountID, amount, fees)
 }

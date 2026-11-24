@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/drops"
@@ -93,10 +94,10 @@ func reserveSettingsFromLedger(view types.LedgerStateView, fallbackBase, fallbac
 	if ledger, ok := view.(interface{ Fees() drops.Fees }); ok {
 		fees = ledger.Fees()
 	} else {
-		fallback, ok := tx.ReserveFeesFromUint64(fallbackBase, fallbackInc)
-		if !ok {
+		if fallbackBase > math.MaxInt64 || fallbackInc > math.MaxInt64 {
 			return 0, 0, fmt.Errorf("reserve settings: reserve exceeds int64")
 		}
+		fallback := drops.Fees{Reserve: drops.XRPAmount(fallbackBase), Increment: drops.XRPAmount(fallbackInc)}
 		data, err := view.Read(keylet.Fees())
 		if err != nil {
 			return 0, 0, fmt.Errorf("reserve settings: read FeeSettings: %w", err)

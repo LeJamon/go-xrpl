@@ -28,7 +28,7 @@ func TestAccountFundsNoFreezeStrictRejectsReserveOverflow(t *testing.T) {
 	view := newMockBaseView()
 	view.data[keylet.Account(accountID).Key] = data
 
-	if _, err := AccountFundsNoFreezeStrictUnsigned(view, accountID, NewXRPAmount(1), 0, math.MaxUint64); err == nil {
+	if _, err := AccountFundsNoFreezeStrict(view, accountID, NewXRPAmount(1), drops.Fees{Increment: math.MaxInt64}); err == nil {
 		t.Fatal("AccountFundsNoFreezeStrict multiplication overflow error = nil")
 	}
 
@@ -41,7 +41,7 @@ func TestAccountFundsNoFreezeStrictRejectsReserveOverflow(t *testing.T) {
 		t.Fatalf("SerializeAccountRoot: %v", err)
 	}
 	view.data[keylet.Account(accountID).Key] = data
-	if _, err := AccountFundsNoFreezeStrictUnsigned(view, accountID, NewXRPAmount(1), math.MaxUint64, 1); err == nil {
+	if _, err := AccountFundsNoFreezeStrict(view, accountID, NewXRPAmount(1), drops.Fees{Reserve: math.MaxInt64, Increment: 1}); err == nil {
 		t.Fatal("AccountFundsNoFreezeStrict addition overflow error = nil")
 	}
 }
@@ -93,7 +93,9 @@ func TestXRPLiquidSignedReserve(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SerializeAccountRoot: %v", err)
 	}
-	fees := drops.Fees{Reserve: -10}
+	reserve := drops.XRPAmount(-10)
+	config := EngineConfig{ReserveBase: uint64(reserve)}
+	fees := config.Fees()
 	if got := XRPLiquidOf(view, accountID, account, 0, fees).Drops(); got != 110 {
 		t.Fatalf("XRPLiquidOf(negative reserve) = %d, want 110", got)
 	}

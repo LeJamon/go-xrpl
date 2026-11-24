@@ -194,7 +194,7 @@ func (n *NFTokenCreateOffer) Preclaim(view tx.ReadOnlyLedgerView, config tx.Engi
 	}
 
 	if !isSellOffer {
-		funds := mptutil.AccountFunds(view, accountID, n.Amount, true, config.ReserveBase, config.ReserveIncrement)
+		funds := mptutil.AccountFunds(view, accountID, n.Amount, true, config.Fees())
 		if funds.Signum() <= 0 {
 			return ter.TecUNFUNDED_OFFER
 		}

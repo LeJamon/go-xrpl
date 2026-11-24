@@ -8,6 +8,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
@@ -195,7 +196,7 @@ func buildOfferCreateCross(tb testing.TB) applyFixture {
 	fixture := finish(tb, env, taker, offerbuild.OfferCreate(taker, want, jtx.XRPTxAmountFromXRP(100)).Build())
 	fixture.check = func(t *testing.T, view *ledger.Ledger) {
 		t.Helper()
-		got, err := tx.AccountFundsNoFreezeStrictUnsigned(view, taker.ID, want, 0, 0)
+		got, err := tx.AccountFundsNoFreezeStrict(view, taker.ID, want, drops.Fees{})
 		if err != nil {
 			t.Fatal(err)
 		}

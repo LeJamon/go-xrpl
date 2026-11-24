@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/stretchr/testify/require"
 
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
@@ -61,7 +62,7 @@ func TestLPTokenMPTTransferCapability(t *testing.T) {
 					env.Close()
 					requireAMMIOUBalance(t, env.TestEnv, env.Alice, pool, limit.Currency, 1_000)
 
-					spendable := mptutil.AccountFunds(env.Ledger(), env.Alice.ID, limit, true, 0, 0)
+					spendable := mptutil.AccountFunds(env.Ledger(), env.Alice.ID, limit, true, drops.Fees{})
 					if transferable {
 						require.Equal(t, "1000", spendable.Value())
 					} else {

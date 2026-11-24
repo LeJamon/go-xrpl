@@ -1,6 +1,7 @@
 package amm
 
 import (
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
@@ -64,7 +65,7 @@ func insufficientBalance(view tx.ReadOnlyLedgerView, accountID [20]byte, amount 
 		return false, ter.TesSUCCESS
 	}
 
-	held := mptutil.AccountFunds(view, accountID, amount, true, 0, 0)
+	held := mptutil.AccountFunds(view, accountID, amount, true, drops.Fees{})
 	return held.Compare(amount) < 0, ter.TesSUCCESS
 }
 
