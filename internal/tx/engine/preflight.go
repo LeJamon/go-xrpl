@@ -82,8 +82,6 @@ func (e *Engine) preflight(tx txcore.Transaction) (result ter.Result) {
 // preflightStructure runs the ledger-state-independent preflight checks in
 // rippled's invokePreflight order: the amendment gate and T::checkExtraFeatures,
 // then preflight1 (which invokes preflight0), then the per-type preflight body.
-// Signature-dependent structure and cryptographic verification run separately
-// below.
 // Reference: rippled Transactor.h Transactor::invokePreflight<T>.
 func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common) ter.Result {
 	rules := e.rules()
@@ -251,7 +249,6 @@ func runTypePreflight(tx txcore.Transaction, rules *amendment.Rules, flags txcor
 }
 
 // Batch checks that each inner fee is zero and verifies the outer signatures.
-// Each inner transaction still goes through common and per-type preflight.
 func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	common := innerTx.GetCommon()
 	rules := e.rules()

@@ -147,7 +147,6 @@ func TestPreflightInnerBatchFlag(t *testing.T) {
 			want:    ter.TemINVALID_FLAG,
 		},
 		{
-			// A standalone transaction cannot carry the inner-only flag.
 			name:    "batch enabled",
 			rules:   batchRules("BatchV1_1"),
 			flagged: true,

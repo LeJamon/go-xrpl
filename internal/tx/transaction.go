@@ -84,7 +84,6 @@ type RulesAwarePreflighter interface {
 	PreflightWithRules(rules *amendment.Rules) error
 }
 
-// FlagsAwarePreflighter runs type-specific checks that also depend on the apply flags.
 type FlagsAwarePreflighter interface {
 	PreflightWithFlags(rules *amendment.Rules, flags ApplyFlags) error
 }
