@@ -1,10 +1,27 @@
 package types
 
 import (
+	"bytes"
 	"encoding/hex"
+	"encoding/json"
+	"strings"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 )
+
+// AssetString reads a JSON string with the NUL termination used by RPC asset fields.
+func AssetString(raw json.RawMessage) (string, bool) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || raw[0] != '"' {
+		return "", false
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", false
+	}
+	value, _, _ = strings.Cut(value, "\x00")
+	return value, true
+}
 
 // ParseIssuer accepts a classic address, a 160-bit hexadecimal account ID, or "0".
 func ParseIssuer(value string) ([20]byte, bool) {
