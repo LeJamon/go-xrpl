@@ -214,7 +214,10 @@ func (s *Service) buildClosedLedgerWithOwnership(ctx context.Context, parent *le
 		return nil, nil, err
 	}
 
-	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(parent)
+	baseFee, reserveBase, reserveIncrement, err := readFeesFromLedgerContext(ctx, parent)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read parent fee settings: %w", err)
+	}
 	applyCfg := openledger.ApplyConfig{
 		BaseFee:                   baseFee,
 		ReserveBase:               reserveBase,
@@ -227,9 +230,8 @@ func (s *Service) buildClosedLedgerWithOwnership(ctx context.Context, parent *le
 		Logger:                    s.config.Logger,
 		SkipSignatureVerification: skipSigVerify,
 		// tec under certainRetry holds for retry, commits on the final pass.
-		Mode: openledger.BuildLedgerMode,
-		// Amendments from the parent ledger, not the all-on default.
-		Rules: rulesFromLedger(parent, s.logger),
+		Mode:  openledger.BuildLedgerMode,
+		Rules: parent.Rules(),
 	}
 
 	applyStarted := time.Now()
