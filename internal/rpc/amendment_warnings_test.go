@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -218,9 +219,11 @@ func TestFeatureMajorityFieldEndToEnd(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resp := marshalToMap(t, result)
+		// rippled doFeature reports a single amendment's majority beside the
+		// entry, not inside it.
+		assert.Equal(t, float64(majorityClose), resp["majority"])
 		feature := resp[didHex].(map[string]any)
-		require.Contains(t, feature, "majority", "amendment in majority must report majority")
-		assert.Equal(t, float64(majorityClose), feature["majority"])
+		assert.NotContains(t, feature, "majority")
 		assert.Equal(t, false, feature["enabled"], "DID is not in the enabled set")
 	})
 
@@ -235,18 +238,56 @@ func TestFeatureMajorityFieldEndToEnd(t *testing.T) {
 		assert.Equal(t, float64(majorityClose), didEntry["majority"])
 
 		// A different, not-in-majority amendment must omit the field entirely.
-		var other *amendment.Feature
-		for _, f := range amendment.AllFeatures() {
-			if f.ID != did.ID {
-				other = f
-				break
-			}
-		}
+		other := amendment.FeatureByName("AMM")
 		require.NotNil(t, other)
 		otherHex := strings.ToUpper(hex.EncodeToString(other.ID[:]))
 		assert.NotContains(t, features[otherHex].(map[string]any), "majority",
 			"amendment not in majority must omit majority")
 	})
+}
+
+// rippled lists an amendment it does not support only once the ledger enables
+// it or records a majority for it, and holds no name for it.
+func TestFeatureListsUnsupportedLedgerAmendments(t *testing.T) {
+	unknown := [32]byte{0xAB, 0xCD}
+	sleData, err := pseudo.SerializeAmendmentsSLE(&pseudo.AmendmentsSLE{
+		Amendments: [][32]byte{amendment.FeatureMPTokensV2},
+		Majorities: []pseudo.MajorityEntry{{Amendment: unknown, CloseTime: 700_000_000}},
+	})
+	require.NoError(t, err)
+	mock := &mockFeatureLedger{
+		mockLedgerService: newMockLedgerService(),
+		view:              &stubAmendmentsView{amendmentsData: sleData},
+	}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleAdmin,
+		ApiVersion: types.ApiVersion1,
+		Services:   types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
+	}
+	method := &handlers.FeatureMethod{}
+	mptHex := strings.ToUpper(hex.EncodeToString(amendment.FeatureMPTokensV2[:]))
+	unknownHex := strings.ToUpper(hex.EncodeToString(unknown[:]))
+
+	result, rpcErr := method.Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+	features := marshalToMap(t, result)["features"].(map[string]any)
+	assert.Equal(t, map[string]any{"enabled": true, "supported": false}, features[mptHex])
+	assert.Equal(t, map[string]any{"enabled": false, "supported": false, "vetoed": true, "majority": float64(700_000_000)}, features[unknownHex])
+	assert.NotContains(t, features, strings.ToUpper(hex.EncodeToString(amendment.FeatureInvariantsV1_1[:])))
+	assert.NotContains(t, features, strings.ToUpper(hex.EncodeToString(amendment.FeatureNonFungibleTokensV1[:])))
+
+	params, _ := json.Marshal(map[string]any{"feature": "MPTokensV2"})
+	_, rpcErr = method.Handle(ctx, params)
+	require.NotNil(t, rpcErr, "rippled's table holds no name for an unsupported amendment")
+	assert.Equal(t, rpcerrors.RpcBAD_FEATURE, rpcErr.Code)
+
+	params, _ = json.Marshal(map[string]any{"feature": strings.ToLower(unknownHex)})
+	result, rpcErr = method.Handle(ctx, params)
+	require.Nil(t, rpcErr)
+	resp := marshalToMap(t, result)
+	assert.Equal(t, float64(700_000_000), resp["majority"])
+	assert.Equal(t, map[string]any{"enabled": false, "supported": false, "vetoed": true}, resp[unknownHex])
 }
 
 func TestFeatureRetiredEnabledFollowsLedger(t *testing.T) {

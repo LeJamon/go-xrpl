@@ -124,115 +124,67 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 		return amount
 	}
 
-	for _, fixAMMv1_1 := range []bool{false, true} {
-		label := "PreFix"
-		if fixAMMv1_1 {
-			label = "PostFix"
+	for i, tc := range tests {
+		poolInIsXRP := isXRPStr(tc.poolInStr)
+		poolOutIsXRP := isXRPStr(tc.poolOutStr)
+
+		poolIn := parsePool(t, tc.poolInStr, poolInIsXRP)
+		poolOut := parsePool(t, tc.poolOutStr, poolOutIsXRP)
+
+		takerPays, takerGets, ok := paymenttx.ChangeSpotPriceQuality(
+			poolIn, poolOut, tc.quality, tc.fee, poolOutIsXRP,
+		)
+
+		if ok {
+			offerQ := paymenttx.QualityFromAmounts(
+				paymenttx.ToEitherAmt(takerPays),
+				paymenttx.ToEitherAmt(takerGets),
+			)
+
+			switch tc.status {
+			case SucceedShouldSucceedResize, Succeed, FailShouldSucceed:
+				if offerQ.WorseThan(tc.quality) {
+					t.Errorf("[%d] expected quality >= target, got q=%d target=%d", i, offerQ.Value, tc.quality.Value)
+				}
+			case SucceedShouldFail:
+				t.Errorf("[%d] SucceedShouldFail: expected failure (no result), got success", i)
+			case Fail:
+				t.Errorf("[%d] Fail: expected no offer, got quality q=%d for target=%d", i, offerQ.Value, tc.quality.Value)
+			}
+			continue
 		}
-		t.Run(label, func(t *testing.T) {
-			for i, tc := range tests {
-				poolInIsXRP := isXRPStr(tc.poolInStr)
-				poolOutIsXRP := isXRPStr(tc.poolOutStr)
 
-				poolIn := parsePool(t, tc.poolInStr, poolInIsXRP)
-				poolOut := parsePool(t, tc.poolOutStr, poolOutIsXRP)
-
-				takerPays, takerGets, ok, _ := paymenttx.ChangeSpotPriceQuality(
-					poolIn, poolOut, tc.quality, tc.fee, fixAMMv1_1, poolOutIsXRP,
-				)
-
-				if ok {
-					offerQ := paymenttx.QualityFromAmounts(
+		switch tc.status {
+		case Fail:
+			// The quality can't be matched: a tiny offer is worse than the target.
+			if tc.quality.Value != 0 {
+				if poolInIsXRP {
+					takerPays := tx.NewXRPAmount(1) // 1 drop
+					takerGets := paymenttx.SwapAssetIn(poolIn, poolOut, takerPays, tc.fee)
+					tinyQ := paymenttx.QualityFromAmounts(
 						paymenttx.ToEitherAmt(takerPays),
 						paymenttx.ToEitherAmt(takerGets),
 					)
-
-					switch tc.status {
-					case SucceedShouldSucceedResize:
-						if !fixAMMv1_1 {
-							if !(offerQ.WorseThan(tc.quality)) {
-								t.Errorf("[%d] PreFix SucceedShouldSucceedResize: expected quality < target, got q=%d target=%d", i, offerQ.Value, tc.quality.Value)
-							}
-						} else {
-							if offerQ.WorseThan(tc.quality) {
-								t.Errorf("[%d] PostFix SucceedShouldSucceedResize: expected quality >= target, got q=%d target=%d", i, offerQ.Value, tc.quality.Value)
-							}
-						}
-					case Succeed:
-						if !fixAMMv1_1 {
-							if offerQ.WorseThan(tc.quality) && !paymenttx.WithinRelativeDistance(offerQ, tc.quality, 1e-7) {
-								t.Errorf("[%d] PreFix Succeed: quality worse and not within tolerance, got q=%d target=%d", i, offerQ.Value, tc.quality.Value)
-							}
-						} else {
-							if offerQ.WorseThan(tc.quality) {
-								t.Errorf("[%d] PostFix Succeed: expected quality >= target, got q=%d target=%d", i, offerQ.Value, tc.quality.Value)
-							}
-						}
-					case FailShouldSucceed:
-						if !fixAMMv1_1 {
-							t.Errorf("[%d] PreFix FailShouldSucceed: expected failure (no result), got success", i)
-						} else {
-							if offerQ.WorseThan(tc.quality) {
-								t.Errorf("[%d] PostFix FailShouldSucceed: expected quality >= target, got q=%d target=%d", i, offerQ.Value, tc.quality.Value)
-							}
-						}
-					case SucceedShouldFail:
-						if fixAMMv1_1 {
-							t.Errorf("[%d] PostFix SucceedShouldFail: expected failure (no result), got success", i)
-						} else {
-							if !(offerQ.WorseThan(tc.quality)) {
-								t.Errorf("[%d] PreFix SucceedShouldFail: expected quality < target", i)
-							}
-							if !paymenttx.WithinRelativeDistance(offerQ, tc.quality, 1e-7) {
-								t.Errorf("[%d] PreFix SucceedShouldFail: expected within tolerance", i)
-							}
-						}
-					case Fail:
-						t.Errorf("[%d] Fail: expected no offer, got quality q=%d for target=%d", i, offerQ.Value, tc.quality.Value)
+					if !(tinyQ.WorseThan(tc.quality)) {
+						t.Errorf("[%d] Fail: tiny offer quality should be worse than target, got q=%d target=%d", i, tinyQ.Value, tc.quality.Value)
 					}
-				} else {
-					switch tc.status {
-					case Fail:
-						// Expected failure — verify tiny offer quality < target if non-zero quality
-						if tc.quality.Value != 0 {
-							if poolInIsXRP {
-								takerPays := tx.NewXRPAmount(1) // 1 drop
-								takerGets := paymenttx.SwapAssetIn(poolIn, poolOut, takerPays, tc.fee, fixAMMv1_1)
-								tinyQ := paymenttx.QualityFromAmounts(
-									paymenttx.ToEitherAmt(takerPays),
-									paymenttx.ToEitherAmt(takerGets),
-								)
-								if !(tinyQ.WorseThan(tc.quality)) {
-									t.Errorf("[%d] Fail: tiny offer quality should be worse than target, got q=%d target=%d", i, tinyQ.Value, tc.quality.Value)
-								}
-							} else if poolOutIsXRP {
-								takerGets := tx.NewXRPAmount(1) // 1 drop
-								takerPays := paymenttx.SwapAssetOut(poolIn, poolOut, takerGets, tc.fee, fixAMMv1_1)
-								tinyQ := paymenttx.QualityFromAmounts(
-									paymenttx.ToEitherAmt(takerPays),
-									paymenttx.ToEitherAmt(takerGets),
-								)
-								if !(tinyQ.WorseThan(tc.quality)) {
-									t.Errorf("[%d] Fail: tiny offer quality should be worse than target, got q=%d target=%d", i, tinyQ.Value, tc.quality.Value)
-								}
-							}
-						}
-					case FailShouldSucceed:
-						if fixAMMv1_1 {
-							t.Errorf("[%d] PostFix FailShouldSucceed: expected success, got failure", i)
-						}
-					case SucceedShouldFail:
-						if !fixAMMv1_1 {
-							t.Errorf("[%d] PreFix SucceedShouldFail: expected success, got failure", i)
-						}
-					case SucceedShouldSucceedResize:
-						t.Errorf("[%d] %s SucceedShouldSucceedResize: expected success, got failure", i, label)
-					case Succeed:
-						t.Errorf("[%d] %s Succeed: expected success, got failure", i, label)
+				} else if poolOutIsXRP {
+					takerGets := tx.NewXRPAmount(1) // 1 drop
+					takerPays := paymenttx.SwapAssetOut(poolIn, poolOut, takerGets, tc.fee)
+					tinyQ := paymenttx.QualityFromAmounts(
+						paymenttx.ToEitherAmt(takerPays),
+						paymenttx.ToEitherAmt(takerGets),
+					)
+					if !(tinyQ.WorseThan(tc.quality)) {
+						t.Errorf("[%d] Fail: tiny offer quality should be worse than target, got q=%d target=%d", i, tinyQ.Value, tc.quality.Value)
 					}
 				}
 			}
-		})
+		case SucceedShouldFail:
+			// The offer is no longer generated at a worse quality than requested.
+		case FailShouldSucceed, SucceedShouldSucceedResize, Succeed:
+			t.Errorf("[%d] expected success, got failure", i)
+		}
 	}
 
 	t.Run("NegativeDiscriminant", func(t *testing.T) {

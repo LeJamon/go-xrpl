@@ -157,11 +157,14 @@ func TestFeatureVetoedMustBeBoolean(t *testing.T) {
 	require.NotNil(t, rpcErr)
 	require.Equal(t, "noPermission", rpcErr.ErrorString)
 
-	for _, vetoed := range []bool{true, false} {
+	// A boolean vetoed is accepted. A vote change is recorded only where
+	// rippled's veto and unVeto change one: an obsolete amendment never
+	// changes, so these use a default-yes and a default-no amendment.
+	for feature, vetoed := range map[string]bool{"fixRemoveNFTokenAutoTrustLine": true, "DID": false} {
 		controller := &requestRejectAmendmentController{table: amendment.NewTable()}
 		_, rpcErr := (&FeatureMethod{}).Handle(
 			&types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: controller})},
-			json.RawMessage(fmt.Sprintf(`{"feature":"fixMasterKeyAsRegularKey","vetoed":%t}`, vetoed)),
+			json.RawMessage(fmt.Sprintf(`{"feature":%q,"vetoed":%t}`, feature, vetoed)),
 		)
 		require.Nil(t, rpcErr)
 		require.Equal(t, 1, controller.setCalls)

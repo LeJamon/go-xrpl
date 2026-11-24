@@ -24,6 +24,8 @@ type LoanBrokerSet struct {
 	DebtMaximum          *string `json:"DebtMaximum,omitempty" xrpl:"DebtMaximum,omitempty"`
 	CoverRateMinimum     *uint32 `json:"CoverRateMinimum,omitempty" xrpl:"CoverRateMinimum,omitempty"`
 	CoverRateLiquidation *uint32 `json:"CoverRateLiquidation,omitempty" xrpl:"CoverRateLiquidation,omitempty"`
+	// DomainID belongs to LendingProtocolV1_2, which this node does not support.
+	DomainID *string `json:"DomainID,omitempty" xrpl:"DomainID,omitempty"`
 }
 
 // NewLoanBrokerSet creates a LoanBrokerSet transaction.
@@ -36,9 +38,17 @@ func NewLoanBrokerSet(account, vaultID string) *LoanBrokerSet {
 
 func (l *LoanBrokerSet) TxType() tx.Type { return tx.TypeLoanBrokerSet }
 
-// GetFlagsMask adopts the engine FlagsMasker seam. LoanBrokerSet defines no
-// type-specific flags, so it uses the base universal mask, checked at preflight0.
+// tfLoanBrokerPrivate marks a LoanBroker private to its permissioned domain
+// (LendingProtocolV1_2).
+const tfLoanBrokerPrivate uint32 = 0x00010000
+
+// GetFlagsMask adopts the engine FlagsMasker seam, checked at preflight0.
+// LendingProtocolV1_2 adds tfLoanBrokerPrivate; before it only the universal
+// flags are allowed.
 func (l *LoanBrokerSet) GetFlagsMask(rules *amendment.Rules) uint32 {
+	if rules != nil && rules.Enabled(amendment.FeatureLendingProtocolV1_2) {
+		return tx.TfUniversalMask &^ tfLoanBrokerPrivate
+	}
 	return tx.TfUniversalMask
 }
 
@@ -85,6 +95,15 @@ func (l *LoanBrokerSet) Validate() error {
 
 func (l *LoanBrokerSet) Flatten() (map[string]any, error) { return tx.ReflectFlatten(l) }
 func (l *LoanBrokerSet) RequiredAmendments() [][32]byte   { return requiredLending() }
+
+// CheckExtraFeatures rejects the LendingProtocolV1_2 DomainID while that
+// amendment is disabled.
+func (l *LoanBrokerSet) CheckExtraFeatures(rules *amendment.Rules) error {
+	if l.DomainID != nil && !rules.Enabled(amendment.FeatureLendingProtocolV1_2) {
+		return ter.Errorf(ter.TemDISABLED, "DomainID requires LendingProtocolV1_2")
+	}
+	return nil
+}
 
 // LoanBrokerDelete deletes a Loan Broker.
 type LoanBrokerDelete struct {

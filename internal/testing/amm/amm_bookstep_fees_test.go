@@ -2,6 +2,7 @@
 package amm_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -300,23 +301,20 @@ func TestAMMBookStep_SelfIssueOffer(t *testing.T) {
 func TestAMMBookStep_TransferRateNoOwnerFee(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
-		fixAMMv1_1 bool
 		fixAMMv1_3 bool
 		poolUSD    int64
 		carolUSD   int64
 	}{
 		{
-			name:       "fixAMMv1_1",
-			fixAMMv1_1: true,
+			name:       "fixAMMv1_3",
 			fixAMMv1_3: true,
 			poolUSD:    8928571428571429,
 			carolUSD:   1085714285714286,
 		},
 		{
-			name:       "legacy",
-			fixAMMv1_1: false,
+			name:       "noFixAMMv1_3",
 			fixAMMv1_3: false,
-			poolUSD:    8928571428571428,
+			poolUSD:    8928571428571429,
 			carolUSD:   1085714285714286,
 		},
 	} {
@@ -324,9 +322,6 @@ func TestAMMBookStep_TransferRateNoOwnerFee(t *testing.T) {
 			env := amm.NewAMMTestEnv(t)
 			env.DisableFeature("SingleAssetVault")
 			env.DisableFeature("LendingProtocol")
-			if !tc.fixAMMv1_1 {
-				env.DisableFeature("fixAMMv1_1")
-			}
 			if !tc.fixAMMv1_3 {
 				env.DisableFeature("fixAMMv1_3")
 			}
@@ -388,6 +383,82 @@ func TestAMMBookStep_TransferRateNoOwnerFee(t *testing.T) {
 				state.NewIssuedAmountFromValue(tc.carolUSD, -12, "USD", env.GW.Address),
 				ammHolding(t, env, env.Carol, env.USD))
 			require.Equal(t, lpBefore, env.ReadAMMData(env.GBP, env.USD).LPTokenBalance)
+		})
+	}
+}
+
+// TestAMMBookStep_TradingFeeEPriceWithdraw ports rippled AMM_test testTradingFee
+// "Withdraw with EPrice limit, 1% fee": single-asset withdrawals whose
+// LP-token adjustment differs with and without fixAMMv1_3.
+func TestAMMBookStep_TradingFeeEPriceWithdraw(t *testing.T) {
+	for _, tc := range []struct {
+		fixAMMv1_3   bool
+		afterEPrice  int64
+		afterNoFee   int64
+		tokensNoFeeM int64
+	}{
+		{fixAMMv1_3: true, afterEPrice: 3044343891402713, afterNoFee: 3044343891402713, tokensNoFeeM: 74657980779911},
+		{fixAMMv1_3: false, afterEPrice: 3044343891402714, afterNoFee: 3044343891402716, tokensNoFeeM: 74657980779912},
+	} {
+		t.Run(fmt.Sprintf("fixAMMv1_3=%t", tc.fixAMMv1_3), func(t *testing.T) {
+			amm.TestAMM(t, nil, 1000, func(env *amm.AMMTestEnv, ammAcc *jtx.Account) {
+				if !tc.fixAMMv1_3 {
+					env.DisableFeature("fixAMMv1_3")
+					env.Close()
+				}
+				xrp, usd := amm.XRP(), env.USD
+				lptCurrency := env.LPTokenAmountFromLedger(xrp, usd, 0).Currency
+				lpBalance := func() *state.Amount {
+					t.Helper()
+					balance, ok := env.LookupIOUBalance(env.Carol, ammAcc, lptCurrency)
+					require.True(t, ok)
+					return balance
+				}
+				usdBalance := func() *state.Amount {
+					t.Helper()
+					balance, ok := env.LookupIOUBalance(env.Carol, env.GW, "USD")
+					require.True(t, ok)
+					return balance
+				}
+				usdValue := func(mantissa int64) tx.Amount {
+					return state.NewIssuedAmountFromValue(mantissa, -11, "USD", env.GW.Address)
+				}
+
+				jtx.RequireTxSuccess(t, env.Submit(amm.AMMDeposit(env.Carol, xrp, usd).
+					LPTokenOut(amm.LPTokenAmount(env, xrp, usd, 1_000_000)).LPToken().Build()))
+				env.Close()
+
+				before := lpBalance()
+				jtx.RequireTxSuccess(t, env.Submit(amm.AMMWithdraw(env.Carol, xrp, usd).
+					Amount(amm.IOUAmount(env.GW, "USD", 100)).
+					EPrice(amm.LPTokenAmount(env, xrp, usd, 520)).
+					LimitLPToken().Build()))
+				env.Close()
+				tokensFee := state.NewIssuedAmountFromValue(before.Mantissa(), before.Exponent(), lptCurrency, ammAcc.Address)
+				tokensFee, err := tokensFee.Sub(*lpBalance())
+				require.NoError(t, err)
+				require.Equal(t, "750588.23529411", tokensFee.Value())
+				afterEPrice := usdBalance()
+				require.Equal(t, 0, afterEPrice.Compare(usdValue(tc.afterEPrice)), "balance after EPrice withdraw = %s", afterEPrice.Value())
+
+				deposit, err := afterEPrice.Sub(amm.IOUAmount(env.GW, "USD", 29_000))
+				require.NoError(t, err)
+				jtx.RequireTxSuccess(t, env.Submit(amm.AMMDeposit(env.Carol, xrp, usd).
+					Amount(deposit).SingleAsset().Build()))
+				env.Vote(env.Alice, xrp, usd, 0)
+				env.Close()
+
+				before = lpBalance()
+				jtx.RequireTxSuccess(t, env.Submit(amm.AMMWithdraw(env.Carol, xrp, usd).
+					Amount(deposit).SingleAsset().Build()))
+				env.Close()
+				tokensNoFee := state.NewIssuedAmountFromValue(before.Mantissa(), before.Exponent(), lptCurrency, ammAcc.Address)
+				tokensNoFee, err = tokensNoFee.Sub(*lpBalance())
+				require.NoError(t, err)
+				require.Equal(t, 0, tokensNoFee.Compare(state.NewIssuedAmountFromValue(tc.tokensNoFeeM, -8, lptCurrency, ammAcc.Address)), "tokensNoFee = %s", tokensNoFee.Value())
+				afterNoFee := usdBalance()
+				require.Equal(t, 0, afterNoFee.Compare(usdValue(tc.afterNoFee)), "balance after no-fee withdraw = %s", afterNoFee.Value())
+			})
 		})
 	}
 }

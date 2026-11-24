@@ -76,36 +76,30 @@ func TestAMMBookStep_BadPathAssert(t *testing.T) {
 func TestAMMBookStep_DirectToDirectPath(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
-		fixAMMv1_1 bool
 		fixAMMv1_3 bool
 		aPool      int64
 		bPool      int64
 		offer      int64
 	}{
 		{
-			name:       "fixAMMv1_1",
-			fixAMMv1_1: true,
+			name:       "fixAMMv1_3",
 			fixAMMv1_3: true,
 			aPool:      3093541659651604,
 			bPool:      3200215509984419,
 			offer:      200215509984419,
 		},
 		{
-			name:       "legacy",
-			fixAMMv1_1: false,
+			name:       "noFixAMMv1_3",
 			fixAMMv1_3: false,
-			aPool:      3093541659651605,
-			bPool:      3200215509984417,
-			offer:      200215509984417,
+			aPool:      3093541659651604,
+			bPool:      3200215509984419,
+			offer:      200215509984419,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := amm.NewAMMTestEnv(t)
 			env.DisableFeature("SingleAssetVault")
 			env.DisableFeature("LendingProtocol")
-			if !tc.fixAMMv1_1 {
-				env.DisableFeature("fixAMMv1_1")
-			}
 			if !tc.fixAMMv1_3 {
 				env.DisableFeature("fixAMMv1_3")
 			}

@@ -72,7 +72,6 @@ func (o *OfferCreate) invokeFlowCross(
 			ReserveIncrement:   ctx.Config.ReserveIncrement,
 			FixReducedOffersV2: rules.Enabled(amendment.FeatureFixReducedOffersV2),
 			FixFillOrKill:      rules.Enabled(amendment.FeatureFixFillOrKill),
-			FixAMMv1_1:         rules.Enabled(amendment.FeatureFixAMMv1_1),
 			FixAMMv1_2:         rules.Enabled(amendment.FeatureFixAMMv1_2),
 			NumberContext:      &numberContext,
 			DomainID:           o.DomainID,

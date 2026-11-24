@@ -25,7 +25,6 @@ type AMMLiquidity struct {
 	initialPoolIn  tx.Amount
 	initialPoolOut tx.Amount
 
-	fixAMMv1_1 bool
 	fixAMMv1_2 bool
 }
 
@@ -44,7 +43,7 @@ func NewAMMLiquidity(
 	tradingFee uint16,
 	issueIn, issueOut Issue,
 	ammContext *AMMContext,
-	fixAMMv1_1, fixAMMv1_2 bool,
+	fixAMMv1_2 bool,
 ) *AMMLiquidity {
 	liq := &AMMLiquidity{
 		ammContext:   ammContext,
@@ -52,7 +51,6 @@ func NewAMMLiquidity(
 		tradingFee:   tradingFee,
 		issueIn:      issueIn,
 		issueOut:     issueOut,
-		fixAMMv1_1:   fixAMMv1_1,
 		fixAMMv1_2:   fixAMMv1_2,
 	}
 	// Fetch initial balances
@@ -147,19 +145,13 @@ func (l *AMMLiquidity) generateOffer(view *PaymentSandbox, poolIn, poolOut tx.Am
 	}
 
 	// Single-path with CLOB quality: match spot price to CLOB quality
-	offerIn, offerOut, ok, blocked := changeSpotPriceQuality(
+	offerIn, offerOut, ok := changeSpotPriceQuality(
 		l.ammContext.numberMath(),
 		poolIn, poolOut, *clobQuality, l.tradingFee,
-		l.fixAMMv1_1, l.issueOut.IsXRP() || l.issueOut.IsMPT,
+		l.issueOut.IsXRP() || l.issueOut.IsMPT,
 	)
 	if ok {
 		return NewAMMOffer(l, offerIn, offerOut, poolIn, poolOut)
-	}
-
-	// Quality-worse case: rippled Throws, which the generic catch turns into
-	// nullopt with no maxOffer fallback. The AMM stays blocked by the LOB tip.
-	if blocked {
-		return nil
 	}
 
 	// A failed quality calculation falls through to the fixAMMv1_2 max-offer check.
@@ -211,7 +203,7 @@ func (l *AMMLiquidity) generateFibSeqOffer(poolIn, poolOut tx.Amount) (tx.Amount
 		state.RoundUpward,
 		state.RoundToNearest,
 	)
-	curOut := swapAssetIn(m, l.initialPoolIn, l.initialPoolOut, curIn, l.tradingFee, l.fixAMMv1_1)
+	curOut := swapAssetIn(m, l.initialPoolIn, l.initialPoolOut, curIn, l.tradingFee)
 
 	if l.ammContext.CurIters() == 0 {
 		return curIn, curOut, true
@@ -237,7 +229,7 @@ func (l *AMMLiquidity) generateFibSeqOffer(poolIn, poolOut tx.Amount) (tx.Amount
 		return tx.Amount{}, tx.Amount{}, false
 	}
 
-	curIn = swapAssetOut(m, poolIn, poolOut, curOut, l.tradingFee, l.fixAMMv1_1)
+	curIn = swapAssetOut(m, poolIn, poolOut, curOut, l.tradingFee)
 	return curIn, curOut, true
 }
 
@@ -261,7 +253,7 @@ func (l *AMMLiquidity) maxOffer(poolIn, poolOut tx.Amount) *AMMOffer {
 		return nil
 	}
 
-	maxIn := swapAssetOut(m, poolIn, poolOut, maxOut, l.tradingFee, l.fixAMMv1_1)
+	maxIn := swapAssetOut(m, poolIn, poolOut, maxOut, l.tradingFee)
 	return NewAMMOfferWithBalanceQuality(l, maxIn, maxOut, poolIn, poolOut)
 }
 

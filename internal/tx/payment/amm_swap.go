@@ -73,135 +73,92 @@ func AMMGetFeeRounded(tfee uint16, mode state.RoundingMode) tx.Amount {
 }
 
 // SwapAssetIn calculates how much you get out when swapping assetIn into the pool.
-// Formula: out = poolOut - (poolIn * poolOut) / (poolIn + assetIn * feeMult(tfee))
-// With fixAMMv1_1: explicit rounding to favor the AMM (minimize output).
+// Formula: out = poolOut - (poolIn * poolOut) / (poolIn + assetIn * feeMult(tfee)),
+// with explicit rounding to favor the AMM (minimize output).
 // All arithmetic is done in IOU-like Number representation to handle mixed XRP/IOU.
 // Reference: rippled AMMHelpers.h swapAssetIn()
-func SwapAssetIn(poolIn, poolOut, assetIn tx.Amount, tfee uint16, fixAMMv1_1 bool) tx.Amount {
-	return swapAssetIn(legacyNumberMath(), poolIn, poolOut, assetIn, tfee, fixAMMv1_1)
+func SwapAssetIn(poolIn, poolOut, assetIn tx.Amount, tfee uint16) tx.Amount {
+	return swapAssetIn(legacyNumberMath(), poolIn, poolOut, assetIn, tfee)
 }
 
-func swapAssetIn(m numberMath, poolIn, poolOut, assetIn tx.Amount, tfee uint16, fixAMMv1_1 bool) tx.Amount {
+func swapAssetIn(m numberMath, poolIn, poolOut, assetIn tx.Amount, tfee uint16) tx.Amount {
 	nPoolIn := m.fromAmount(poolIn, state.RoundToNearest)
 	nPoolOut := m.fromAmount(poolOut, state.RoundToNearest)
 	nAssetIn := m.fromAmount(assetIn, state.RoundToNearest)
 
-	if fixAMMv1_1 {
-		// Each sub-computation rounds to favor the AMM (minimize output),
-		// matching rippled's per-step Number::setround() calls.
-		// Reference: rippled AMMHelpers.h swapAssetIn() lines 493-514
+	// Each sub-computation rounds to favor the AMM (minimize output),
+	// matching rippled's per-step Number::setround() calls.
+	// Reference: rippled AMMHelpers.h swapAssetIn()
 
-		// Number::setround(Number::upward)
-		numerator := nPoolIn.MulRounded(nPoolOut, state.RoundUpward)
-		fee := m.fee(tfee, state.RoundUpward)
+	// Number::setround(Number::upward)
+	numerator := nPoolIn.MulRounded(nPoolOut, state.RoundUpward)
+	fee := m.fee(tfee, state.RoundUpward)
 
-		// Number::setround(Number::downward)
-		fMult := m.subRounded(m.one(), fee, state.RoundDownward)
-		assetFee := nAssetIn.MulRounded(fMult, state.RoundDownward)
-		denom := nPoolIn.AddRounded(assetFee, state.RoundDownward)
+	// Number::setround(Number::downward)
+	fMult := m.subRounded(m.one(), fee, state.RoundDownward)
+	assetFee := nAssetIn.MulRounded(fMult, state.RoundDownward)
+	denom := nPoolIn.AddRounded(assetFee, state.RoundDownward)
 
-		if denom.Signum() <= 0 {
-			return zeroLikeAmount(poolOut)
-		}
-
-		// Number::setround(Number::upward)
-		ratio := numerator.DivRounded(denom, state.RoundUpward)
-
-		// Number::setround(Number::downward)
-		swapOut := m.subRounded(nPoolOut, ratio, state.RoundDownward)
-
-		if swapOut.Signum() < 0 {
-			return zeroLikeAmount(poolOut)
-		}
-		// toAmount with Number::downward
-		return m.toAmount(swapOut, poolOut, state.RoundDownward)
-	}
-
-	// Pre-fixAMMv1_1: simple formula using Number arithmetic throughout.
-	// In rippled, pool.in/pool.out/assetIn are all Number types, so all
-	// operations (*, /, +, -) use Number::operator which has 16-digit
-	// mantissa with guard-based rounding. We must use numberMul/numberDiv
-	// (not Amount.Mul/Amount.Div which use STAmount::multiply/divide).
-	// Reference: rippled AMMHelpers.h swapAssetIn() pre-amendment path
-	fMult := m.feeMult(tfee, state.RoundToNearest)
-	assetFee := nAssetIn.Mul(fMult)
-	denom := nPoolIn.Add(assetFee)
-	if denom.IsZero() {
+	if denom.Signum() <= 0 {
 		return zeroLikeAmount(poolOut)
 	}
-	numerator := nPoolIn.Mul(nPoolOut)
-	ratio := numerator.Div(denom)
-	result := m.sub(nPoolOut, ratio)
-	if result.Signum() < 0 {
+
+	// Number::setround(Number::upward)
+	ratio := numerator.DivRounded(denom, state.RoundUpward)
+
+	// Number::setround(Number::downward)
+	swapOut := m.subRounded(nPoolOut, ratio, state.RoundDownward)
+
+	if swapOut.Signum() < 0 {
 		return zeroLikeAmount(poolOut)
 	}
-	return m.toAmountWithNativeRounding(result, poolOut, state.RoundDownward, state.RoundToNearest)
+	// toAmount with Number::downward
+	return m.toAmount(swapOut, poolOut, state.RoundDownward)
 }
 
 // SwapAssetOut calculates how much you must put in to get assetOut from the pool.
-// Formula: in = ((poolIn * poolOut) / (poolOut - assetOut) - poolIn) / feeMult(tfee)
-// With fixAMMv1_1: explicit rounding to favor the AMM (maximize input).
+// Formula: in = ((poolIn * poolOut) / (poolOut - assetOut) - poolIn) / feeMult(tfee),
+// with explicit rounding to favor the AMM (maximize input).
 // All arithmetic is done in IOU-like Number representation to handle mixed XRP/IOU.
 // Reference: rippled AMMHelpers.h swapAssetOut()
-func SwapAssetOut(poolIn, poolOut, assetOut tx.Amount, tfee uint16, fixAMMv1_1 bool) tx.Amount {
-	return swapAssetOut(legacyNumberMath(), poolIn, poolOut, assetOut, tfee, fixAMMv1_1)
+func SwapAssetOut(poolIn, poolOut, assetOut tx.Amount, tfee uint16) tx.Amount {
+	return swapAssetOut(legacyNumberMath(), poolIn, poolOut, assetOut, tfee)
 }
 
-func swapAssetOut(m numberMath, poolIn, poolOut, assetOut tx.Amount, tfee uint16, fixAMMv1_1 bool) tx.Amount {
+func swapAssetOut(m numberMath, poolIn, poolOut, assetOut tx.Amount, tfee uint16) tx.Amount {
 	nPoolIn := m.fromAmount(poolIn, state.RoundToNearest)
 	nPoolOut := m.fromAmount(poolOut, state.RoundToNearest)
 	nAssetOut := m.fromAmount(assetOut, state.RoundToNearest)
 
-	if fixAMMv1_1 {
-		// Each sub-computation rounds to favor the AMM (maximize input),
-		// matching rippled's per-step Number::setround() calls.
-		// Reference: rippled AMMHelpers.h swapAssetOut() lines 562-587
+	// Each sub-computation rounds to favor the AMM (maximize input),
+	// matching rippled's per-step Number::setround() calls.
+	// Reference: rippled AMMHelpers.h swapAssetOut()
 
-		// Number::setround(Number::upward)
-		numerator := nPoolIn.MulRounded(nPoolOut, state.RoundUpward)
+	// Number::setround(Number::upward)
+	numerator := nPoolIn.MulRounded(nPoolOut, state.RoundUpward)
 
-		// Number::setround(Number::downward)
-		denom := m.subRounded(nPoolOut, nAssetOut, state.RoundDownward)
-		if denom.Signum() <= 0 {
-			return toMaxAmount(poolIn)
-		}
-
-		// Number::setround(Number::upward)
-		ratio := numerator.DivRounded(denom, state.RoundUpward)
-		numerator2 := m.subRounded(ratio, nPoolIn, state.RoundUpward)
-		fee := m.fee(tfee, state.RoundUpward)
-
-		// Number::setround(Number::downward)
-		fMult := m.subRounded(m.one(), fee, state.RoundDownward)
-
-		// Number::setround(Number::upward)
-		swapIn := numerator2.DivRounded(fMult, state.RoundUpward)
-
-		if swapIn.Signum() < 0 {
-			return zeroLikeAmount(poolIn)
-		}
-		// toAmount with Number::upward
-		return m.toAmount(swapIn, poolIn, state.RoundUpward)
-	}
-
-	// Pre-fixAMMv1_1: simple formula using Number arithmetic throughout.
-	// In rippled, pool.in/pool.out/assetOut are all Number types, so all
-	// operations use Number::operator (16-digit mantissa, guard-based).
-	// We must use numberMul/numberDiv (not Amount.Mul/Amount.Div).
-	// Reference: rippled AMMHelpers.h swapAssetOut() pre-amendment path
-	fMult := m.feeMult(tfee, state.RoundToNearest)
-	denom := m.sub(nPoolOut, nAssetOut)
-	if denom.IsZero() || denom.Signum() < 0 {
+	// Number::setround(Number::downward)
+	denom := m.subRounded(nPoolOut, nAssetOut, state.RoundDownward)
+	if denom.Signum() <= 0 {
 		return toMaxAmount(poolIn)
 	}
-	numerator := nPoolIn.Mul(nPoolOut)
-	ratio := numerator.Div(denom)
-	diff := m.sub(ratio, nPoolIn)
-	result := diff.Div(fMult)
-	if result.Signum() < 0 {
+
+	// Number::setround(Number::upward)
+	ratio := numerator.DivRounded(denom, state.RoundUpward)
+	numerator2 := m.subRounded(ratio, nPoolIn, state.RoundUpward)
+	fee := m.fee(tfee, state.RoundUpward)
+
+	// Number::setround(Number::downward)
+	fMult := m.subRounded(m.one(), fee, state.RoundDownward)
+
+	// Number::setround(Number::upward)
+	swapIn := numerator2.DivRounded(fMult, state.RoundUpward)
+
+	if swapIn.Signum() < 0 {
 		return zeroLikeAmount(poolIn)
 	}
-	return m.toAmountWithNativeRounding(result, poolIn, state.RoundUpward, state.RoundToNearest)
+	// toAmount with Number::upward
+	return m.toAmount(swapIn, poolIn, state.RoundUpward)
 }
 
 // SolveQuadraticEq computes (-b + sqrt(b^2 - 4*a*c)) / (2*a).
@@ -250,98 +207,23 @@ func solveQuadraticEqSmallest(m numberMath, a, b, c state.XRPLNumber) *state.XRP
 
 // ChangeSpotPriceQuality generates an AMM offer so that either the updated
 // Spot Price Quality (SPQ) equals the LOB quality, or the AMM offer quality
-// equals the LOB quality.
-//
-// When ok is false, blocked distinguishes the two failure modes that rippled
-// signals via different control flow: blocked=false is a plain calc failure,
-// while blocked=true means the generated offer's quality is worse than the LOB
-// tip. Integral assets use the economically coarser side as the starting point
-// after fixAMMv1_1; outIsIntegral is true for XRP and MPT output.
+// equals the LOB quality. Integral assets use the economically coarser side as
+// the starting point; outIsIntegral is true for XRP and MPT output.
 // Reference: rippled AMMHelpers.h changeSpotPriceQuality()
-func ChangeSpotPriceQuality(poolIn, poolOut tx.Amount, quality Quality, tfee uint16, fixAMMv1_1 bool, outIsIntegral bool) (in, out tx.Amount, ok, blocked bool) {
-	return changeSpotPriceQuality(legacyNumberMath(), poolIn, poolOut, quality, tfee, fixAMMv1_1, outIsIntegral)
+func ChangeSpotPriceQuality(poolIn, poolOut tx.Amount, quality Quality, tfee uint16, outIsIntegral bool) (in, out tx.Amount, ok bool) {
+	return changeSpotPriceQuality(legacyNumberMath(), poolIn, poolOut, quality, tfee, outIsIntegral)
 }
 
-func changeSpotPriceQuality(m numberMath, poolIn, poolOut tx.Amount, quality Quality, tfee uint16, fixAMMv1_1 bool, outIsIntegral bool) (in, out tx.Amount, ok, blocked bool) {
-	if !fixAMMv1_1 {
-		return changeSpotPriceQualityPreFix(m, poolIn, poolOut, quality, tfee)
-	}
-
-	// Post-fixAMMv1_1: start with the economically coarser integral side. If
-	// both sides are integral, the direction depends on whether the requested
-	// rate is at least parity: takerGets for rate >= 1, takerPays otherwise.
+func changeSpotPriceQuality(m numberMath, poolIn, poolOut tx.Amount, quality Quality, tfee uint16, outIsIntegral bool) (in, out tx.Amount, ok bool) {
+	// Start with the economically coarser integral side. If both sides are
+	// integral, the direction depends on whether the requested rate is at
+	// least parity: takerGets for rate >= 1, takerPays otherwise.
 	inIsIntegral := poolIn.IsNative() || poolIn.IsMPT()
 	qRate := qualityToRate(m, quality)
 	if outIsIntegral && (!inIsIntegral || qRate.Cmp(m.one()) >= 0) {
-		in, out, ok = getAMMOfferStartWithTakerGets(m, poolIn, poolOut, quality, tfee)
-	} else {
-		in, out, ok = getAMMOfferStartWithTakerPays(m, poolIn, poolOut, quality, tfee)
+		return getAMMOfferStartWithTakerGets(m, poolIn, poolOut, quality, tfee)
 	}
-	return in, out, ok, false
-}
-
-// changeSpotPriceQualityPreFix is the pre-fixAMMv1_1 implementation.
-// Solves: i^2*(1-fee) + i*I*(2-fee) + I^2 - I*O/quality = 0
-// Reference: rippled AMMHelpers.h changeSpotPriceQuality() pre-amendment path
-func changeSpotPriceQualityPreFix(m numberMath, poolIn, poolOut tx.Amount, quality Quality, tfee uint16) (in, out tx.Amount, ok, blocked bool) {
-	qRate := qualityToRate(m, quality)
-	if qRate.IsZero() {
-		return tx.Amount{}, tx.Amount{}, false, false
-	}
-
-	// Convert to Number for uniform arithmetic
-	nPoolIn := m.fromAmount(poolIn, state.RoundToNearest)
-	nPoolOut := m.fromAmount(poolOut, state.RoundToNearest)
-
-	f := m.feeMult(tfee, state.RoundToNearest)
-
-	a := f
-	onePlusF := m.add(m.one(), f)
-	b := nPoolIn.Mul(onePlusF)
-	poolInSq := nPoolIn.Mul(nPoolIn)
-	poolInOutRate := nPoolIn.Mul(nPoolOut).Mul(qRate)
-	c := m.sub(poolInSq, poolInOutRate)
-
-	// Check discriminant
-	disc := m.sub(b.Mul(b), m.int(4).Mul(a).Mul(c))
-	if disc.Signum() < 0 {
-		return tx.Amount{}, tx.Amount{}, false, false
-	}
-
-	sqrtDisc := disc.Root2()
-	neg_b := b.Negate()
-	nTakerPaysPropose := m.add(neg_b, sqrtDisc).Div(m.int(2).Mul(a))
-
-	if nTakerPaysPropose.Signum() <= 0 {
-		return tx.Amount{}, tx.Amount{}, false, false
-	}
-
-	// Constraint: i <= O / q - I / f
-	constraint := m.sub(nPoolOut.Mul(qRate), nPoolIn.Div(f))
-	if constraint.Signum() <= 0 {
-		return tx.Amount{}, tx.Amount{}, false, false
-	}
-	if nTakerPaysPropose.Cmp(constraint) > 0 {
-		nTakerPaysPropose = constraint
-	}
-
-	// Round takerPays UP -- matches rippled's toAmount() with Number::upward
-	takerPays := m.toAmountWithNativeRounding(nTakerPaysPropose, poolIn, state.RoundUpward, state.RoundToNearest)
-	takerGets := swapAssetIn(m, poolIn, poolOut, takerPays, tfee, false)
-
-	// If the generated offer quality is worse than the target and not within
-	// the relative-distance tolerance, rippled Throws rather than returning
-	// nullopt. The throw suppresses the AMM offer entirely (no maxOffer
-	// fallback), leaving the AMM blocked by the LOB tip.
-	offerQ := QualityFromAmountsWithNumberContext(toEitherAmt(takerPays), toEitherAmt(takerGets), m.ctx)
-	if offerQ.WorseThan(quality) {
-		rd := RelativeDistance(offerQ, quality)
-		if rd >= 1e-7 {
-			return tx.Amount{}, tx.Amount{}, false, true
-		}
-	}
-
-	return takerPays, takerGets, true, false
+	return getAMMOfferStartWithTakerPays(m, poolIn, poolOut, quality, tfee)
 }
 
 // getAMMOfferStartWithTakerGets generates AMM offer starting with takerGets.
@@ -396,13 +278,13 @@ func getAMMOfferStartWithTakerGets(m numberMath, poolIn, poolOut tx.Amount, qual
 	// Round takerGets downward to minimize the offer.
 	// Reference: rippled toAmount with Number::downward (line 229)
 	takerGets := m.toAmountWithNativeRounding(*nTakerGets, poolOut, state.RoundDownward, state.RoundToNearest)
-	takerPays := swapAssetOut(m, poolIn, poolOut, takerGets, tfee, true)
+	takerPays := swapAssetOut(m, poolIn, poolOut, takerGets, tfee)
 
 	offerQ := QualityFromAmountsWithNumberContext(toEitherAmt(takerPays), toEitherAmt(takerGets), m.ctx)
 	if offerQ.WorseThan(quality) {
 		reduced := reduceOffer(m, takerGets)
 		takerGets = reduced
-		takerPays = swapAssetOut(m, poolIn, poolOut, takerGets, tfee, true)
+		takerPays = swapAssetOut(m, poolIn, poolOut, takerGets, tfee)
 		offerQ = QualityFromAmountsWithNumberContext(toEitherAmt(takerPays), toEitherAmt(takerGets), m.ctx)
 		if offerQ.WorseThan(quality) {
 			return tx.Amount{}, tx.Amount{}, false
@@ -456,13 +338,13 @@ func getAMMOfferStartWithTakerPays(m numberMath, poolIn, poolOut tx.Amount, qual
 	// Round takerPays downward to minimize the offer and maximize quality.
 	// Reference: rippled toAmount with Number::downward (line 298-299)
 	takerPays := m.toAmountWithNativeRounding(*nTakerPays, poolIn, state.RoundDownward, state.RoundToNearest)
-	takerGets := swapAssetIn(m, poolIn, poolOut, takerPays, tfee, true)
+	takerGets := swapAssetIn(m, poolIn, poolOut, takerPays, tfee)
 
 	offerQ := QualityFromAmountsWithNumberContext(toEitherAmt(takerPays), toEitherAmt(takerGets), m.ctx)
 	if offerQ.WorseThan(quality) {
 		reduced := reduceOffer(m, takerPays)
 		takerPays = reduced
-		takerGets = swapAssetIn(m, poolIn, poolOut, takerPays, tfee, true)
+		takerGets = swapAssetIn(m, poolIn, poolOut, takerPays, tfee)
 		offerQ = QualityFromAmountsWithNumberContext(toEitherAmt(takerPays), toEitherAmt(takerGets), m.ctx)
 		if offerQ.WorseThan(quality) {
 			return tx.Amount{}, tx.Amount{}, false

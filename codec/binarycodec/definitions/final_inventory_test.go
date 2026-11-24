@@ -34,6 +34,61 @@ var (
 	oracleTERLine   = regexp.MustCompile(`^(te[A-Za-z0-9_]+)(?:\s+\[\[[^]]*\]\])?\s*(?:=\s*(-?\d+))?\s*,?\s*$`)
 )
 
+// The rippled 3.5.0-rc1 definitions staged on top of the pinned 3.4.1 oracle.
+var (
+	rc1StagedSFields = map[string]oracleFieldSpec{
+		"IssuerKeyEpoch":             {rawType: "UINT32", nth: 77},
+		"AuditorKeyEpoch":            {rawType: "UINT32", nth: 78},
+		"IssuerKeyMirrorEpoch":       {rawType: "UINT32", nth: 79},
+		"AuditorKeyMirrorEpoch":      {rawType: "UINT32", nth: 80},
+		"GasLimit":                   {rawType: "UINT32", nth: 81},
+		"BytecodeSizeLimit":          {rawType: "UINT32", nth: 82},
+		"GasPrice":                   {rawType: "UINT32", nth: 83},
+		"Gas":                        {rawType: "UINT32", nth: 84},
+		"GasUsed":                    {rawType: "UINT32", nth: 85},
+		"ProposalID":                 {rawType: "UINT256", nth: 42},
+		"YieldUnrealized":            {rawType: "NUMBER", nth: 18, flags: "SField::kSmdNeedsAsset | SField::kSmdDefault"},
+		"AssetsDeployed":             {rawType: "NUMBER", nth: 19, flags: "SField::kSmdNeedsAsset | SField::kSmdDefault"},
+		"VMReturnCode":               {rawType: "INT32", nth: 3},
+		"Bytecode":                   {rawType: "VL", nth: 47},
+		"RecoveryKey":                {rawType: "VL", nth: 48},
+		"InitialIssuerEncryptionKey": {rawType: "VL", nth: 49},
+		"IssuerMirrorEncryptionKey":  {rawType: "VL", nth: 50},
+		"SigningFor":                 {rawType: "ACCOUNT", nth: 32},
+		"ProposedTransaction":        {rawType: "OBJECT", nth: 39},
+	}
+	rc1StagedTransactionTypes = map[string]int32{
+		"ConfidentialMPTMirrorUpdate":    92,
+		"ConfidentialMPTHolderKeyUpdate": 93,
+		"TransactionProposalCancel":      94,
+		"TransactionProposalCreate":      95,
+	}
+	rc1StagedLedgerEntryTypes = map[string]int32{
+		"TransactionProposal": 0x0091,
+	}
+	rc1StagedTransactionResults = map[string]int32{
+		"temINVALID_BYTECODE":      -247,
+		"tefNO_BYTECODE":           -175,
+		"tefBYTECODE_NOT_INCLUDED": -174,
+		"tefTEMP_DISABLED":         -173,
+		"tefEXCEEDS_LIMIT":         -172,
+		"terTICKET_RESERVED":       -82,
+		"tecOUT_OF_GAS":            201,
+		"tecBYTECODE_REJECTED":     202,
+	}
+)
+
+// addRC1Staged merges rc1 definitions that must not already be in the oracle.
+func addRC1Staged[V any](t *testing.T, section string, oracle, staged map[string]V) {
+	t.Helper()
+	for name, value := range staged {
+		if _, found := oracle[name]; found {
+			t.Fatalf("%s: staged rc1 entry %s already exists in the pinned oracle", section, name)
+		}
+		oracle[name] = value
+	}
+}
+
 func TestFinalDefinitionsMatchRippled(t *testing.T) {
 	types, err := parseOracleTypes(rippled.File(t, "include/xrpl/protocol/SField.h"))
 	if err != nil {
@@ -50,12 +105,13 @@ func TestFinalDefinitionsMatchRippled(t *testing.T) {
 	if len(fieldSpecs) != 349 {
 		t.Fatalf("rippled v3.4.1 has %d active SFields, want 349", len(fieldSpecs))
 	}
+	addRC1Staged(t, "FIELDS", fieldSpecs, rc1StagedSFields)
 	expectedFields, err := buildExpectedFields(types, fieldSpecs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(expectedFields) != 357 {
-		t.Fatalf("expected %d definitions fields, want 357", len(expectedFields))
+	if len(expectedFields) != 376 {
+		t.Fatalf("expected %d definitions fields, want 376", len(expectedFields))
 	}
 
 	transactionTypes, err := parseOracleIDs(rippled.File(t, "include/xrpl/protocol/detail/transactions.macro"), "TRANSACTION(", oracleTxLine)
@@ -66,6 +122,7 @@ func TestFinalDefinitionsMatchRippled(t *testing.T) {
 	if len(transactionTypes) != 83 {
 		t.Fatalf("rippled v3.4.1 has %d transaction definitions including Invalid, want 83", len(transactionTypes))
 	}
+	addRC1Staged(t, "TRANSACTION_TYPES", transactionTypes, rc1StagedTransactionTypes)
 
 	ledgerEntryTypes, err := parseOracleIDs(rippled.File(t, "include/xrpl/protocol/detail/ledger_entries.macro"), "LEDGER_ENTRY", oracleLELine)
 	if err != nil {
@@ -75,6 +132,7 @@ func TestFinalDefinitionsMatchRippled(t *testing.T) {
 	if len(ledgerEntryTypes) != 32 {
 		t.Fatalf("rippled v3.4.1 has %d ledger-entry definitions including Invalid, want 32", len(ledgerEntryTypes))
 	}
+	addRC1Staged(t, "LEDGER_ENTRY_TYPES", ledgerEntryTypes, rc1StagedLedgerEntryTypes)
 
 	transactionResults, err := parseOracleTransactionResults(rippled.File(t, "include/xrpl/protocol/TER.h"))
 	if err != nil {
@@ -83,6 +141,7 @@ func TestFinalDefinitionsMatchRippled(t *testing.T) {
 	if len(transactionResults) != 197 {
 		t.Fatalf("rippled v3.4.1 has %d transaction results, want 197", len(transactionResults))
 	}
+	addRC1Staged(t, "TRANSACTION_RESULTS", transactionResults, rc1StagedTransactionResults)
 
 	defs := Get()
 	t.Run("FIELDS", func(t *testing.T) {

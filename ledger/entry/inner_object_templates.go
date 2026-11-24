@@ -74,6 +74,9 @@ func validateInnerObjectForEncode(name string, object map[string]any) error {
 }
 
 func validateInnerObject(name string, object map[string]any, forEncode bool) error {
+	if schema.IsFreeFormObject(name) {
+		return nil
+	}
 	template, ok := schema.InnerObjectTemplateByName(name)
 	if !ok {
 		return fmt.Errorf("no template for inner object %s", name)

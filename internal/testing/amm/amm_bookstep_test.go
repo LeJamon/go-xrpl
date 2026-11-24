@@ -2,6 +2,7 @@
 package amm_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -118,13 +119,12 @@ func TestAMMBookStep_AMMAndCLOB(t *testing.T) {
 		offer  *state.LedgerOffer
 	}
 
-	run := func(t *testing.T, useAMM, fixAMMv1_1 bool) result {
+	run := func(t *testing.T, useAMM, fixAMMv1_3 bool) result {
 		t.Helper()
 		env := amm.NewAMMTestEnv(t)
 		env.DisableFeature("SingleAssetVault")
 		env.DisableFeature("LendingProtocol")
-		if !fixAMMv1_1 {
-			env.DisableFeature("fixAMMv1_1")
+		if !fixAMMv1_3 {
 			env.DisableFeature("fixAMMv1_3")
 		}
 		env.Close()
@@ -160,10 +160,6 @@ func TestAMMBookStep_AMMAndCLOB(t *testing.T) {
 		} else {
 			payDrops := int64(18_095_132)
 			getsMantissa := int64(168_737_976_189_735)
-			if !fixAMMv1_1 {
-				payDrops = 18_095_133
-				getsMantissa = 168_737_984_885_388
-			}
 			clobOffer := offerbuild.OfferCreate(lp1,
 				tx.NewXRPAmount(payDrops),
 				tx.NewIssuedAmount(getsMantissa, -14, "TST", env.GW.Address)).
@@ -185,14 +181,10 @@ func TestAMMBookStep_AMMAndCLOB(t *testing.T) {
 		return result{lp2TST: *lp2TST, offer: lp2Offers[0]}
 	}
 
-	for _, fixAMMv1_1 := range []bool{false, true} {
-		label := "PreFix"
-		if fixAMMv1_1 {
-			label = "PostFix"
-		}
-		t.Run(label, func(t *testing.T) {
-			ammResult := run(t, true, fixAMMv1_1)
-			clobResult := run(t, false, fixAMMv1_1)
+	for _, fixAMMv1_3 := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fixAMMv1_3=%t", fixAMMv1_3), func(t *testing.T) {
+			ammResult := run(t, true, fixAMMv1_3)
+			clobResult := run(t, false, fixAMMv1_3)
 
 			require.Equal(t, 0, ammResult.lp2TST.Compare(clobResult.lp2TST),
 				"LP2 TST balance differs between AMM and CLOB")

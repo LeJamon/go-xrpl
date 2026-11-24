@@ -218,6 +218,15 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	if parsedTx.TxType() == tx.TypeBatch {
 		return nil, rpcerrors.RpcErrorNotImpl()
 	}
+	// Bytecode or Gas means the transaction may run WASM, which simulate
+	// cannot charge for, so only admins may run it. Checked on shape, before
+	// the engine runs (rippled Simulate.cpp, #8568).
+	_, hasBytecode := txJsonMap["Bytecode"]
+	_, hasGas := txJsonMap["Gas"]
+	if (hasBytecode || hasGas) && !ctx.Role.IsAdmin() {
+		return nil, rpcerrors.NewRpcError(rpcerrors.RpcNO_PERMISSION, "noPermission", "noPermission",
+			"WASM transactions are only supported in admin mode.")
+	}
 
 	canonicalMap, err := flattenCanonicalTransaction(parsedTx, txJsonMap)
 	if err != nil {

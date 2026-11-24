@@ -71,7 +71,6 @@ func adjustAmountsByLPTokens(
 	tfee uint16,
 	isDeposit bool,
 	fixAMMv1_3 bool,
-	fixAMMv1_1 bool,
 ) (tx.Amount, *tx.Amount, tx.Amount) {
 	// AMMv1_3 amendment adjusts tokens and amounts in deposit/withdraw formulas directly
 	if fixAMMv1_3 {
@@ -96,18 +95,6 @@ func adjustAmountsByLPTokens(
 			fr := math.div(math.fromAmount(lpTokensActual), math.fromAmount(lpTokens), state.RoundToNearest)
 			amountActual := math.multiplyToAmount(math.fromAmount(amount), fr, amount, state.RoundToNearest)
 			amount2Actual := math.multiplyToAmount(math.fromAmount(*amount2), fr, *amount2, state.RoundToNearest)
-			if !fixAMMv1_1 {
-				if math.fromAmount(amountActual).Cmp(math.fromAmount(amount)) < 0 {
-					// keep amountActual
-				} else {
-					amountActual = amount
-				}
-				if math.fromAmount(amount2Actual).Cmp(math.fromAmount(*amount2)) < 0 {
-					// keep amount2Actual
-				} else {
-					amount2Actual = *amount2
-				}
-			}
 			return amountActual, &amount2Actual, lpTokensActual
 		}
 
@@ -115,16 +102,8 @@ func adjustAmountsByLPTokens(
 		var amountActual tx.Amount
 		if isDeposit {
 			amountActual = ammAssetIn(math, amountBalance, lptAMMBalance, lpTokensActual, tfee, false)
-		} else if !fixAMMv1_1 {
-			amountActual = ammAssetOut(math, amountBalance, lptAMMBalance, lpTokens, tfee, false)
 		} else {
 			amountActual = ammAssetOut(math, amountBalance, lptAMMBalance, lpTokensActual, tfee, false)
-		}
-		if !fixAMMv1_1 {
-			if math.fromAmount(amountActual).Cmp(math.fromAmount(amount)) < 0 {
-				return amountActual, nil, lpTokensActual
-			}
-			return amount, nil, lpTokensActual
 		}
 		return amountActual, nil, lpTokensActual
 	}
@@ -347,10 +326,12 @@ func ammAssetOut(math numberMath, assetBalance, lptBalance, lpTokensIn tx.Amount
 	numerator := t1.MulRounded(t1, mode).
 		AddRounded(t1.MulRounded(twoMinusF, mode).Negate(), mode)
 	denominator := t1.MulRounded(f, mode).AddRounded(math.one().Negate(), mode)
-	frac := math.div(numerator, denominator, mode)
 	if !fixAMMv1_3 {
-		return math.multiplyToAmount(math.fromAmount(assetBalance), frac, assetBalance, mode)
+		// assetBalance * (t1*t1 - t1*(2-f)) / (t1*f - 1), multiplied first.
+		b := math.div(math.fromAmount(assetBalance).MulRounded(numerator, mode), denominator, mode)
+		return math.toAmount(b, assetBalance, mode)
 	}
+	frac := math.div(numerator, denominator, mode)
 	return math.multiplyToAmount(
 		math.fromAmountRounded(assetBalance, state.RoundDownward),
 		frac,
@@ -381,10 +362,13 @@ func calcLPTokensIn(math numberMath, assetBalance, amountOut, lptBalance tx.Amou
 	if disc.Signum() < 0 {
 		return zeroIOU()
 	}
-	halfResult := math.div(c.AddRounded(disc.Root2Rounded(mode).Negate(), mode), two, mode)
+	cMinusRoot := c.AddRounded(disc.Root2Rounded(mode).Negate(), mode)
 	if !fixAMMv1_3 {
-		return math.multiplyToAmount(math.fromAmount(lptBalance), halfResult, lptBalance, mode)
+		// lptAMMBalance * (c - root2(c*c - 4*fr)) / 2, multiplied first.
+		t := math.div(math.fromAmount(lptBalance).MulRounded(cMinusRoot, mode), two, mode)
+		return math.toAmount(t, lptBalance, mode)
 	}
+	halfResult := math.div(cMinusRoot, two, mode)
 	return math.multiplyToAmount(
 		math.fromAmountRounded(lptBalance, state.RoundUpward),
 		halfResult,

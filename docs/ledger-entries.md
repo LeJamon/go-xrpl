@@ -4,7 +4,7 @@
 
 Serializable Ledger Entry types generated from the dependency-neutral `protocol` registry. Canonical types have generated `Decode`, `Encode`, and `Hash` models in `ledger/entry`.
 
-Total: 34 ledger entry types.
+Total: 35 ledger entry types.
 
 | Ledger entry type | Type code | `ledger_data` name | Status |
 |-------------------|-----------|--------------------|--------|
@@ -42,3 +42,4 @@ Total: 34 ledger entry types.
 | `LoanBroker` | `0x0088` | `loan_broker` | canonical |
 | `Loan` | `0x0089` | `loan` | canonical |
 | `Sponsorship` | `0x0090` | `sponsorship` | canonical |
+| `TransactionProposal` | `0x0091` | `transaction_proposal` | canonical |

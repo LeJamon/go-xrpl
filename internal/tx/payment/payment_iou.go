@@ -203,10 +203,7 @@ func (p *Payment) applyFlowPaymentWithPaths(ctx *tx.ApplyContext, senderID, dest
 			ctx.Config.ParentCloseTime,
 			rules.Enabled(amendment.FeatureFixReducedOffersV2),
 		),
-		WithAMMAmendments(
-			rules.Enabled(amendment.FeatureFixAMMv1_1),
-			rules.Enabled(amendment.FeatureFixAMMv1_2),
-		),
+		WithAMMAmendments(rules.Enabled(amendment.FeatureFixAMMv1_2)),
 		WithOpenLedger(ctx.Config.IsViewOpen()),
 		WithNumberContext(ctx.NumberContext()),
 	}
@@ -338,10 +335,7 @@ func (p *Payment) ApplyExactIOUFlow(ctx *tx.ApplyContext, senderID, destID [20]b
 			ctx.Config.ParentCloseTime,
 			rules.Enabled(amendment.FeatureFixReducedOffersV2),
 		),
-		WithAMMAmendments(
-			rules.Enabled(amendment.FeatureFixAMMv1_1),
-			rules.Enabled(amendment.FeatureFixAMMv1_2),
-		),
+		WithAMMAmendments(rules.Enabled(amendment.FeatureFixAMMv1_2)),
 		WithOpenLedger(ctx.Config.IsViewOpen()),
 		WithNumberContext(ctx.NumberContext()),
 		WithOffersConsidered(ctx.Config.OffersConsidered),

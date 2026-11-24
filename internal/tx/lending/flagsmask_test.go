@@ -46,3 +46,21 @@ func TestLendingFlagsMask(t *testing.T) {
 		})
 	}
 }
+
+// LoanBrokerSet accepts tfLoanBrokerPrivate only under LendingProtocolV1_2.
+// Reference: rippled 3.5.0-rc1 LoanBrokerSet::getFlagsMask.
+func TestLoanBrokerSetFlagsMaskLendingProtocolV1_2(t *testing.T) {
+	without := amendment.AllSupportedRules()
+	if without.Enabled(amendment.FeatureLendingProtocolV1_2) {
+		t.Fatal("LendingProtocolV1_2 is unsupported and must not be in the supported rules")
+	}
+	with := amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported).Enable(amendment.FeatureLendingProtocolV1_2).Build()
+
+	if got := (&LoanBrokerSet{}).GetFlagsMask(without); got != tx.TfUniversalMask || got&tfLoanBrokerPrivate == 0 {
+		t.Fatalf("mask without LendingProtocolV1_2 = %#x, want the universal mask", got)
+	}
+	got := (&LoanBrokerSet{}).GetFlagsMask(with)
+	if got != tx.TfUniversalMask&^0x00010000 {
+		t.Fatalf("mask with LendingProtocolV1_2 = %#x, want %#x", got, tx.TfUniversalMask&^0x00010000)
+	}
+}

@@ -873,9 +873,22 @@ func cloneTransactionFieldValue(value any) any {
 	}
 }
 
-// RequiredAmendments returns no required amendments by default.
+// unimplementedTypeAmendments gates the transaction types this node can decode
+// but not apply. Their amendments are unsupported, so they stay temDISABLED.
+var unimplementedTypeAmendments = map[Type][32]byte{
+	TypeConfidentialMPTMirrorUpdate:    amendment.FeatureConfidentialMPTKeyRotation,
+	TypeConfidentialMPTHolderKeyUpdate: amendment.FeatureConfidentialMPTKeyRotation,
+	TypeTransactionProposalCancel:      amendment.FeatureCosign,
+	TypeTransactionProposalCreate:      amendment.FeatureCosign,
+}
+
+// RequiredAmendments returns no required amendments by default, except for a
+// decodable type without an implementation, which needs its amendment.
 // Transaction types that require amendments should override this.
 func (b *BaseTx) RequiredAmendments() [][32]byte {
+	if feature, ok := unimplementedTypeAmendments[b.txType]; ok {
+		return [][32]byte{feature}
+	}
 	return nil
 }
 
