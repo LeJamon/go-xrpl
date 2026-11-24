@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -86,34 +87,27 @@ func reserveSettingsFromLedger(view types.LedgerStateView, fallbackBase, fallbac
 	if view == nil {
 		return 0, 0, fmt.Errorf("reserve settings: nil ledger view")
 	}
-	data, err := view.Read(keylet.Fees())
-	if err != nil {
-		return 0, 0, fmt.Errorf("reserve settings: read FeeSettings: %w", err)
-	}
-	if data == nil {
-		return fallbackBase, fallbackInc, nil
-	}
-	settings, err := state.ParseFeeSettings(data)
-	if err != nil {
-		return 0, 0, fmt.Errorf("reserve settings: parse FeeSettings: %w", err)
-	}
-	reserveBase, reserveInc := fallbackBase, fallbackInc
-	if settings.XRPFeesMode {
-		if settings.HasReserveBaseDrops {
-			reserveBase = settings.ReserveBaseDrops
-		}
-		if settings.HasReserveIncrementDrops {
-			reserveInc = settings.ReserveIncrementDrops
-		}
+	var fees drops.Fees
+	if ledger, ok := view.(interface{ Fees() drops.Fees }); ok {
+		fees = ledger.Fees()
 	} else {
-		if settings.HasReserveBase {
-			reserveBase = uint64(settings.ReserveBase)
+		data, err := view.Read(keylet.Fees())
+		if err != nil {
+			return 0, 0, fmt.Errorf("reserve settings: read FeeSettings: %w", err)
 		}
-		if settings.HasReserveIncrement {
-			reserveInc = uint64(settings.ReserveIncrement)
+		if data == nil {
+			return fallbackBase, fallbackInc, nil
 		}
+		settings, err := state.ParseFeeSettings(data)
+		if err != nil {
+			return 0, 0, fmt.Errorf("reserve settings: parse FeeSettings: %w", err)
+		}
+		fees = settings.ApplyTo(drops.Fees{Reserve: drops.XRPAmount(fallbackBase), Increment: drops.XRPAmount(fallbackInc)})
 	}
-	return reserveBase, reserveInc, nil
+	if fees.Reserve < 0 || fees.Increment < 0 {
+		return 0, 0, fmt.Errorf("reserve settings: negative XRP reserve")
+	}
+	return uint64(fees.Reserve), uint64(fees.Increment), nil
 }
 
 func parseTransactionAmount(raw any) (state.Amount, bool) {

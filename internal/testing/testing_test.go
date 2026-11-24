@@ -443,9 +443,9 @@ func TestFeeSettingsStayInSync(t *testing.T) {
 	settings, err := state.ParseFeeSettings(data)
 	require.NoError(t, err)
 	require.True(t, settings.XRPFeesMode)
-	require.Equal(t, uint64(20), settings.BaseFeeDrops)
-	require.Equal(t, uint64(30), settings.ReserveBaseDrops)
-	require.Equal(t, uint64(40), settings.ReserveIncrementDrops)
+	require.Equal(t, drops.XRPAmount(20), settings.BaseFeeDrops)
+	require.Equal(t, drops.XRPAmount(30), settings.ReserveBaseDrops)
+	require.Equal(t, drops.XRPAmount(40), settings.ReserveIncrementDrops)
 
 	legacyConfig := genesis.DefaultConfig()
 	legacyConfig.Amendments = nil

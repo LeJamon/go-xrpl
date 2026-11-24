@@ -463,9 +463,12 @@ func (e *TestEnv) writeFeeSettings(baseFee, reserveBase, reserveIncrement uint64
 		return fmt.Errorf("parse FeeSettings: %w", err)
 	}
 	if fs.XRPFeesMode {
-		fs.BaseFeeDrops = baseFee
-		fs.ReserveBaseDrops = reserveBase
-		fs.ReserveIncrementDrops = reserveIncrement
+		if baseFee > uint64(drops.MaxDrops) || reserveBase > uint64(drops.MaxDrops) || reserveIncrement > uint64(drops.MaxDrops) {
+			return fmt.Errorf("modern FeeSettings exceed the maximum XRP amount")
+		}
+		fs.BaseFeeDrops = drops.XRPAmount(baseFee)
+		fs.ReserveBaseDrops = drops.XRPAmount(reserveBase)
+		fs.ReserveIncrementDrops = drops.XRPAmount(reserveIncrement)
 	} else {
 		if reserveBase > uint64(^uint32(0)) || reserveIncrement > uint64(^uint32(0)) {
 			return fmt.Errorf("legacy FeeSettings reserves exceed uint32")

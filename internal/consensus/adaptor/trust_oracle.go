@@ -6,11 +6,11 @@ import (
 	"sort"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/amendmentvote"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/version"
@@ -428,17 +428,10 @@ func (a *Adaptor) GetFeeVote(current consensus.Ledger) consensus.FeeVoteResult {
 	}
 	result.PostXRPFees = a.IsFeatureEnabledOnLedger(current, "XRPFees")
 
-	data, err := wrapped.Unwrap().Read(keylet.Fees())
-	if err != nil || len(data) == 0 {
-		return result
-	}
-	fees, err := state.ParseFeeSettings(data)
-	if err != nil {
-		return result
-	}
-	result.BaseFeeSet = result.BaseFee != fees.GetBaseFee()
-	result.ReserveBaseSet = result.ReserveBase != fees.GetReserveBase()
-	result.ReserveIncrementSet = result.ReserveIncrement != fees.GetReserveIncrement()
+	fees := wrapped.Unwrap().Fees()
+	result.BaseFeeSet = drops.XRPAmount(result.BaseFee) != fees.Base
+	result.ReserveBaseSet = drops.XRPAmount(result.ReserveBase) != fees.Reserve
+	result.ReserveIncrementSet = drops.XRPAmount(result.ReserveIncrement) != fees.Increment
 	if !result.BaseFeeSet {
 		result.BaseFee = 0
 	}

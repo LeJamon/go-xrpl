@@ -32,3 +32,12 @@ func TestSignedAndExplicitZeroVotesAreNotNoVote(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, blob, "missing vote counts for current and ties the local target")
 }
+
+func TestVoteAcrossZero(t *testing.T) {
+	current := Stance{BaseFee: -10}
+	target := Stance{BaseFee: 10}
+	bid := drops.XRPAmount(-5)
+	blob, err := DoVoting(256, current, target, []Vote{{BaseFee: &bid}, {BaseFee: &bid}}, true)
+	require.NoError(t, err)
+	require.Equal(t, "-5", decodeTx(t, blob)["BaseFeeDrops"])
+}

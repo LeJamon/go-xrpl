@@ -2,11 +2,11 @@ package conformance
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 
@@ -1398,16 +1398,12 @@ func loadSnapshotLedger(snapshot snapshotLedger) (loadedSnapshotLedger, error) {
 }
 
 func validateSnapshotFees(stateMap *shamap.SHAMap, rules *amendment.Rules, fees drops.Fees) error {
-	item, found, err := stateMap.Get(keylet.Fees().Key)
+	settings, err := ledger.ReadFeeSettings(context.Background(), stateMap)
 	if err != nil {
 		return fmt.Errorf("read snapshot FeeSettings: %w", err)
 	}
-	if !found {
+	if settings == nil {
 		return nil
-	}
-	settings, err := ledgerstate.ParseFeeSettings(item.Data())
-	if err != nil {
-		return fmt.Errorf("parse snapshot FeeSettings: %w", err)
 	}
 	if settings.IsUsingModernFees() && !rules.Enabled(amendment.FeatureXRPFees) {
 		return errors.New("snapshot FeeSettings uses XRPFees fields before the amendment is enabled")
@@ -1415,14 +1411,14 @@ func validateSnapshotFees(stateMap *shamap.SHAMap, rules *amendment.Rules, fees 
 	for _, field := range []struct {
 		name     string
 		present  bool
-		amount   uint64
+		amount   drops.XRPAmount
 		recorded drops.XRPAmount
 	}{
 		{"base", settings.HasBaseFee || settings.HasBaseFeeDrops, settings.GetBaseFee(), fees.Base},
 		{"reserve", settings.HasReserveBase || settings.HasReserveBaseDrops, settings.GetReserveBase(), fees.Reserve},
 		{"increment", settings.HasReserveIncrement || settings.HasReserveIncrementDrops, settings.GetReserveIncrement(), fees.Increment},
 	} {
-		if field.present && uint64(field.recorded) != field.amount {
+		if field.present && field.recorded != field.amount {
 			return fmt.Errorf("snapshot fees.%s disagrees with FeeSettings: recorded=%d, ledger=%d", field.name, field.recorded, field.amount)
 		}
 	}
@@ -1592,33 +1588,33 @@ func snapshotMapItems(shamapValue *shamap.SHAMap) (map[[32]byte][]byte, error) {
 }
 
 func parseSnapshotFees(fees snapshotFees) (drops.Fees, error) {
-	base, err := parseSnapshotUint("fees.base", fees.Base)
+	base, err := parseSnapshotDrops("fees.base", fees.Base)
 	if err != nil {
 		return drops.Fees{}, err
 	}
-	reserve, err := parseSnapshotUint("fees.reserve", fees.Reserve)
+	reserve, err := parseSnapshotDrops("fees.reserve", fees.Reserve)
 	if err != nil {
 		return drops.Fees{}, err
 	}
-	increment, err := parseSnapshotUint("fees.increment", fees.Increment)
+	increment, err := parseSnapshotDrops("fees.increment", fees.Increment)
 	if err != nil {
 		return drops.Fees{}, err
 	}
-	return drops.Fees{Base: drops.XRPAmount(base), Reserve: drops.XRPAmount(reserve), Increment: drops.XRPAmount(increment)}, nil
+	return drops.Fees{Base: base, Reserve: reserve, Increment: increment}, nil
 }
 
-func parseSnapshotUint(name, value string) (uint64, error) {
+func parseSnapshotDrops(name, value string) (drops.XRPAmount, error) {
 	if value == "" {
 		return 0, fmt.Errorf("%s is empty", name)
 	}
-	if strings.TrimSpace(value) != value || strings.HasPrefix(value, "+") || strings.HasPrefix(value, "-") {
-		return 0, fmt.Errorf("%s must be an unsigned decimal integer", name)
+	if strings.TrimSpace(value) != value || strings.HasPrefix(value, "+") {
+		return 0, fmt.Errorf("%s must be a decimal integer", name)
 	}
-	parsed, err := strconv.ParseUint(value, 10, 64)
-	if err != nil || parsed > math.MaxInt64 {
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
 		return 0, fmt.Errorf("%s is not a valid XRP drop amount", name)
 	}
-	return parsed, nil
+	return drops.XRPAmount(parsed), nil
 }
 
 func decodeSnapshotBytes(name, value string) ([]byte, error) {
