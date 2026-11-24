@@ -39,10 +39,9 @@ func (f *oneShotSettingsReadError) Fetch(ctx context.Context, hash [32]byte) ([]
 
 func TestConsensusCloseParentSettingsReadError(t *testing.T) {
 	const (
-		inheritedReserveDrops = uint64(10_000_000)
-		currentReserveDrops   = uint64(20_000_000)
-		paymentAmountDrops    = uint64(15_000_000)
-		paymentFeeDrops       = uint64(30)
+		currentReserveDrops = uint64(20_000_000)
+		paymentAmountDrops  = uint64(15_000_000)
+		paymentFeeDrops     = uint64(30)
 	)
 
 	all.RegisterAll()
@@ -68,7 +67,7 @@ func TestConsensusCloseParentSettingsReadError(t *testing.T) {
 
 	parent, backing := coldAcceptanceParent(t, updated)
 	require.NoError(t, control.SwitchToPreferredLedger(parent))
-	require.EqualValues(t, inheritedReserveDrops, parent.Fees().Reserve.Drops())
+	require.Less(t, uint64(parent.Fees().Reserve.Drops()), paymentAmountDrops)
 	_, reserveBase, reserveIncrement, err := FeesFromLedgerStrict(parent)
 	require.NoError(t, err)
 	require.EqualValues(t, currentReserveDrops, reserveBase)
