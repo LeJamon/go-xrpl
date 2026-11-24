@@ -673,7 +673,10 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 		if offerOwner == mptIssuer(offerTakerGets.MPTID) {
 			funds, result = mptutil.IssuerFundsToSelfIssue(sb, offerTakerGets.MPTID)
 		} else {
-			funds, result = mptutil.Funds(sb, offerTakerGets.MPTID, offerOwner, true)
+			funds, result = mptutil.FundsWithAuth(sb, offerTakerGets.MPTID, offerOwner, true, s.parentCloseTime)
+		}
+		if result == ter.TefINTERNAL {
+			return ZeroMPTEitherAmount(offerTakerGets.MPTID), ter.Errorf(result, "reading MPT offer funds")
 		}
 		if result != ter.TesSUCCESS || funds <= 0 {
 			return ZeroMPTEitherAmount(offerTakerGets.MPTID), nil
