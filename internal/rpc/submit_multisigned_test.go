@@ -516,3 +516,60 @@ func TestMultisignNonObjectTxJSON(t *testing.T) {
 		})
 	}
 }
+
+func TestMultisignRequestFieldLookup(t *testing.T) {
+	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Role: types.RoleAdmin, Services: newSubmitTestServices(newMockLedgerServiceSubmit())}
+	for _, method := range []struct {
+		name   string
+		handle func(*types.RpcContext, json.RawMessage) (any, *rpcerrors.RpcError)
+	}{
+		{"sign_for", (&handlers.SignForMethod{}).Handle},
+		{"submit_multisigned", (&handlers.SubmitMultisignedMethod{}).Handle},
+	} {
+		for _, tc := range []struct {
+			name, fields, message string
+		}{
+			{"case variant only", `"TX_JSON":false`, "Missing field 'tx_json'."},
+			{"exact member before variant", `"tx_json":null,"TX_JSON":{}`, "Invalid field 'tx_json', not object."},
+			{"exact member after variant", `"TX_JSON":false,"tx_json":{}`, "Missing field 'tx_json.Sequence'."},
+			{"optional fields", `"tx_json":false,"signature_target":{},"fail_hard":1`, "Invalid field 'tx_json', not object."},
+		} {
+			t.Run(method.name+"/"+tc.name, func(t *testing.T) {
+				params := json.RawMessage(`{"account":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",` + tc.fields + `}`)
+				_, rpcErr := method.handle(ctx, params)
+				require.NotNil(t, rpcErr)
+				want := map[string]any{"error": "invalidParams", "error_code": rpcerrors.RpcINVALID_PARAMS, "error_message": tc.message}
+				if method.name == "sign_for" {
+					want["deprecated"] = "This command has been deprecated and will be removed in a future version of the server. Please migrate to a standalone signing tool."
+				}
+				require.Equal(t, want, rpcErr.ResponseFields())
+			})
+		}
+	}
+}
+
+func TestSignForFieldConversionOrder(t *testing.T) {
+	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Role: types.RoleAdmin, Services: newSubmitTestServices(newMockLedgerServiceSubmit())}
+	for _, tc := range []struct {
+		name, fields, message string
+		code                  int
+		deprecated            bool
+	}{
+		{"missing account", `"ACCOUNT":"","tx_json":false`, "Missing field 'account'.", rpcerrors.RpcINVALID_PARAMS, true},
+		{"null account", `"account":null,"tx_json":false`, "Invalid field 'account'.", rpcerrors.RpcSRC_ACT_MALFORMED, true},
+		{"account conversion exception", `"account":[],"tx_json":false`, rpcerrors.RpcErrorInternal().Message, rpcerrors.RpcINTERNAL, false},
+		{"target conversion exception", `"account":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh","signature_target":{},"tx_json":{"Sequence":1}`, rpcerrors.RpcErrorInternal().Message, rpcerrors.RpcINTERNAL, false},
+		{"unknown target field", `"account":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh","signature_target":true,"tx_json":{"Sequence":1}`, "", rpcerrors.RpcINVALID_PARAMS, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params := json.RawMessage(`{"secret":"masterpassphrase",` + tc.fields + `}`)
+			_, rpcErr := (&handlers.SignForMethod{}).Handle(ctx, params)
+			require.NotNil(t, rpcErr)
+			fields := rpcErr.ResponseFields()
+			require.Equal(t, tc.code, fields["error_code"])
+			require.Equal(t, tc.message, fields["error_message"])
+			_, deprecated := fields["deprecated"]
+			require.Equal(t, tc.deprecated, deprecated)
+		})
+	}
+}
