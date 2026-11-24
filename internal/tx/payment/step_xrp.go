@@ -294,51 +294,7 @@ func (s *XRPEndpointStep) xrpLiquid(sb *PaymentSandbox) int64 {
 // liquidOf is xrpLiquid for the step account's AccountRoot as already read
 // from sb, nil when absent or unreadable. accountRoot is not modified.
 func (s *XRPEndpointStep) liquidOf(sb *PaymentSandbox, accountRoot *state.AccountRoot) int64 {
-	if accountRoot == nil {
-		return 0
-	}
-
-	counts := sb.OwnerCountsHook(s.account, tx.OwnerCounts{
-		Owner: accountRoot.OwnerCount, Sponsored: accountRoot.SponsoredOwnerCount,
-		Sponsoring: accountRoot.SponsoringOwnerCount,
-	})
-	ownerCount := counts.Owner
-
-	// Apply reserveReduction (for offer crossing when trust line doesn't exist yet).
-	// This is rippled's confineOwnerCount: adjusted = ownerCount + reserveReduction,
-	// clamped to 0 on underflow.
-	// Reference: rippled View.cpp confineOwnerCount() + xrpLiquid()
-	adjustedOwnerCount := tx.ConfineOwnerCount(ownerCount, int(s.reserveReduction))
-
-	// Pseudo-accounts have no reserve requirement.
-	// Reference: rippled View.cpp xrpLiquid() lines 631-633.
-	var reserve uint64
-	if !accountRoot.IsPseudoAccount() {
-		baseReserve, ownerReserve := GetLedgerReserves(sb)
-		accountWithHook := *accountRoot
-		accountWithHook.OwnerCount = counts.Owner
-		accountWithHook.SponsoredOwnerCount = counts.Sponsored
-		accountWithHook.SponsoringOwnerCount = counts.Sponsoring
-		reserve, _ = tx.AccountReserveForView(sb, tx.EngineConfig{
-			ReserveBase: uint64(baseReserve), ReserveIncrement: uint64(ownerReserve),
-		}, &accountWithHook, adjustedOwnerCount)
-	}
-
-	// Apply the deferred-credit balance hook to the full balance. XRP credited to
-	// this account earlier in the same payment must not be counted as spendable
-	// liquidity, otherwise the same drops could be moved twice through the strand.
-	// Reference: rippled View.cpp xrpLiquid() line 637:
-	//   balance = view.balanceHook(id, xrpAccount(), fullBalance)
-	fullBalance := tx.NewXRPAmount(int64(accountRoot.Balance))
-	balance := sb.BalanceHook(s.account, [20]byte{}, fullBalance).Drops()
-	if balance < 0 {
-		balance = 0
-	}
-
-	if uint64(balance) < reserve {
-		return 0
-	}
-	return balance - int64(reserve)
+	return tx.XRPLiquidOf(sb, s.account, accountRoot, int64(s.reserveReduction), sb.fees).Drops()
 }
 
 // accountSend transfers XRP between accounts in the sandbox. account is the

@@ -2,6 +2,7 @@ package mptutil
 
 import (
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -102,9 +103,9 @@ func issueFromField(field entry.IssueValue) (tx.Asset, bool) {
 // For XRP, returns balance minus reserve (xrpLiquid). reserveBase and
 // reserveIncrement are required for XRP reserve calculation.
 // Reference: rippled ledger/View.h accountFunds()
-func AccountFunds(view tx.ReadOnlyLedgerView, accountID [20]byte, amount tx.Amount, fhZeroIfFrozen bool, reserveBase, reserveIncrement uint64) tx.Amount {
+func AccountFunds(view tx.ReadOnlyLedgerView, accountID [20]byte, amount tx.Amount, fhZeroIfFrozen bool, fees drops.Fees) tx.Amount {
 	if amount.IsNative() {
-		return tx.XRPLiquid(view, accountID, 0, reserveBase, reserveIncrement)
+		return tx.XRPLiquid(view, accountID, 0, fees)
 	}
 
 	issuerID, err := state.DecodeAccountID(amount.Issuer)

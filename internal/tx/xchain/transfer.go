@@ -21,7 +21,7 @@ func transferFunds(
 	claimOwnerBypassesDepositAuth bool,
 	allowFeeDip bool,
 ) ter.Result {
-	sandbox := payment.NewPaymentSandbox(ctx.View)
+	sandbox := payment.NewPaymentSandboxForApply(ctx)
 	sandbox.SetTransactionContext(ctx.TxHash, ctx.Config.LedgerSequence)
 	sandbox.SetOpenLedger(ctx.Config.IsViewOpen())
 	if sourceID, err := state.DecodeAccountID(source); err == nil && sourceID == ctx.AccountID {

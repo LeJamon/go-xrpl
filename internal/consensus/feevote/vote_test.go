@@ -94,9 +94,9 @@ func TestDoVoting_NoVoteCountsAsCurrent(t *testing.T) {
 	// change. The reserves still flip to target because every vote
 	// either explicitly chooses target or is the constructor seed.
 	votes := []Vote{
-		{BaseFee: ptr(10), ReserveBase: ptr(drops.XRPAmount(target.ReserveBase)), ReserveIncrement: ptr(drops.XRPAmount(target.ReserveIncrement))},
-		{BaseFee: ptr(10), ReserveBase: ptr(drops.XRPAmount(target.ReserveBase)), ReserveIncrement: ptr(drops.XRPAmount(target.ReserveIncrement))},
-		{ /* BaseFee abstain */ ReserveBase: ptr(drops.XRPAmount(target.ReserveBase)), ReserveIncrement: ptr(drops.XRPAmount(target.ReserveIncrement))},
+		{BaseFee: ptr(10), ReserveBase: ptr(target.ReserveBase), ReserveIncrement: ptr(target.ReserveIncrement)},
+		{BaseFee: ptr(10), ReserveBase: ptr(target.ReserveBase), ReserveIncrement: ptr(target.ReserveIncrement)},
+		{ /* BaseFee abstain */ ReserveBase: ptr(target.ReserveBase), ReserveIncrement: ptr(target.ReserveIncrement)},
 	}
 
 	blob, err := DoVoting(1024, current, target, votes, true)
@@ -119,9 +119,9 @@ func TestDoVoting_OutOfRangeIsNoVote(t *testing.T) {
 	// flip; without that this DoVoting call would have nothing
 	// changed and emit no tx.
 	votes := []Vote{
-		{BaseFee: &overflow, ReserveBase: ptr(drops.XRPAmount(target.ReserveBase)), ReserveIncrement: ptr(drops.XRPAmount(target.ReserveIncrement))},
-		{BaseFee: &overflow, ReserveBase: ptr(drops.XRPAmount(target.ReserveBase)), ReserveIncrement: ptr(drops.XRPAmount(target.ReserveIncrement))},
-		{BaseFee: &overflow, ReserveBase: ptr(drops.XRPAmount(target.ReserveBase)), ReserveIncrement: ptr(drops.XRPAmount(target.ReserveIncrement))},
+		{BaseFee: &overflow, ReserveBase: ptr(target.ReserveBase), ReserveIncrement: ptr(target.ReserveIncrement)},
+		{BaseFee: &overflow, ReserveBase: ptr(target.ReserveBase), ReserveIncrement: ptr(target.ReserveIncrement)},
+		{BaseFee: &overflow, ReserveBase: ptr(target.ReserveBase), ReserveIncrement: ptr(target.ReserveIncrement)},
 	}
 	blob, err := DoVoting(1024, current, target, votes, true)
 	require.NoError(t, err)
@@ -145,7 +145,7 @@ func TestApplyVote_SignedBoundaries(t *testing.T) {
 
 	assert.Equal(t, 1, v.votes[minLegal])
 	assert.Equal(t, 1, v.votes[maxLegal])
-	assert.Equal(t, 2, v.noVotes)
+	assert.Equal(t, 2, v.votes[v.current])
 }
 
 func TestDoVoting_PreXRPFeesWireFormat(t *testing.T) {
@@ -186,8 +186,8 @@ func TestDoVoting_TxCarriesAllThreeOnPartialChange(t *testing.T) {
 
 	// All three fields present even though only BaseFee changed.
 	assert.Equal(t, "12", stx["BaseFeeDrops"])
-	assert.Equal(t, strconv.FormatUint(current.ReserveBase, 10), stx["ReserveBaseDrops"])
-	assert.Equal(t, strconv.FormatUint(current.ReserveIncrement, 10), stx["ReserveIncrementDrops"])
+	assert.Equal(t, current.ReserveBase.String(), stx["ReserveBaseDrops"])
+	assert.Equal(t, current.ReserveIncrement.String(), stx["ReserveIncrementDrops"])
 }
 
 func TestDoVoting_LedgerSequenceIsUpcoming(t *testing.T) {
@@ -289,7 +289,7 @@ func TestBuildSetFeeTx_OmitsFlags(t *testing.T) {
 }
 
 func TestBuildSetFeeTx_PreXRPFeesReserveOverflowFallsBackToCurrent(t *testing.T) {
-	overflow := uint64(1) << 33 // > UINT32_MAX
+	overflow := drops.XRPAmount(1) << 33 // > UINT32_MAX
 	current := Stance{BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000}
 	target := Stance{
 		BaseFee:          11,

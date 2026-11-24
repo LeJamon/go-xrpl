@@ -70,7 +70,7 @@ func (x *XChainClaim) Preclaim(view tx.ReadOnlyLedgerView, _ tx.EngineConfig) te
 }
 
 func (x *XChainClaim) Apply(ctx *tx.ApplyContext) ter.Result {
-	outer := payment.NewPaymentSandbox(ctx.View)
+	outer := payment.NewPaymentSandboxForApply(ctx)
 	outer.SetTransactionContext(ctx.TxHash, ctx.Config.LedgerSequence)
 	bridge, _, err := readBridge(outer, x.XChainBridge)
 	if err != nil || bridge == nil {

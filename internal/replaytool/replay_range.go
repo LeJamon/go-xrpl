@@ -359,14 +359,14 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 				fmt.Fprintf(r.out, "[%d] divergence recorded; reset to mainnet ground truth, continuing\n", targetLedger)
 				currentStateMap = resumed
 				previousSnapshot = result.PostSnapshot
-				fees, err = feesFromStateMap(currentStateMap)
+				fees, err = feesFromStateMap(ctx, currentStateMap, fees)
 				if err != nil {
 					stats.FailedAtBlock = targetLedger
 					stats.FailureReason = err.Error()
 					fmt.Fprintf(r.out, "[%d] ERROR loading fees: %v\n", targetLedger, err)
 					break
 				}
-				if err := r.maybeCheckpoint(ctx, targetLedger, currentStateMap); err != nil {
+				if err := r.maybeCheckpoint(ctx, targetLedger, currentStateMap, fees); err != nil {
 					stats.FailedAtBlock = targetLedger
 					stats.FailureReason = err.Error()
 					fmt.Fprintf(r.out, "[%d] ERROR: %v\n", targetLedger, err)
@@ -406,7 +406,7 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 		previousSnapshot = result.PostSnapshot
 
 		// Update fees from the new state (in case a SetFee transaction was processed)
-		fees, err = feesFromStateMap(currentStateMap)
+		fees, err = feesFromStateMap(ctx, currentStateMap, fees)
 		if err != nil {
 			stats.FailedAtBlock = targetLedger
 			stats.FailureReason = err.Error()
@@ -415,7 +415,7 @@ func (r *replayRangeRunner) run(parentCtx context.Context) (runErr error) {
 		}
 
 		// Periodically checkpoint so a crash or stop can resume mid-range.
-		if err := r.maybeCheckpoint(ctx, targetLedger, currentStateMap); err != nil {
+		if err := r.maybeCheckpoint(ctx, targetLedger, currentStateMap, fees); err != nil {
 			stats.FailedAtBlock = targetLedger
 			stats.FailureReason = err.Error()
 			fmt.Fprintf(r.out, "[%d] ERROR: %v\n", targetLedger, err)
@@ -448,12 +448,12 @@ func (r *replayRangeRunner) validateFlags() error {
 
 // maybeCheckpoint writes a checkpoint when checkpointing is enabled and the
 // ledger seq lands on the configured interval.
-func (r *replayRangeRunner) maybeCheckpoint(ctx context.Context, seq uint32, stateMap *shamap.SHAMap) error {
+func (r *replayRangeRunner) maybeCheckpoint(ctx context.Context, seq uint32, stateMap *shamap.SHAMap, fees drops.Fees) error {
 	if r.checkpointDir == "" || r.checkpointInterval == 0 ||
 		seq%r.checkpointInterval != 0 {
 		return nil
 	}
-	if err := writeCheckpoint(ctx, r.checkpointDir, seq, stateMap); err != nil {
+	if err := writeCheckpoint(ctx, r.checkpointDir, seq, stateMap, fees); err != nil {
 		return fmt.Errorf("writing checkpoint at ledger %d: %w", seq, err)
 	}
 	if r.verbose {
@@ -575,7 +575,7 @@ func loadInitialState(ctx context.Context, client *statecompare.Client, ledgerIn
 
 	// Seed fees from the verified state, failing if a present FeeSettings entry
 	// is malformed.
-	fees, err := feesFromStateMap(stateMap)
+	fees, err := feesFromStateMap(ctx, stateMap, drops.DefaultFees())
 	if err != nil {
 		return nil, nil, drops.Fees{}, err
 	}
@@ -602,7 +602,7 @@ func verifyStateRoot(stateMap *shamap.SHAMap, expected [32]byte, ledgerIndex uin
 // and fees needed to continue replay from seq+1.
 func resumeFromCheckpoint(ctx context.Context, client *statecompare.Client, dir string, seq uint32) (*shamap.SHAMap, *statecompare.LedgerSnapshot, drops.Fees, error) {
 	path := checkpointPath(dir, seq)
-	stateMap, ckptSeq, err := loadCheckpoint(ctx, path)
+	stateMap, ckptSeq, checkpointFees, err := loadCheckpoint(ctx, path)
 	if err != nil {
 		return nil, nil, drops.Fees{}, err
 	}
@@ -619,7 +619,11 @@ func resumeFromCheckpoint(ctx context.Context, client *statecompare.Client, dir 
 		return nil, nil, drops.Fees{}, err
 	}
 
-	fees, err := feesFromStateMap(stateMap)
+	inheritedFees := drops.DefaultFees()
+	if checkpointFees != nil {
+		inheritedFees = *checkpointFees
+	}
+	fees, err := feesFromStateMap(ctx, stateMap, inheritedFees)
 	if err != nil {
 		return nil, nil, drops.Fees{}, err
 	}

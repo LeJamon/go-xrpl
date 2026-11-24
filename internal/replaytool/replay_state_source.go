@@ -117,7 +117,7 @@ func (s *nodestoreStateSource) Load(ctx context.Context, ledgerIndex uint32) (*s
 	}
 
 	// Targeted lookup; lazily fetches only the FeeSettings path, not the tree.
-	fees, err := feesFromStateMap(stateMap)
+	fees, err := feesFromStateMap(ctx, stateMap, drops.DefaultFees())
 	if err != nil {
 		return nil, nil, drops.Fees{}, err
 	}

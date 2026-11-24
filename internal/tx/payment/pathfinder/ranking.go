@@ -26,7 +26,7 @@ func (pf *Pathfinder) ComputePathRanks(maxPaths int) {
 	// Try default path first to see how much it can deliver
 	// (empty paths = default path only)
 	defaultRC := payment.RippleCalculate(
-		pf.ledger,
+		payment.NewPaymentSandbox(pf.ledger),
 		pf.srcAccount, pf.dstAccount,
 		convertedAmount,
 		&pf.srcAmount,
@@ -132,7 +132,7 @@ func (pf *Pathfinder) getPathLiquidity(path []payment.PathStep, minAmount tx.Amo
 	testAmount := minAmount
 
 	rc := payment.RippleCalculate(
-		pf.ledger,
+		payment.NewPaymentSandbox(pf.ledger),
 		pf.srcAccount, pf.dstAccount,
 		testAmount,
 		&pf.srcAmount,

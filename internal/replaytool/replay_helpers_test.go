@@ -12,8 +12,12 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/stretchr/testify/require"
 )
 
 // feeSettingsIndexHex is keylet::fees() — the singleton FeeSettings key the
@@ -27,6 +31,41 @@ func TestParseDrops(t *testing.T) {
 	if _, err := parseDrops("not-a-number"); err == nil {
 		t.Error("expected error for non-numeric drops")
 	}
+}
+
+func TestLoadValidatedFixtureInheritsMissingFees(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, value any) {
+		t.Helper()
+		data, err := json.Marshal(value)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), data, 0o600))
+	}
+	entry, err := binarycodec.EncodeBytes(map[string]any{
+		"LedgerEntryType": "FeeSettings", "Flags": uint32(0), "ReserveBase": uint32(0),
+	})
+	require.NoError(t, err)
+	key := keylet.Fees().Key
+	stateMap := buildReplayStateMap(t, map[[32]byte][]byte{key: entry})
+	root, err := stateMap.Hash()
+	require.NoError(t, err)
+	write("state.json", stateFixture{LedgerIndex: 1, AccountHash: hex.EncodeToString(root[:]),
+		Entries: []fixtureStateEntry{{Index: hex.EncodeToString(key[:]), Data: hex.EncodeToString(entry)}}})
+	zeroHash := strings.Repeat("0", 64)
+	env := envFixture{LedgerIndex: 2, ParentHash: zeroHash, CloseTimeResolution: 10, TotalCoins: "0",
+		Fees: feesConfig{BaseFee: 17, ReserveIncrement: -53}, Amendments: []string{}}
+	write("env.json", env)
+	write("txs.json", txsFixture{Transactions: []fixtureTxEntry{}})
+	write("expected.json", expectedFixture{LedgerIndex: 2, LedgerHash: zeroHash, AccountHash: zeroHash,
+		TransactionHash: zeroHash, TotalCoins: "0", Transactions: []expectedTxEntry{}})
+
+	fixture, err := loadValidatedFixture(context.Background(), dir)
+	require.NoError(t, err)
+	require.Equal(t, drops.Fees{Base: 17, Reserve: 0, Increment: -53}, fixture.Execution.Fees)
+	env.Fees.ReserveBase = 1
+	write("env.json", env)
+	_, err = loadValidatedFixture(context.Background(), dir)
+	require.ErrorContains(t, err, "do not match state fees")
 }
 
 func TestStatusEmoji(t *testing.T) {

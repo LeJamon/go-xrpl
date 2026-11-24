@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -13,13 +14,21 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment/pathfinder"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
+
+type pathFindRefreshView struct {
+	stubAmendmentsView
+}
+
+func (v *pathFindRefreshView) Exists(keylet.Keylet) (bool, error) { return true, nil }
 
 func newPathFindRefreshTestServer(t *testing.T, count int) (*WebSocketServer, []*websocketConnection) {
 	t.Helper()
 	ws := NewWebSocketServer(WebSocketServerOptions{Timeout: time.Second})
 	manager := ws.ensurePathFindRefreshManager()
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	connections := make([]*websocketConnection, 0, count)
 	ws.connectionsMutex.Lock()
 	for i := range count {
@@ -28,7 +37,9 @@ func newPathFindRefreshTestServer(t *testing.T, count int) (*WebSocketServer, []
 			Connection:      subscription.NewConnection(id, make(chan []byte, 8)),
 			pathFindRefresh: manager,
 		}
-		conn.installPathFindSession(&PathFindSession{id: id})
+		session, rpcErr := ParseAndCreateSession(json.RawMessage(`{"source_account":"`+account+`","destination_account":"`+account+`","destination_amount":"1"}`), id)
+		require.Nil(t, rpcErr)
+		conn.installPathFindSession(session)
 		ws.connections[id] = conn
 		connections = append(connections, conn)
 	}
@@ -37,7 +48,7 @@ func newPathFindRefreshTestServer(t *testing.T, count int) (*WebSocketServer, []
 }
 
 func testLedgerView() types.LedgerStateView {
-	return &stubAmendmentsView{}
+	return &pathFindRefreshView{}
 }
 
 func TestUpdatePathFindSessionsDoesNotBlockLedgerCallback(t *testing.T) {

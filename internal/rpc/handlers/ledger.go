@@ -14,6 +14,7 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/drops"
 	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/rpc/txprojection"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -431,8 +432,8 @@ type ledgerOwnerFundsAnnotator struct {
 	ledger       types.LedgerReader
 	view         types.LedgerStateView
 	reservesRead bool
-	reserveBase  uint64
-	reserveInc   uint64
+	reserveBase  drops.XRPAmount
+	reserveInc   drops.XRPAmount
 }
 
 func (a *ledgerOwnerFundsAnnotator) annotate(txEntry, txJSON map[string]any) (bool, error) {
@@ -468,7 +469,7 @@ func annotateOwnerFunds(
 	txEntry map[string]any,
 	txJSON map[string]any,
 	view types.LedgerStateView,
-	reserveBase, reserveInc uint64,
+	reserveBase, reserveInc drops.XRPAmount,
 ) (bool, error) {
 	funds, ok, err := TransactionOwnerFunds(txJSON, view, reserveBase, reserveInc)
 	if err != nil {

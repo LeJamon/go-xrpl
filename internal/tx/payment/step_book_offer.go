@@ -3,7 +3,6 @@ package payment
 import (
 	"bytes"
 	"fmt"
-	"math"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -613,58 +612,8 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 	// Funding is determined by the asset the offer owner gives (TakerGets),
 	// which is the offer's authoritative balance and freeze context.
 	if offerTakerGets.IsNative {
-		accountKey := keylet.Account(offerOwner)
-		accountData, err := sb.Read(accountKey)
-		if err != nil || accountData == nil {
-			return ZeroXRPEitherAmount(), nil
-		}
-
-		account, err := state.ParseAccountRoot(accountData)
-		if err != nil {
-			return ZeroXRPEitherAmount(), nil
-		}
-
-		// Use OwnerCountHook to get adjusted owner count (accounts for pending changes)
-		// Reference: rippled View.cpp xrpLiquid() line 627-628
-		counts := sb.OwnerCountsHook(offerOwner, tx.OwnerCounts{
-			Owner: account.OwnerCount, Sponsored: account.SponsoredOwnerCount,
-			Sponsoring: account.SponsoringOwnerCount,
-		})
-		ownerCount := counts.Owner
-
-		// Read reserve values from ledger's FeeSettings
-		// Reference: rippled View.cpp xrpLiquid() reads reserves from fees keylet
-		baseReserve, incrementReserve := GetLedgerReserves(sb)
-		accountWithHook := *account
-		accountWithHook.OwnerCount = counts.Owner
-		accountWithHook.SponsoredOwnerCount = counts.Sponsored
-		accountWithHook.SponsoringOwnerCount = counts.Sponsoring
-		reserveDrops, ok := tx.AccountReserveForView(sb, tx.EngineConfig{
-			ReserveBase: uint64(baseReserve), ReserveIncrement: uint64(incrementReserve),
-		}, &accountWithHook, ownerCount)
-		if !ok || reserveDrops > math.MaxInt64 {
-			return ZeroXRPEitherAmount(), nil
-		}
-		reserve := int64(reserveDrops)
-
-		// Use BalanceHook to get adjusted balance (accounts for pending credits)
-		// Reference: rippled View.cpp xrpLiquid() line 637
-		// For XRP, issuer is the zero account (xrpAccount)
-		xrpIssuer := [20]byte{}
-		xrpAmount := tx.NewXRPAmount(int64(account.Balance))
-		adjustedBalance := sb.BalanceHook(offerOwner, xrpIssuer, xrpAmount)
-		available := adjustedBalance.Drops() - reserve
-
-		if available <= 0 {
-			return ZeroXRPEitherAmount(), nil
-		}
-
-		// Return the raw liquid balance (not capped at offerTakerGets).
-		// Reference: rippled accountFundsHelper calls accountHolds() which returns
-		// the full available balance. The funding cap comparison (funds < ownerGives)
-		// handles the actual cap — capping here breaks ownerPaysTransferFee cases
-		// where ownerGives > offerTakerGets.
-		return NewXRPEitherAmount(available), nil
+		funds := tx.XRPLiquid(sb, offerOwner, 0, sb.fees)
+		return NewXRPEitherAmount(funds.Drops()), nil
 	}
 
 	if offerTakerGets.IsMPT {

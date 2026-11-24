@@ -3,6 +3,7 @@ package engine
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
@@ -55,6 +56,20 @@ func TestCheckFee_LoadFeeTrackScaling(t *testing.T) {
 				t.Errorf("checkFee(fee=%s) = %v, want %v", tt.fee, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCheckFeeNegativeLedgerBase(t *testing.T) {
+	base := drops.XRPAmount(-1)
+	e := &Engine{config: txcore.EngineConfig{BaseFee: uint64(base), OpenLedger: true}}
+	txn := newFeeTestTx("0")
+	account := &state.AccountRoot{Balance: 100}
+	if got := e.checkFee(txn, txn.GetCommon(), account); got != ter.TefEXCEPTION {
+		t.Fatalf("open ledger returned %v, want tefEXCEPTION", got)
+	}
+	e.config.OpenLedger = false
+	if got := e.checkFee(txn, txn.GetCommon(), account); got != ter.TesSUCCESS {
+		t.Fatalf("closed ledger returned %v, want tesSUCCESS", got)
 	}
 }
 

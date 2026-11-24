@@ -111,15 +111,8 @@ func (e *EscrowFinish) PreflightSigValidated(rules *amendment.Rules) error {
 // fulfillment.size() is the decoded byte length. The CustomBaseFeeCalculator
 // dispatch in preclaim.go skips the multisig multiplier, so it is applied here.
 // Reference: rippled Escrow.cpp:682-693, Transactor.cpp:229-244
-func (e *EscrowFinish) CalculateBaseFee(view tx.ReadOnlyLedgerView, config tx.EngineConfig) (uint64, error) {
+func (e *EscrowFinish) CalculateBaseFee(_ tx.ReadOnlyLedgerView, config tx.EngineConfig) (uint64, error) {
 	base := config.BaseFee
-	if view != nil {
-		if data, err := view.Read(keylet.Fees()); err == nil && data != nil {
-			if fs, err := state.ParseFeeSettings(data); err == nil {
-				base = fs.GetBaseFee()
-			}
-		}
-	}
 
 	fee := sign.CalculateMultiSigFee(
 		base,

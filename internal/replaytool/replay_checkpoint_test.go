@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/shamap/backend"
 )
@@ -39,7 +40,7 @@ func TestCheckpointRejectsCorruptStructure(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := writeCheckpoint(context.Background(), dir, 10, stateMap); err != nil {
+	if err := writeCheckpoint(context.Background(), dir, 10, stateMap, drops.DefaultFees()); err != nil {
 		t.Fatal(err)
 	}
 	valid, err := os.ReadFile(checkpointPath(dir, 10))
@@ -88,7 +89,7 @@ func TestCheckpointRejectsCorruptStructure(t *testing.T) {
 			if err := os.WriteFile(path, data, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := loadCheckpoint(context.Background(), path); err == nil {
+			if _, _, _, err := loadCheckpoint(context.Background(), path); err == nil {
 				t.Fatal("expected corrupt checkpoint to fail")
 			}
 		})
@@ -104,7 +105,7 @@ func TestCheckpointRejectsLegacyVersion(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := loadCheckpoint(context.Background(), path)
+	_, _, _, err := loadCheckpoint(context.Background(), path)
 	if err == nil || !strings.Contains(err.Error(), "not integrity protected") {
 		t.Fatalf("load legacy checkpoint error = %v", err)
 	}
@@ -119,7 +120,7 @@ func TestCheckpointCancellationPreservesExistingFile(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := writeCheckpoint(ctx, dir, 77, shamap.New(shamap.TypeState))
+	err := writeCheckpoint(ctx, dir, 77, shamap.New(shamap.TypeState), drops.DefaultFees())
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("writeCheckpoint error = %v", err)
 	}
@@ -137,7 +138,7 @@ func TestCheckpointCancellationPreservesExistingFile(t *testing.T) {
 	if len(temps) != 0 {
 		t.Fatalf("temporary checkpoints remain: %v", temps)
 	}
-	if _, _, err := loadCheckpoint(ctx, path); !errors.Is(err, context.Canceled) {
+	if _, _, _, err := loadCheckpoint(ctx, path); !errors.Is(err, context.Canceled) {
 		t.Fatalf("loadCheckpoint error = %v", err)
 	}
 }
@@ -170,10 +171,10 @@ func TestCheckpointBackedTraversalFailurePreservesExistingFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCheckpoint(context.Background(), dir, 87, goodLazy); err != nil {
+	if err := writeCheckpoint(context.Background(), dir, 87, goodLazy, drops.DefaultFees()); err != nil {
 		t.Fatalf("backed checkpoint round trip write: %v", err)
 	}
-	loaded, _, err := loadCheckpoint(context.Background(), checkpointPath(dir, 87))
+	loaded, _, _, err := loadCheckpoint(context.Background(), checkpointPath(dir, 87))
 	if err != nil {
 		t.Fatalf("backed checkpoint round trip load: %v", err)
 	}
@@ -192,7 +193,7 @@ func TestCheckpointBackedTraversalFailurePreservesExistingFile(t *testing.T) {
 	if err := os.WriteFile(path, prior, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeCheckpoint(context.Background(), dir, 88, lazy); !errors.Is(err, sentinel) {
+	if err := writeCheckpoint(context.Background(), dir, 88, lazy, drops.DefaultFees()); !errors.Is(err, sentinel) {
 		t.Fatalf("writeCheckpoint error = %v", err)
 	}
 	got, err := os.ReadFile(path)

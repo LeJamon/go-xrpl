@@ -3,11 +3,14 @@ package ledger
 import (
 	"bytes"
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -106,6 +109,64 @@ func TestFromGenesisRejectsMalformedAmendments(t *testing.T) {
 		drops.Fees{},
 	); err == nil {
 		t.Fatal("FromGenesis accepted malformed Amendments")
+	}
+}
+
+func TestReadFeeSettingsTypeValidation(t *testing.T) {
+	feesKey := keylet.Fees()
+	validAccountRoot, err := state.SerializeAccountRoot(&state.AccountRoot{
+		Account: "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+	})
+	if err != nil {
+		t.Fatalf("serialize valid AccountRoot: %v", err)
+	}
+	malformed := func(header byte, entryType uint16) []byte {
+		data := make([]byte, 12)
+		data[0], data[1], data[2] = header, byte(entryType>>8), byte(entryType)
+		return data
+	}
+	missingFlags, err := binarycodec.EncodeBytes(map[string]any{
+		"LedgerEntryType": "Amendments", "PreviousTxnID": strings.Repeat("1", 64),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		data    []byte
+		wantErr bool
+	}{
+		{name: "missing", data: nil},
+		{name: "wrong entry type valid SLE", data: validAccountRoot},
+		{name: "wrong entry type missing required fields", data: missingFlags, wantErr: true},
+		{name: "wrong entry type malformed SLE", data: malformed(0x11, uint16(keylet.Amendments().Type)), wantErr: true},
+		{name: "unknown entry type", data: malformed(0x11, 0xffff), wantErr: true},
+		{name: "malformed type header", data: malformed(0x01, 0), wantErr: true},
+		{name: "malformed fee settings", data: malformed(0x11, uint16(feesKey.Type)), wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stateMap := shamap.New(shamap.TypeState)
+			if test.data != nil {
+				if err := stateMap.Put(feesKey.Key, test.data); err != nil {
+					t.Fatalf("seed fee settings: %v", err)
+				}
+			}
+			settings, err := ReadFeeSettings(context.Background(), stateMap)
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("ReadFeeSettings error = nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ReadFeeSettings: %v", err)
+			}
+			if settings != nil {
+				t.Fatalf("ReadFeeSettings = %+v, want absent", settings)
+			}
+		})
 	}
 }
 

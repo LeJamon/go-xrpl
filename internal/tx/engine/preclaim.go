@@ -319,17 +319,11 @@ func (e *Engine) checkFee(tx txcore.Transaction, common *txcore.Common, account 
 	return ter.TesSUCCESS
 }
 
-// enforceFeeFloor rejects a fee below the load-scaled minimum, mirroring
-// rippled's open-ledger floor: feeDue = scaleFeeLoad(baseFee, feeTrack,
-// unlimited); feePaid < feeDue → telINSUF_FEE_P. A scaleFeeLoad overflow (the
-// floor exceeds any payable fee, where rippled throws) resolves to the same
-// insufficient-fee code. Reference: rippled Transactor::checkFee
-// Transactor.cpp:278-290.
 func (e *Engine) enforceFeeFloor(fee, baseFeeForTx uint64) ter.Result {
 	unlimited := e.config.ApplyFlags&txcore.TapUNLIMITED != 0
 	feeDue, scaleErr := feetrack.ScaleFeeLoad(baseFeeForTx, e.config.FeeTrack, unlimited)
 	if scaleErr != nil {
-		return ter.TelINSUF_FEE_P
+		return ter.TefEXCEPTION
 	}
 	if fee < feeDue {
 		return ter.TelINSUF_FEE_P

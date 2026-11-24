@@ -438,8 +438,8 @@ func TestCreatePreservesFeeSettingsBoundaries(t *testing.T) {
 			if fees.IsUsingModernFees() != test.modern {
 				t.Fatalf("modern format = %v, want %v", fees.IsUsingModernFees(), test.modern)
 			}
-			if got := [3]uint64{fees.GetBaseFee(), fees.GetReserveBase(), fees.GetReserveIncrement()}; got != [3]uint64{
-				uint64(test.fees.BaseFee), uint64(test.fees.ReserveBase), uint64(test.fees.ReserveIncrement),
+			if got := [3]drops.XRPAmount{fees.GetBaseFee(), fees.GetReserveBase(), fees.GetReserveIncrement()}; got != [3]drops.XRPAmount{
+				test.fees.BaseFee, test.fees.ReserveBase, test.fees.ReserveIncrement,
 			} {
 				t.Fatalf("fee amounts = %v, want %v", got, test.fees)
 			}

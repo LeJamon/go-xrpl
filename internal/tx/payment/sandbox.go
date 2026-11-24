@@ -25,6 +25,7 @@ type PaymentSandbox struct {
 	// view is the underlying ledger view (used only for root sandbox)
 	view tx.LedgerView
 
+	fees          drops.Fees
 	numberContext state.NumberContext
 
 	// modifications holds modified ledger entries (key -> new data)
@@ -124,11 +125,25 @@ type Adjustment struct {
 	OrigBalance tx.Amount
 }
 
-// NewPaymentSandbox creates a new root PaymentSandbox wrapping the given LedgerView
+// NewPaymentSandbox snapshots the fee schedule of the ledger being queried.
 func NewPaymentSandbox(view tx.LedgerView) *PaymentSandbox {
+	fees, err := state.FeesForView(view)
+	if err != nil {
+		fees = drops.DefaultFees()
+	}
+	return newPaymentSandbox(view, fees)
+}
+
+// NewPaymentSandboxForApply uses the parent ledger's schedule for the whole close.
+func NewPaymentSandboxForApply(ctx *tx.ApplyContext) *PaymentSandbox {
+	return newPaymentSandbox(ctx.View, ctx.Config.Fees())
+}
+
+func newPaymentSandbox(view tx.LedgerView, fees drops.Fees) *PaymentSandbox {
 	return &PaymentSandbox{
 		parent:             nil,
 		view:               view,
+		fees:               fees,
 		numberContext:      tx.NumberContextForRules(view.Rules()),
 		modifications:      make(map[[32]byte][]byte),
 		preImages:          make(map[[32]byte][]byte),
@@ -137,6 +152,11 @@ func NewPaymentSandbox(view tx.LedgerView) *PaymentSandbox {
 		deletedFinalStates: make(map[[32]byte][]byte),
 		tab:                newDeferredCredits(),
 	}
+}
+
+// Fees returns the schedule captured when the sandbox was created.
+func (s *PaymentSandbox) Fees() drops.Fees {
+	return s.fees
 }
 
 // DebugCounts returns the number of modifications, insertions, and deletions in this sandbox
@@ -169,6 +189,7 @@ func NewChildSandbox(parent *PaymentSandbox) *PaymentSandbox {
 	txHash, ledgerSeq := parent.TransactionContext()
 	return &PaymentSandbox{
 		parent:             parent,
+		fees:               parent.fees,
 		txHash:             txHash,
 		ledgerSeq:          ledgerSeq,
 		openLedger:         parent.openLedger,

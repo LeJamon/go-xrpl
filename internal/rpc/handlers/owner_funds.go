@@ -3,8 +3,10 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -16,7 +18,7 @@ import (
 func TransactionOwnerFunds(
 	txJSON map[string]any,
 	view types.LedgerStateView,
-	reserveBase, reserveInc uint64,
+	reserveBase, reserveInc drops.XRPAmount,
 ) (string, bool, error) {
 	accountID, amount, ok := transactionOwnerFundsInput(txJSON)
 	if !ok {
@@ -36,7 +38,9 @@ func TransactionOwnerFunds(
 		return state.NewMPTAmountWithIssuanceID(funds, "", amount.MPTIssuanceID()).Value(), true, nil
 	}
 
-	funds, err := tx.AccountFundsNoFreezeStrict(view, accountID, amount, reserveBase, reserveInc)
+	funds, err := tx.AccountFundsNoFreezeStrict(view, accountID, amount, drops.Fees{
+		Reserve: reserveBase, Increment: reserveInc,
+	})
 	if err != nil {
 		return "", true, err
 	}
@@ -82,38 +86,32 @@ func transactionOwnerFundsInput(txJSON map[string]any) ([20]byte, state.Amount, 
 	return accountID, amount, true
 }
 
-func reserveSettingsFromLedger(view types.LedgerStateView, fallbackBase, fallbackInc uint64) (uint64, uint64, error) {
+func reserveSettingsFromLedger(view types.LedgerStateView, fallbackBase, fallbackInc uint64) (drops.XRPAmount, drops.XRPAmount, error) {
 	if view == nil {
 		return 0, 0, fmt.Errorf("reserve settings: nil ledger view")
 	}
-	data, err := view.Read(keylet.Fees())
-	if err != nil {
-		return 0, 0, fmt.Errorf("reserve settings: read FeeSettings: %w", err)
-	}
-	if data == nil {
-		return fallbackBase, fallbackInc, nil
-	}
-	settings, err := state.ParseFeeSettings(data)
-	if err != nil {
-		return 0, 0, fmt.Errorf("reserve settings: parse FeeSettings: %w", err)
-	}
-	reserveBase, reserveInc := fallbackBase, fallbackInc
-	if settings.XRPFeesMode {
-		if settings.HasReserveBaseDrops {
-			reserveBase = settings.ReserveBaseDrops
-		}
-		if settings.HasReserveIncrementDrops {
-			reserveInc = settings.ReserveIncrementDrops
-		}
+	var fees drops.Fees
+	if ledger, ok := view.(interface{ Fees() drops.Fees }); ok {
+		fees = ledger.Fees()
 	} else {
-		if settings.HasReserveBase {
-			reserveBase = uint64(settings.ReserveBase)
+		if fallbackBase > math.MaxInt64 || fallbackInc > math.MaxInt64 {
+			return 0, 0, fmt.Errorf("reserve settings: reserve exceeds int64")
 		}
-		if settings.HasReserveIncrement {
-			reserveInc = uint64(settings.ReserveIncrement)
+		fallback := drops.Fees{Reserve: drops.XRPAmount(fallbackBase), Increment: drops.XRPAmount(fallbackInc)}
+		data, err := view.Read(keylet.Fees())
+		if err != nil {
+			return 0, 0, fmt.Errorf("reserve settings: read FeeSettings: %w", err)
 		}
+		if data == nil {
+			return fallback.Reserve, fallback.Increment, nil
+		}
+		settings, err := state.ParseFeeSettings(data)
+		if err != nil {
+			return 0, 0, fmt.Errorf("reserve settings: parse FeeSettings: %w", err)
+		}
+		fees = settings.ApplyTo(fallback)
 	}
-	return reserveBase, reserveInc, nil
+	return fees.Reserve, fees.Increment, nil
 }
 
 func parseTransactionAmount(raw any) (state.Amount, bool) {

@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
@@ -260,15 +262,15 @@ func buildProjectedValidatedTransactionEvent(
 	}
 	if event.Ledger != nil {
 		applicable, needsReserves := handlers.TransactionOwnerFundsRequirements(txFields)
-		var reserveBase, reserveInc uint64
+		fees := drops.Fees{}
 		if applicable && needsReserves {
-			_, reserveBase, reserveInc, err = service.FeesFromLedgerStrict(event.Ledger)
+			fees, err = service.FeesFromLedgerStrict(context.Background(), event.Ledger)
 			if err != nil {
 				return nil, ter.TemMALFORMED, fmt.Errorf("read accepted ledger fees: %w", err)
 			}
 		}
 		if applicable {
-			funds, ok, fundsErr := handlers.TransactionOwnerFunds(txFields, event.Ledger, reserveBase, reserveInc)
+			funds, ok, fundsErr := handlers.TransactionOwnerFunds(txFields, event.Ledger, fees.Reserve, fees.Increment)
 			if fundsErr != nil {
 				return nil, ter.TemMALFORMED, fmt.Errorf("compute accepted transaction owner funds: %w", fundsErr)
 			}

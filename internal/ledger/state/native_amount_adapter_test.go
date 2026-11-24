@@ -90,18 +90,6 @@ func TestNativeAmountAdaptersRejectNegativeDrops(t *testing.T) {
 			},
 		},
 		{
-			name: "FeeSettings.BaseFeeDrops",
-			fields: map[string]any{
-				"LedgerEntryType": "FeeSettings",
-				"BaseFeeDrops":    "-1",
-				"Flags":           uint32(0),
-			},
-			parse: func(data []byte) error {
-				_, err := ParseFeeSettings(data)
-				return err
-			},
-		},
-		{
 			name: "Escrow.Amount",
 			fields: map[string]any{
 				"LedgerEntryType":   "Escrow",

@@ -107,6 +107,40 @@ func TestXRPEndpointStep_CheckAccount(t *testing.T) {
 	}
 }
 
+func TestPaymentSandboxReserveSchedule(t *testing.T) {
+	view := newPaymentMockLedgerView()
+	owner := [20]byte{1}
+	view.createAccount(owner, 100_000_000, 2)
+	offer := &state.LedgerOffer{Account: state.EncodeAccountIDSafe(owner), TakerGets: tx.NewXRPAmount(1)}
+	endpoint := XRPEndpointStep{account: owner}
+	checkFunds := func(sb *PaymentSandbox, want int64) {
+		t.Helper()
+		require.Equal(t, want, endpoint.xrpLiquid(sb))
+		funds, err := (&BookStep{}).getOfferFundedAmount(sb, offer)
+		require.NoError(t, err)
+		require.Equal(t, NewXRPEitherAmount(want), funds)
+	}
+
+	ctx := &tx.ApplyContext{View: view, Config: tx.EngineConfig{ReserveBase: 10_000_000, ReserveIncrement: 2_000_000}}
+	updated, err := state.SerializeFeeSettings(&state.FeeSettings{
+		XRPFeesMode: true, BaseFeeDrops: 10, ReserveBaseDrops: 1_000_000, ReserveIncrementDrops: 200_000,
+	})
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Fees(), updated))
+	root := NewPaymentSandboxForApply(ctx)
+	checkFunds(root, 86_000_000)
+	checkFunds(NewChildSandbox(root), 86_000_000)
+	checkFunds(NewPaymentSandbox(root), 86_000_000)
+	checkFunds(NewPaymentSandbox(view), 98_600_000)
+
+	ctx.Config.ReserveBase, ctx.Config.ReserveIncrement = 1_000_000, 200_000
+	checkFunds(NewPaymentSandboxForApply(ctx), 98_600_000)
+	checkFunds(root, 86_000_000)
+
+	ctx.Config.ReserveBase, ctx.Config.ReserveIncrement = 0, 0
+	checkFunds(NewChildSandbox(NewPaymentSandboxForApply(ctx)), 100_000_000)
+}
+
 // TestXRPEndpointStep_xrpLiquid_DeferredCredit proves that XRP credited to an
 // account earlier in the same payment is not double-counted as spendable
 // liquidity. xrpLiquid applies the deferred-credit balance hook
@@ -135,7 +169,7 @@ func TestXRPEndpointStep_xrpLiquid_DeferredCredit(t *testing.T) {
 	// The 40 XRP received earlier must not be re-spendable: 90 - 40 = 50 XRP.
 	require.Equal(t, int64(50_000_000), step.xrpLiquid(sbCredited),
 		"deferred-credit hook must subtract the 40 XRP received earlier in the payment")
-	funds, result := AccountFundsInSandbox(sbCredited, acct, tx.NewXRPAmount(1), true, 10_000_000, 2_000_000, 0)
+	funds, result := AccountFundsInSandbox(sbCredited, acct, tx.NewXRPAmount(1), true, 0)
 	require.Equal(t, ter.TesSUCCESS, result)
 	require.Equal(t, int64(50_000_000), funds.Drops())
 }
@@ -170,6 +204,10 @@ func TestXRPEndpointStep_xrpLiquid_PseudoAccountReserveExemption(t *testing.T) {
 			sb := NewPaymentSandbox(view)
 			require.Equal(t, int64(100_000_000), step.xrpLiquid(sb),
 				"pseudo-account must have zero reserve -> full balance liquid")
+			offer := &state.LedgerOffer{Account: account.Account, TakerGets: tx.NewXRPAmount(1)}
+			funds, err := (&BookStep{}).getOfferFundedAmount(sb, offer)
+			require.NoError(t, err)
+			require.Equal(t, NewXRPEitherAmount(int64(account.Balance)), funds)
 		})
 	}
 
@@ -178,6 +216,15 @@ func TestXRPEndpointStep_xrpLiquid_PseudoAccountReserveExemption(t *testing.T) {
 	view.createAccount(normal, 100_000_000, 5) // base 10 + 5*2 = 20 XRP reserve
 	normalStep := NewXRPEndpointStep(normal, false)
 	require.Equal(t, int64(80_000_000), normalStep.xrpLiquid(NewPaymentSandbox(view)))
+}
+
+func TestXRPEndpointReducesSponsoredReserve(t *testing.T) {
+	view := newPaymentMockLedgerView()
+	view.rules = amendment.NewRules([][32]byte{amendment.FeatureSponsor})
+	sb := NewPaymentSandbox(view)
+	root := &state.AccountRoot{Balance: 100_000_000, SponsoringOwnerCount: 1}
+	step := XRPEndpointStep{account: [20]byte{1}, reserveReduction: -1}
+	require.EqualValues(t, 90_000_000, step.liquidOf(sb, root))
 }
 
 func TestXRPEndpointStep_UpdateFailureDoesNotCacheOrRecordCredit(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -165,7 +166,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 	bGlobalFreeze := amountGlobalFrozen(view, takerGets) ||
 		amountGlobalFrozen(view, takerPays)
 	rate := amountTransferRate(view, takerGets)
-	_, reserveBase, reserveIncrement, err := readFeesFromLedgerContext(ctx, targetLedger)
+	fees, err := FeesFromLedgerStrict(ctx, targetLedger)
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +267,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 				bookOffer, berr := s.buildBookOffer(
 					view, parentCloseTime, offer, offerKey, dirQuality, saDirRate,
 					takerGets, taker, getsIssuer, rate, bGlobalFreeze,
-					reserveBase, reserveIncrement, balances, numberContext,
+					fees, balances, numberContext,
 				)
 				if berr != nil {
 					return berr
@@ -333,7 +334,7 @@ func (s *Service) buildBookOffer(
 	taker, getsIssuer string,
 	rate uint32,
 	bGlobalFreeze bool,
-	reserveBase, reserveIncrement uint64,
+	fees drops.Fees,
 	balances map[string]tx.Amount,
 	numberContext state.NumberContext,
 ) (BookOffer, error) {
@@ -418,7 +419,7 @@ func (s *Service) buildBookOffer(
 			if decErr != nil {
 				return BookOffer{}, decErr
 			}
-			funds, fundsErr := accountBookFunds(view, parentCloseTime, accountID, takerGets, reserveBase, reserveIncrement)
+			funds, fundsErr := accountBookFunds(view, parentCloseTime, accountID, takerGets, fees)
 			if fundsErr != nil {
 				return BookOffer{}, fundsErr
 			}
@@ -582,10 +583,10 @@ func amountTransferRate(view tx.LedgerView, amount tx.Amount) uint32 {
 	return tx.GetTransferRate(view, issuer)
 }
 
-func accountBookFunds(view tx.LedgerView, closeTime time.Time, account [20]byte, amount tx.Amount, reserveBase, reserveIncrement uint64) (tx.Amount, error) {
+func accountBookFunds(view tx.LedgerView, closeTime time.Time, account [20]byte, amount tx.Amount, fees drops.Fees) (tx.Amount, error) {
 	id, ok := amountMPTID(amount)
 	if !ok {
-		return mptutil.AccountFunds(view, account, amount, true, reserveBase, reserveIncrement), nil
+		return mptutil.AccountFunds(view, account, amount, true, fees), nil
 	}
 	value, result := mptutil.Funds(view, id, account, true)
 	if result == ter.TefINTERNAL {

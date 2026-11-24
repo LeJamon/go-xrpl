@@ -68,8 +68,6 @@ func (o *OfferCreate) invokeFlowCross(
 			Sell:               bSell,       // For sell offers, deliver MAX (sell all input regardless of output)
 			FillOrKill:         bFillOrKill, // FillOrKill runs the flow with partialPayment disabled (rippled CreateOffer.cpp:411)
 			ParentCloseTime:    ctx.Config.ParentCloseTime,
-			ReserveBase:        ctx.Config.ReserveBase,
-			ReserveIncrement:   ctx.Config.ReserveIncrement,
 			FixReducedOffersV2: rules.Enabled(amendment.FeatureFixReducedOffersV2),
 			FixFillOrKill:      rules.Enabled(amendment.FeatureFixFillOrKill),
 			FixAMMv1_1:         rules.Enabled(amendment.FeatureFixAMMv1_1),
@@ -263,9 +261,9 @@ func (o *OfferCreate) takerCross(
 	var takerInBalance tx.Amount
 	var fundsResult ter.Result
 	if crossResult.Sandbox != nil {
-		takerInBalance, fundsResult = payment.AccountFundsInSandbox(crossResult.Sandbox, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement, ctx.Config.ParentCloseTime)
+		takerInBalance, fundsResult = payment.AccountFundsInSandbox(crossResult.Sandbox, ctx.AccountID, saTakerGets, true, ctx.Config.ParentCloseTime)
 	} else {
-		takerInBalance, fundsResult = payment.AccountFundsInSandbox(sb, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement, ctx.Config.ParentCloseTime)
+		takerInBalance, fundsResult = payment.AccountFundsInSandbox(sb, ctx.AccountID, saTakerGets, true, ctx.Config.ParentCloseTime)
 	}
 	if fundsResult != ter.TesSUCCESS {
 		return crossOutcome{terminated: true, result: fundsResult, applyMain: false}

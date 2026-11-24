@@ -50,8 +50,8 @@ func (o *OfferCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 func (o *OfferCreate) ApplyCreate(ctx *tx.ApplyContext) ter.Result {
 	// Create TWO independent sandboxes from ctx.View
 	// Reference: rippled CreateOffer.cpp lines 938-941
-	sb := payment.NewPaymentSandbox(ctx.View)
-	sbCancel := payment.NewPaymentSandbox(ctx.View)
+	sb := payment.NewPaymentSandboxForApply(ctx)
+	sbCancel := payment.NewPaymentSandboxForApply(ctx)
 
 	sb.SetTransactionContext(ctx.TxHash, ctx.Config.LedgerSequence)
 	sbCancel.SetTransactionContext(ctx.TxHash, ctx.Config.LedgerSequence)

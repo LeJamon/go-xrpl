@@ -218,7 +218,7 @@ func tokenOfferCreatePreclaim(
 	}
 
 	if buyOfferOwner != nil {
-		funds := mptutil.AccountFunds(view, accountID, amount, true, config.ReserveBase, config.ReserveIncrement)
+		funds := mptutil.AccountFunds(view, accountID, amount, true, config.Fees())
 		if funds.Signum() <= 0 {
 			return ter.TecUNFUNDED_OFFER
 		}

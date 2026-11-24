@@ -5,6 +5,7 @@ import (
 	"maps"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -94,7 +95,7 @@ func exceptionPayment(t *testing.T, stage string, raise func()) (*paymentFlowExc
 	view.createTrustLine(dst, issuer, "USD", 0, 100, 100)
 	return view, func() RippleCalculateResult {
 		sendMax := tx.NewXRPAmount(90_000_000)
-		return RippleCalculate(view, src, dst,
+		return RippleCalculate(newPaymentSandbox(view, drops.DefaultFees()), src, dst,
 			tx.NewIssuedAmount(20, 0, "USD", state.EncodeAccountIDSafe(issuer)),
 			&sendMax, nil, true, true, false, [32]byte{1}, 21485530)
 	}

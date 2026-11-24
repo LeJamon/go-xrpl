@@ -290,7 +290,7 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 		// (rcInput is only set for convert_all_, otherwise pInputs is null → defaultPathsAllowed=true).
 		// Use effectiveDstAmount (which is largestAmount for convertAll).
 		validateRC := payment.RippleCalculate(
-			ledger,
+			payment.NewPaymentSandbox(ledger),
 			pr.srcAccount, pr.dstAccount,
 			effectiveDstAmount,
 			&srcAmount,
@@ -307,7 +307,7 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 		if !pr.convertAll && len(fullLiquidityPath) > 0 && shouldRetryWithFullLiquidityPath(calcResult) {
 			bestPaths = append(bestPaths, fullLiquidityPath)
 			calcResult = payment.RippleCalculate(
-				ledger,
+				payment.NewPaymentSandbox(ledger),
 				pr.srcAccount, pr.dstAccount,
 				effectiveDstAmount,
 				&srcAmount,
@@ -323,7 +323,7 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 		if calcResult == ter.TesSUCCESS {
 			// Re-run to get actual source and delivered amounts
 			finalRC := payment.RippleCalculate(
-				ledger,
+				payment.NewPaymentSandbox(ledger),
 				pr.srcAccount, pr.dstAccount,
 				effectiveDstAmount,
 				&srcAmount,

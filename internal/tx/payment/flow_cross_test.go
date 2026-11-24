@@ -3,6 +3,7 @@ package payment
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -40,21 +41,21 @@ func TestFlowCrossReserveBoundary(t *testing.T) {
 				cancelOwner, sponsor = owner, state.EncodeAccountIDSafe(taker)
 			}
 
-			outer := NewPaymentSandbox(view)
+			outer := newPaymentSandbox(view, drops.Fees{Reserve: 1_000_000, Increment: 200_000})
 			cancel := NewChildSandbox(outer)
 			require.NoError(t, tx.DecreaseOwnerCountOnView(cancel, cancelOwner, sponsor, 1))
 			require.NoError(t, cancel.Apply(outer))
 			gets := tx.NewXRPAmount(3_000_000)
-			funds, result := AccountFundsInSandbox(outer, taker, gets, true, 1_000_000, 200_000, 0)
+			funds, result := AccountFundsInSandbox(outer, taker, gets, true, 0)
 			require.Equal(t, ter.TesSUCCESS, result)
 			require.Equal(t, int64(2_743_827), funds.Drops())
 
 			cross := FlowCross(outer, taker, gets,
 				tx.NewIssuedAmount(5, 0, "USD", state.EncodeAccountIDSafe(issuer)),
-				[32]byte{}, 1, FlowCrossParams{ReserveBase: 1_000_000, ReserveIncrement: 200_000})
+				[32]byte{}, 1, FlowCrossParams{})
 			require.Equal(t, ter.TecPATH_DRY, cross.Result)
 			require.NotNil(t, cross.Sandbox)
-			funds, result = AccountFundsInSandbox(cross.Sandbox, taker, gets, true, 1_000_000, 200_000, 0)
+			funds, result = AccountFundsInSandbox(cross.Sandbox, taker, gets, true, 0)
 			require.Equal(t, ter.TesSUCCESS, result)
 			require.Equal(t, int64(2_943_827), funds.Drops())
 
@@ -62,7 +63,7 @@ func TestFlowCrossReserveBoundary(t *testing.T) {
 			child := NewChildSandbox(cross.Sandbox)
 			require.NoError(t, tx.DecreaseOwnerCountOnView(child, taker, "", 1))
 			require.NoError(t, child.Apply(cross.Sandbox))
-			funds, result = AccountFundsInSandbox(cross.Sandbox, taker, gets, true, 1_000_000, 200_000, 0)
+			funds, result = AccountFundsInSandbox(cross.Sandbox, taker, gets, true, 0)
 			require.Equal(t, ter.TesSUCCESS, result)
 			require.Equal(t, int64(2_943_827), funds.Drops())
 		})

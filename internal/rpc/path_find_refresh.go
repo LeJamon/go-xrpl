@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment/pathfinder"
 )
@@ -255,7 +256,20 @@ func (m *pathFindRefreshManager) runJob(job pathFindRefreshJob) {
 		return
 	}
 
-	result := m.execute(job)
+	result, rpcErr := m.execute(job)
+	if rpcErr != nil {
+		status := job.target.session.BuildErrorEvent(rpcErr)
+		event := clonePathFindEvent(status)
+		event.Type = "path_find"
+		data, err := json.Marshal(event)
+		if err != nil {
+			wsLog().Error("Failed to marshal path_find validation update", "err", err)
+			return
+		}
+		m.commit(job, status, data)
+		return
+	}
+
 	if result == nil || !m.jobCurrent(job) {
 		return
 	}
@@ -306,14 +320,18 @@ func (m *pathFindRefreshManager) finishJob(job pathFindRefreshJob) {
 	m.mu.Unlock()
 }
 
-func (m *pathFindRefreshManager) execute(job pathFindRefreshJob) (result *pathfinder.PathRequestResult) {
+func (m *pathFindRefreshManager) execute(job pathFindRefreshJob) (result *pathfinder.PathRequestResult, rpcErr *rpcerrors.RpcError) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			wsLog().Error("path_find refresh panic", "conn", job.target.connection.ID(), "err", rec)
 			result = nil
+			rpcErr = nil
 		}
 	}()
-	return job.target.session.Compute(job.view, false)
+	if rpcErr := job.target.session.validate(job.view); rpcErr != nil {
+		return nil, rpcErr
+	}
+	return job.target.session.Compute(job.view, false), nil
 }
 
 func (m *pathFindRefreshManager) commit(job pathFindRefreshJob, status *PathFindEvent, data []byte) {

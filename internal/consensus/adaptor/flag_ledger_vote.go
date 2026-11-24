@@ -11,7 +11,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus/amendmentvote"
 	"github.com/LeJamon/go-xrpl/internal/consensus/feevote"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -85,57 +84,22 @@ func parseAmendmentsSLEBytes(data []byte) (
 	return enabled, majorities, true
 }
 
-// runFeeVote runs the FeeVote producer against the parent
-// ledger's current FeeSettings SLE and the trusted validations
-// that referenced it. Returns the serialized SetFee blob (one or
-// none) or nil on read/parse failure (logged at warn, treated as
-// "abstain" so a single bad SLE doesn't block amendment voting).
+// runFeeVote tallies trusted validations against the parent ledger's effective fees.
 func (a *Adaptor) runFeeVote(
 	prev *ledger.Ledger,
 	upcomingSeq uint32,
 	parentValidations []*consensus.Validation,
 	enabled map[[32]byte]bool,
 ) [][]byte {
-	feeData, err := prev.Read(keylet.Fees())
-	if err != nil {
-		a.logger.Warn("flag-ledger fee vote: failed to read FeeSettings SLE",
-			"err", err, "seq", prev.Sequence())
-		return nil
-	}
-	if len(feeData) == 0 {
-		// No FeeSettings SLE installed yet — pre-genesis-bootstrap
-		// or a corrupted state. Either way, no current to vote
-		// against; bail.
-		return nil
-	}
-	fees, err := state.ParseFeeSettings(feeData)
-	if err != nil {
-		a.logger.Warn("flag-ledger fee vote: failed to parse FeeSettings SLE",
-			"err", err, "seq", prev.Sequence())
-		return nil
-	}
-
 	xrpFeesEnabled := enabled[amendment.FeatureXRPFees]
-
-	var current feevote.Stance
-	if xrpFeesEnabled {
-		current = feevote.Stance{
-			BaseFee:          fees.BaseFeeDrops,
-			ReserveBase:      fees.ReserveBaseDrops,
-			ReserveIncrement: fees.ReserveIncrementDrops,
-		}
-	} else {
-		current = feevote.Stance{
-			BaseFee:          fees.BaseFee,
-			ReserveBase:      uint64(fees.ReserveBase),
-			ReserveIncrement: uint64(fees.ReserveIncrement),
-		}
+	fees := prev.Fees()
+	current := feevote.Stance{
+		BaseFee: fees.Base, ReserveBase: fees.Reserve, ReserveIncrement: fees.Increment,
 	}
-
 	target := feevote.Stance{
-		BaseFee:          a.feeVote.BaseFee,
-		ReserveBase:      uint64(a.feeVote.ReserveBase),
-		ReserveIncrement: uint64(a.feeVote.ReserveIncrement),
+		BaseFee:          drops.XRPAmount(a.feeVote.BaseFee),
+		ReserveBase:      drops.XRPAmount(a.feeVote.ReserveBase),
+		ReserveIncrement: drops.XRPAmount(a.feeVote.ReserveIncrement),
 	}
 
 	votes := make([]feevote.Vote, 0, len(parentValidations))

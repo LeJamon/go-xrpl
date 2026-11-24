@@ -683,7 +683,7 @@ type RippleCalculateResult struct {
 // It converts paths to strands and executes the Flow algorithm.
 //
 // Parameters:
-//   - view: LedgerView for reading state
+//   - sandbox: accumulates successful flow changes across calculations
 //   - srcAccount: Source account sending the payment
 //   - dstAccount: Destination account receiving the payment
 //   - dstAmount: Amount to deliver to destination
@@ -696,7 +696,7 @@ type RippleCalculateResult struct {
 // Returns a RippleCalculateResult bundling the actual amounts, removable
 // offers, accumulated sandbox, and result code.
 func RippleCalculate(
-	view tx.LedgerView,
+	sandbox *PaymentSandbox,
 	srcAccount, dstAccount [20]byte,
 	dstAmount tx.Amount,
 	srcAmount *tx.Amount,
@@ -714,8 +714,6 @@ func RippleCalculate(
 		opt(&rcOpts)
 	}
 
-	// Create PaymentSandbox from view
-	sandbox := NewPaymentSandbox(view)
 	sandbox.SetTransactionContext(txHash, ledgerSeq)
 	if rcOpts.numberContext != nil {
 		sandbox.SetNumberContext(*rcOpts.numberContext)

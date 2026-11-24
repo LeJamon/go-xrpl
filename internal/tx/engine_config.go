@@ -135,6 +135,15 @@ type EngineConfig struct {
 	OffersConsidered *uint32
 }
 
+// Fees returns the signed amounts carried by the ledger.
+func (c EngineConfig) Fees() drops.Fees {
+	return drops.Fees{
+		Base:      drops.XRPAmount(c.BaseFee),
+		Reserve:   drops.XRPAmount(c.ReserveBase),
+		Increment: drops.XRPAmount(c.ReserveIncrement),
+	}
+}
+
 // CurrentCloseTime returns the application-view close time. The parent-time
 // fallback preserves open-view behavior for callers that do not build a closed
 // successor.

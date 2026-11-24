@@ -1,12 +1,14 @@
 package replaytool
 
 import (
+	"context"
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -63,7 +65,7 @@ func TestIssue2003HistoricalOfferRateMatchesPeer(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, rules.Enabled(amendment.FeatureFixUniversalNumber))
 	require.True(t, rules.Enabled(amendment.FeatureFixCleanup3_3_0))
-	fees, err := feesFromStateMap(stateMap)
+	fees, err := feesFromStateMap(context.Background(), stateMap, drops.DefaultFees())
 	require.NoError(t, err)
 	parentHash, err := protocol.Hash256FromHex(fixture.Parent.LedgerHash)
 	require.NoError(t, err)

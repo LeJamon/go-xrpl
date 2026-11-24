@@ -307,6 +307,14 @@ func (s *PathFindSession) BuildEvent(result *pathfinder.PathRequestResult, fullR
 	return s.buildEvent(result, fullReply)
 }
 
+func (s *PathFindSession) BuildErrorEvent(rpcErr *rpcerrors.RpcError) *PathFindEvent {
+	return &PathFindEvent{
+		Error:        rpcErr.ErrorString,
+		ErrorCode:    rpcErr.Code,
+		ErrorMessage: rpcErr.Message,
+	}
+}
+
 // Status returns the stored response state with rippled's success marker.
 func (s *PathFindSession) Status() *PathFindEvent {
 	s.mu.Lock()

@@ -49,9 +49,9 @@ func newNoRippleFeeLedger(t *testing.T, svc *Service, seq uint32, account string
 		t.Fatalf("insert account root into history: %v", err)
 	}
 	feeData, err := state.SerializeFeeSettings(&state.FeeSettings{
-		BaseFeeDrops:          uint64(baseFee),
-		ReserveBaseDrops:      uint64(drops.DefaultReserveBase),
-		ReserveIncrementDrops: uint64(drops.DefaultReserveIncrement),
+		BaseFeeDrops:          baseFee,
+		ReserveBaseDrops:      drops.DefaultReserveBase,
+		ReserveIncrementDrops: drops.DefaultReserveIncrement,
 		XRPFeesMode:           true,
 	})
 	if err != nil {

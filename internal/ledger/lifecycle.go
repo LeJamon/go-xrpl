@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -44,6 +45,10 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 	if err != nil {
 		return fmt.Errorf("failed to load amendment rules: %w", err)
 	}
+	settings, err := ReadFeeSettings(context.Background(), stateMap)
+	if err != nil {
+		return fmt.Errorf("load closing ledger fees: %w", err)
+	}
 	if err := stateMap.SetImmutable(); err != nil {
 		return fmt.Errorf("failed to make state map immutable: %w", err)
 	}
@@ -72,6 +77,7 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 	l.txMap = txMap
 	l.header = hdr
 	l.rules = rules
+	l.fees = settings.ApplyTo(l.fees)
 	l.state = StateClosed
 	l.writable = false
 

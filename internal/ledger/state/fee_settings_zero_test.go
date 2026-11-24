@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/drops"
 )
 
 func TestFeeSettingsModernZeroValues(t *testing.T) {
@@ -43,6 +44,50 @@ func TestFeeSettingsModernZeroValues(t *testing.T) {
 		if _, ok := decoded[field]; ok {
 			t.Fatalf("serialized modern FeeSettings retained legacy field %s", field)
 		}
+	}
+}
+
+func TestFeeSettingsSignedModernValuesRoundTrip(t *testing.T) {
+	want := drops.Fees{Base: -15, Reserve: 0, Increment: 20}
+	data, err := binarycodec.EncodeBytes(map[string]any{
+		"LedgerEntryType":       "FeeSettings",
+		"Flags":                 uint32(0),
+		"BaseFeeDrops":          "-15",
+		"ReserveBaseDrops":      "0",
+		"ReserveIncrementDrops": "20",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	settings, err := ParseFeeSettings(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := settings.Fees(); got != want {
+		t.Fatalf("parsed fees = %+v, want %+v", got, want)
+	}
+	if got := settings.GetBaseFee(); got != want.Base {
+		t.Fatalf("parsed base fee = %d, want %d", got, want.Base)
+	}
+
+	serialized, err := SerializeFeeSettings(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTripped, err := ParseFeeSettings(serialized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := roundTripped.Fees(); got != want {
+		t.Fatalf("round-tripped fees = %+v, want %+v", got, want)
+	}
+	decoded, err := binarycodec.Decode(hex.EncodeToString(serialized))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decoded["BaseFeeDrops"]; got != "-15" {
+		t.Fatalf("round-tripped BaseFeeDrops = %v, want -15", got)
 	}
 }
 

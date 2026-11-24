@@ -311,7 +311,7 @@ func checkCashSourceFunds(view tx.ReadOnlyLedgerView, config tx.EngineConfig, so
 	if mptutil.CanTransferLPToken(view, sourceID, sourceID, issuerID) != ter.TesSUCCESS {
 		return ter.TecPATH_PARTIAL
 	}
-	funds, err := tx.AccountFundsNoFreezeStrict(view, sourceID, value, config.ReserveBase, config.ReserveIncrement)
+	funds, err := tx.AccountFundsNoFreezeStrict(view, sourceID, value, config.Fees())
 	if err != nil {
 		return ter.TefINTERNAL
 	}
@@ -831,7 +831,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	// Execute flow using RippleCalculate
 	// Reference: CashCheck.cpp L442-455
 	rc := payment.RippleCalculate(
-		ctx.View,
+		payment.NewPaymentSandboxForApply(ctx),
 		srcID,        // source (check creator)
 		accountID,    // destination (check casher)
 		flowAmount,   // amount to deliver

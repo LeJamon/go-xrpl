@@ -1023,7 +1023,11 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 		return newReplayFailure(err, "parent_state", "snapshot parent state: %v", err)
 	}
 
-	r.result, err = ledger.NewFromHeader(*hdr, stateMap, txMap, drops.Fees{})
+	fees := drops.DefaultFees()
+	if r.parent != nil {
+		fees = r.parent.Fees()
+	}
+	r.result, err = ledger.NewFromHeader(*hdr, stateMap, txMap, fees)
 	if err != nil {
 		return fmt.Errorf("construct replay ledger: %w", err)
 	}

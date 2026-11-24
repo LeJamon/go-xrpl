@@ -368,7 +368,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 			if err != nil {
 				return ter.TecINTERNAL
 			}
-			funds := mptutil.AccountFunds(ctx.View, buyOffer.Owner, buyAmount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+			funds := mptutil.AccountFunds(ctx.View, buyOffer.Owner, buyAmount, true, ctx.Config.Fees())
 			if funds.Compare(buyAmount) < 0 {
 				return ter.TecINSUFFICIENT_FUNDS
 			}
@@ -376,7 +376,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 			// XRP buy offer: the buyer needs enough liquid XRP. accountFunds for a
 			// native amount returns balance minus reserve in both amendment eras.
 			needed := tx.NewXRPAmount(int64(buyOffer.Amount))
-			funds := mptutil.AccountFunds(ctx.View, buyOffer.Owner, needed, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+			funds := mptutil.AccountFunds(ctx.View, buyOffer.Owner, needed, true, ctx.Config.Fees())
 			if funds.Compare(needed) < 0 {
 				return ter.TecINSUFFICIENT_FUNDS
 			}
@@ -440,7 +440,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 				if err != nil {
 					return ter.TecINTERNAL
 				}
-				funds := mptutil.AccountFunds(ctx.View, accountID, sellAmount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+				funds := mptutil.AccountFunds(ctx.View, accountID, sellAmount, true, ctx.Config.Fees())
 				if funds.Compare(sellAmount) < 0 {
 					return ter.TecINSUFFICIENT_FUNDS
 				}
