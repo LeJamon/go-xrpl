@@ -54,8 +54,6 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 		return nil, rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
-	// Field validation follows rippled PathRequest::parseJson order exactly,
-	// like the ripple_path_find handler.
 	sourceAccountRaw, ok := fields["source_account"]
 	if !ok {
 		return nil, rpcerrors.RpcErrorSrcActMissing("Source account not provided.")
@@ -401,7 +399,6 @@ func convertToRPCPathSteps(paths [][]payment.PathStep) [][]rpctypes.PathStep {
 	return result
 }
 
-// decodePathFindAccount decodes a classic address given as a JSON string.
 // Rippled's asString() throws for object and array values, while scalar values
 // are converted and then rejected by the account decoder.
 func decodePathFindAccount(raw json.RawMessage, malformed func(string) *rpcerrors.RpcError, message string) ([20]byte, *rpcerrors.RpcError) {

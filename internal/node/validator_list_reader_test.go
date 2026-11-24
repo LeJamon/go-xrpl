@@ -142,8 +142,6 @@ func TestValidatorsRPCTimestampsPreserveFractionalSeconds(t *testing.T) {
 	require.Equal(t, "2026-May-01 13:00:00.111111111 UTC", next["effective"])
 	require.Equal(t, "2026-May-03 12:00:00.222222222 UTC", next["expiration"])
 
-	// The summary is derived from Unix-second fields, so rippled's formatter
-	// emits zero fractional digits after the reader has projected the times.
 	summary := response["validator_list"].(map[string]any)
 	require.Equal(t, "2026-May-03 12:00:00.000000000 UTC", summary["expiration"])
 }

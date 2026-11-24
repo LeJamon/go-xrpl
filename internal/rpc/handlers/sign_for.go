@@ -71,8 +71,6 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return nil, rpcerrors.RpcErrorInvalidParams("Invalid tx_json: expected object")
 	}
-	// rippled transactionSignFor: objectFieldError(tx_json) for any
-	// non-object value.
 	txMap, ok := txValue.(map[string]any)
 	if !ok {
 		return nil, rpcerrors.RpcErrorExpectedField("tx_json", "object")
