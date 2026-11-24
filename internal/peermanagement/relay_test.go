@@ -312,16 +312,10 @@ func TestValidatorSlotGetSelected(t *testing.T) {
 	}
 }
 
-// TestRelay_DeleteIdlePeers_EvictsStaleEntries pins G2: the periodic
-// sweep must evict peers whose lastMessage is older than Idled, and
-// drop the slot entirely when no peers remain. Without this, r.slots
-// only shrinks on explicit RemovePeer and leaks entries for validators
-// we no longer see.
-//
-// Mirrors rippled's Slot::deleteIdlePeer + Slots::deleteIdlePeers
-// (Slot.h:262-283, 821-839). Rippled drives the sweep every 4s from
-// the once-per-second overlay timer (OverlayImpl.cpp:107-111 +
-// Tuning::checkIdlePeers=4).
+// TestRelay_DeleteIdlePeers_EvictsStaleEntries pins the periodic sweep: an
+// idle peer is reset but kept, and the slot itself is dropped once its last
+// selection is older than MaxUnsquelchExpireDefault, so r.slots does not
+// leak entries for validators we no longer see.
 func TestRelay_DeleteIdlePeers_EvictsStaleEntries(t *testing.T) {
 	cfg := &Config{
 		EnableReduceRelay: true,
@@ -351,20 +345,30 @@ func TestRelay_DeleteIdlePeers_EvictsStaleEntries(t *testing.T) {
 		t.Fatalf("precondition: PeerID(1) should exist before sweep")
 	}
 
-	// Advance the sweep clock past Idled from the peer's lastMessage.
-	// The slot stored peer.LastMessage ~= time.Now() inside OnMessage.
-	// Passing a now that is Idled+1s in the future triggers eviction.
-	sweepNow := time.Now().Add(Idled + time.Second)
-	relay.deleteIdlePeers(sweepNow)
-
-	// The slot had exactly one peer, and that peer was idle — the slot
-	// should have been deleted from r.slots after the sweep.
+	// Past Idled the peer is reset but kept, and the slot stays.
+	relay.deleteIdlePeers(time.Now().Add(Idled + time.Second))
+	slot.mu.RLock()
+	peer, exists := slot.peers[PeerID(1)]
+	slot.mu.RUnlock()
+	if !exists || peer.Count != 0 {
+		t.Fatalf("idle peer should be kept with a reset count; exists=%v", exists)
+	}
 	relay.mu.RLock()
 	_, stillThere := relay.slots[string(validator)]
+	relay.mu.RUnlock()
+	if !stillThere {
+		t.Fatal("slot dropped before its last selection aged out")
+	}
+
+	// Past MaxUnsquelchExpireDefault since the slot's last selection
+	// (its creation here), the slot is dropped.
+	relay.deleteIdlePeers(time.Now().Add(MaxUnsquelchExpireDefault + time.Second))
+	relay.mu.RLock()
+	_, stillThere = relay.slots[string(validator)]
 	slotCount := len(relay.slots)
 	relay.mu.RUnlock()
 	if stillThere {
-		t.Fatalf("slot should have been deleted after its only peer idled out; %d slots remain", slotCount)
+		t.Fatalf("slot should have been dropped after its last selection aged out; %d slots remain", slotCount)
 	}
 }
 
@@ -604,12 +608,9 @@ func TestRelay_UnsquelchedPeerRelayDoesNotCharge(t *testing.T) {
 	}
 }
 
-// TestRelay_DeleteIdlePeers_DemotesSelectedBelowQuorum pins G2's
-// safety rule: if a slot was in Selected state and the sweep reduces
-// the remaining peer count below MaxSelectedPeers, the slot must be
-// demoted back to Counting so future updates can re-select. Without
-// this, a slot stays "Selected" pointing at peers that have all gone
-// silent, and the relay never retries selection for that validator.
+// TestRelay_DeleteIdlePeers_DemotesSelectedBelowQuorum pins the sweep of an
+// idle selected peer: the slot is demoted back to Counting so future updates
+// can re-select, and the idle peers are reset but kept.
 func TestRelay_DeleteIdlePeers_DemotesSelectedBelowQuorum(t *testing.T) {
 	mock := newMockSquelchCallback()
 	slot := NewValidatorSlot(5, mock.callback)
@@ -644,13 +645,13 @@ func TestRelay_DeleteIdlePeers_DemotesSelectedBelowQuorum(t *testing.T) {
 
 	relay.deleteIdlePeers(now)
 
-	// Slot must still exist (two fresh peers remain) but must have
-	// been demoted to Counting: 2 < MaxSelectedPeers=5.
+	// Slot must still exist but must have been demoted to Counting
+	// because idle selected peers were swept.
 	relay.mu.RLock()
 	_, stillThere := relay.slots[string(validator)]
 	relay.mu.RUnlock()
 	if !stillThere {
-		t.Fatalf("slot should remain: 2 fresh peers were not evicted")
+		t.Fatalf("slot should remain: its last selection is recent")
 	}
 
 	slot.mu.RLock()
@@ -658,10 +659,10 @@ func TestRelay_DeleteIdlePeers_DemotesSelectedBelowQuorum(t *testing.T) {
 	remaining := len(slot.peers)
 	slot.mu.RUnlock()
 
-	if remaining != 2 {
-		t.Fatalf("expected 2 remaining peers after sweep, got %d", remaining)
+	if remaining != 5 {
+		t.Fatalf("expected idle peers to be kept, got %d peers", remaining)
 	}
 	if state != RelaySlotCounting {
-		t.Fatalf("slot state = %v; want RelaySlotCounting after dropping below MaxSelectedPeers", state)
+		t.Fatalf("slot state = %v; want RelaySlotCounting after an idle selected peer", state)
 	}
 }
