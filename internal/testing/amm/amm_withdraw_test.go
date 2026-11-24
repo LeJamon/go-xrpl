@@ -841,6 +841,7 @@ func TestFixReserveCheckOnWithdrawal(t *testing.T) {
 func TestAMMWithdrawMPTIssuerReserveCheck(t *testing.T) {
 	env := amm.NewAMMTestEnv(t)
 	env.EnableFeature("MPTokensV2")
+	env.EnableFeature("fixAMMv1_2")
 
 	for _, account := range []*jtx.Account{env.GW, env.Alice, env.Carol} {
 		env.FundAmount(account, uint64(jtx.XRP(100_000)))
