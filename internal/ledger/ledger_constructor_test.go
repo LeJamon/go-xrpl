@@ -8,6 +8,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -111,6 +112,12 @@ func TestFromGenesisRejectsMalformedAmendments(t *testing.T) {
 
 func TestReadFeeSettingsTypeValidation(t *testing.T) {
 	feesKey := keylet.Fees()
+	validAccountRoot, err := state.SerializeAccountRoot(&state.AccountRoot{
+		Account: "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+	})
+	if err != nil {
+		t.Fatalf("serialize valid AccountRoot: %v", err)
+	}
 	typeHeader := func(k keylet.Keylet) []byte {
 		return []byte{0x11, byte(k.Type >> 8), byte(k.Type)}
 	}
@@ -120,7 +127,9 @@ func TestReadFeeSettingsTypeValidation(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "missing", data: nil},
-		{name: "wrong entry type", data: append(typeHeader(keylet.Amendments()), 0)},
+		{name: "wrong entry type valid SLE", data: validAccountRoot},
+		{name: "wrong entry type malformed SLE", data: append(typeHeader(keylet.Amendments()), 0), wantErr: true},
+		{name: "unknown entry type", data: []byte{0x11, 0xff, 0xff}, wantErr: true},
 		{name: "malformed type header", data: []byte{0x01, 0x00, 0x00}, wantErr: true},
 		{name: "malformed fee settings", data: append(typeHeader(feesKey), 0), wantErr: true},
 	}

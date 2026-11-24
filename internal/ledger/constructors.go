@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
@@ -247,8 +248,9 @@ func NewOpenWithHeader(
 
 // ReadFeeSettings loads the singleton FeeSettings entry from a state map.
 // A well-formed entry of another ledger type at the fee key is treated as
-// absent, matching keylet::feeSettings() lookup semantics. Malformed type
-// headers and malformed FeeSettings payloads remain errors.
+// absent, matching keylet::feeSettings() lookup semantics. A mismatched entry
+// is still fully decoded before it is ignored, so malformed SLE bytes remain
+// errors just as they do for a FeeSettings payload.
 func ReadFeeSettings(ctx context.Context, stateMap *shamap.SHAMap) (*state.FeeSettings, error) {
 	feesKey := keylet.Fees()
 	item, found, err := stateMap.GetContext(ctx, feesKey.Key)
@@ -263,6 +265,9 @@ func ReadFeeSettings(ctx context.Context, stateMap *shamap.SHAMap) (*state.FeeSe
 		return nil, fmt.Errorf("decode fee settings type: %w", err)
 	}
 	if typ != feesKey.Type {
+		if _, err := binarycodec.DecodeBytes(item.Data()); err != nil {
+			return nil, fmt.Errorf("decode fee settings entry: %w", err)
+		}
 		return nil, nil
 	}
 	settings, err := state.ParseFeeSettings(item.Data())
