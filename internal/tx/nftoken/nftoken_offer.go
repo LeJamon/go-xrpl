@@ -3,6 +3,7 @@ package nftoken
 import (
 	"errors"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -180,6 +181,15 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 	return result, ter.TesSUCCESS
 }
 
+func tokenOfferReserve(ctx *tx.ApplyContext) (uint64, bool) {
+	if ctx.Rules().Enabled(amendment.FeatureSponsor) {
+		return tx.RequiredAccountReserve(ctx.Config, ctx.Account, 1, 0)
+	}
+	// Before Sponsor, rippled applies the owner delta to the raw uint32
+	// count, including its wraparound behavior.
+	return ctx.AccountReserve(ctx.Account.OwnerCount + 1), true
+}
+
 func tokenOfferCreateApply(
 	ctx *tx.ApplyContext,
 	tokenID [32]byte,
@@ -189,8 +199,9 @@ func tokenOfferCreateApply(
 	expiration *uint32,
 	isSellOffer bool,
 ) ter.Result {
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
-		return result
+	reserve, ok := tokenOfferReserve(ctx)
+	if !ok || ctx.PriorBalance() < reserve {
+		return ter.TecINSUFFICIENT_RESERVE
 	}
 
 	accountID := ctx.AccountID
@@ -236,7 +247,7 @@ func tokenOfferCreateApply(
 		return ctx.Internal("insert NFTokenOffer", err)
 	}
 
-	ctx.Account.OwnerCount++
+	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)
 
 	return ter.TesSUCCESS
 }

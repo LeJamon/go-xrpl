@@ -437,7 +437,7 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) ter.Result {
 		return insertResult.Result
 	}
 
-	ctx.Account.OwnerCount += uint32(insertResult.PagesCreated)
+	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, insertResult.PagesCreated)
 
 	// MintedNFTokens was already incremented above.
 

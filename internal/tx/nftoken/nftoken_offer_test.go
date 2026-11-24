@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -24,6 +25,35 @@ func TestOfferDirectoryResults(t *testing.T) {
 		if got := offerDirInsertError(ctx, "insert offer", tc.err); got != tc.want {
 			t.Errorf("%v: got %v, want %v", tc.err, got, tc.want)
 		}
+	}
+}
+
+func TestTokenOfferReserveOwnerDelta(t *testing.T) {
+	config := tx.EngineConfig{
+		ReserveBase:      100,
+		ReserveIncrement: 10,
+		Rules:            amendment.EmptyRules(),
+	}
+
+	legacy := &tx.ApplyContext{
+		Account: &state.AccountRoot{OwnerCount: ^uint32(0)},
+		Config:  config,
+	}
+	reserve, ok := tokenOfferReserve(legacy)
+	if !ok || reserve != config.AccountReserve(0) {
+		t.Fatalf("legacy reserve = (%d, %v), want (%d, true)", reserve, ok, config.AccountReserve(0))
+	}
+
+	config.Rules = amendment.NewRulesBuilder().Enable(amendment.FeatureSponsor).Build()
+	sponsored := &state.AccountRoot{
+		OwnerCount:          ^uint32(0),
+		SponsoredOwnerCount: 1,
+	}
+	sponsoredCtx := &tx.ApplyContext{Account: sponsored, Config: config}
+	reserve, ok = tokenOfferReserve(sponsoredCtx)
+	want := config.AccountReserveWithCounts(^uint32(0), 1)
+	if !ok || reserve != want {
+		t.Fatalf("sponsored reserve = (%d, %v), want (%d, true)", reserve, ok, want)
 	}
 }
 
