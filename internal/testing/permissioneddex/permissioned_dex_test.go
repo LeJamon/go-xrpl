@@ -20,6 +20,7 @@ import (
 	coreAmm "github.com/LeJamon/go-xrpl/internal/tx/amm"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/stretchr/testify/require"
 )
 
@@ -2119,6 +2120,47 @@ func TestPermissionedDEX_HybridOfferDirectories(t *testing.T) {
 			requireDirectoryMembership(t, env, dir, offerKey, false)
 		}
 		jtx.RequireOwnerCount(t, env, dex.Bob, ownerCount-1)
+	}
+}
+
+func TestPermissionedDEX_HybridOfferWithEmptyAdditionalBooks(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		fixed bool
+	}{
+		{"before-fixCleanup3_1_3", false},
+		{"with-fixCleanup3_1_3", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := jtx.NewTestEnv(t)
+			if tc.fixed {
+				env.EnableFeature("fixCleanup3_1_3")
+			} else {
+				env.DisableFeature("fixCleanup3_1_3")
+			}
+			dex := SetupPermissionedDEX(t, env)
+			key := keylet.Offer(dex.Bob.ID, env.Seq(dex.Bob))
+			jtx.RequireTxSuccess(t, env.Submit(offerBuilder.OfferCreate(dex.Bob, jtx.XRPTxAmount(10_000_000), dex.USD(10)).
+				DomainID(dex.DomainID).Hybrid().Build()))
+			env.Close()
+
+			raw, err := env.Ledger().Read(key)
+			require.NoError(t, err)
+			var offer entry.Offer
+			require.NoError(t, offer.Decode(raw))
+			offer.SetAdditionalBooks([]any{})
+			raw, err = offer.Encode()
+			require.NoError(t, err)
+			require.NoError(t, env.Ledger().Update(key, raw))
+
+			result := env.Submit(paymentBuilder.PayIssued(dex.Alice, dex.Carol, dex.USD(10)).
+				Paths(usdPath(dex.GW)).SendMax(jtx.XRPTxAmount(10_000_000)).DomainID(dex.DomainIDHex).Build())
+			if tc.fixed {
+				jtx.RequireTxClaimed(t, result, "tecPATH_PARTIAL")
+			} else {
+				jtx.RequireTxSuccess(t, result)
+			}
+		})
 	}
 }
 

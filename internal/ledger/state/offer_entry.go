@@ -36,6 +36,25 @@ type offerBookLink struct {
 	node      uint64
 }
 
+func (offer *LedgerOffer) HasDomainID() bool {
+	if offer.DomainID != ([32]byte{}) {
+		return true
+	}
+	if !offer.decoded.HasDomainID() {
+		return false
+	}
+	original, err := offer.decoded.GetDomainID()
+	return err == nil && original == offer.DomainID
+}
+
+func (offer *LedgerOffer) AdditionalBookCount() (int, bool) {
+	entry := offer.decoded
+	if err := setOfferAdditionalBooks(&entry, offer); err != nil {
+		return 0, false
+	}
+	return len(entry.AdditionalBooks), entry.HasAdditionalBooks()
+}
+
 // SerializeLedgerOffer serializes a LedgerOffer to binary for storage
 func SerializeLedgerOffer(offer *LedgerOffer) ([]byte, error) {
 	entry := offer.decoded
@@ -64,15 +83,7 @@ func SerializeLedgerOffer(offer *LedgerOffer) ([]byte, error) {
 	} else {
 		entry.ClearExpiration()
 	}
-	domainIDUnchanged := false
-	if entry.HasDomainID() {
-		original, err := entry.GetDomainID()
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode Offer.DomainID: %w", err)
-		}
-		domainIDUnchanged = original == offer.DomainID
-	}
-	if offer.DomainID != [32]byte{} || domainIDUnchanged {
+	if offer.HasDomainID() {
 		entry.SetDomainIDValue(offer.DomainID)
 	} else {
 		entry.ClearDomainID()
