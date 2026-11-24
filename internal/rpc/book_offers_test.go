@@ -742,7 +742,7 @@ func TestBookOffersAssetStringsTruncateNULAndCanonicalize(t *testing.T) {
 			require.NoError(t, err)
 
 			result, rpcErr := method.Handle(ctx, params)
-			require.NoError(t, rpcErr)
+			require.Nil(t, rpcErr)
 			require.NotNil(t, result)
 			assert.Equal(t, test.expectedPays, capturedPays)
 			assert.Equal(t, test.expectedGets, capturedGets)
