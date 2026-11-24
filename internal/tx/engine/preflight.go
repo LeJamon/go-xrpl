@@ -135,8 +135,8 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 
 // preflight1 runs rippled Transactor::preflight1 (which invokes preflight0) in
 // its exact order: delegate → preflight0 (NetworkID, flags mask) → account →
-// fee → signing-key shape → ticket+AccountTxnID → the outer-only
-// tfInnerBatchTxn rejection → Sponsor field validation.
+// fee → signing-key shape → ticket+AccountTxnID → inner-batch flag validation
+// → Sponsor field validation.
 // Reference: rippled Transactor.cpp preflight1/preflight0.
 func (e *Engine) preflight1(tx txcore.Transaction, common *txcore.Common, rules *amendment.Rules) ter.Result {
 	// The delegate check precedes preflight0 (and thus the NetworkID checks).
@@ -164,7 +164,7 @@ func (e *Engine) preflight1(tx txcore.Transaction, common *txcore.Common, rules 
 		return result
 	}
 	// The outer tfInnerBatchTxn rejection precedes the common Sponsor checks.
-	if result := preflightInnerBatchFlag(common, rules); result != ter.TesSUCCESS {
+	if result := preflightInnerBatchFlag(common, rules, false); result != ter.TesSUCCESS {
 		return result
 	}
 	if result := checkSponsorFields(tx, common, rules); result != ter.TesSUCCESS {
@@ -261,9 +261,11 @@ func runTypePreflight(tx txcore.Transaction, rules *amendment.Rules, flags txcor
 // preflight body in another seam would otherwise have that validation silently
 // skipped for an inner tx. Any failure collapses to temINVALID_INNER_BATCH at the
 // call site, so the intra-order here is immaterial.
-// Fee/signature/multi-sign/inner-flag rejections stay skipped (inner txs carry
-// Fee=0, no signature, no multi-signers, tfInnerBatchTxn set — all validated by
-// Batch.Validate()).
+// Fee/signature/multi-sign rejections stay skipped (inner txs carry Fee=0, no
+// signature, and no multi-signers — all validated by Batch.Validate()). The
+// inner flag/parent consistency check still runs here because it is part of
+// common preflight1 and must also protect callers that supply a parent context
+// without going through Batch's structural checks.
 func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	common := innerTx.GetCommon()
 	rules := e.rules()
@@ -297,6 +299,9 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if result := checkDelegate(innerTx, common, rules); result != ter.TesSUCCESS {
 		return result
 	}
+	if result := preflightInnerBatchFlag(common, rules, true); result != ter.TesSUCCESS {
+		return result
+	}
 	if result := checkSponsorFields(innerTx, common, rules); result != ter.TesSUCCESS {
 		return result
 	}
@@ -314,24 +319,18 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	return ter.TesSUCCESS
 }
 
-// preflightInnerBatchFlag rejects a transaction reaching the outer preflight
-// that carries tfInnerBatchTxn. That flag is only ever set by the Batch
-// transactor on the inner transactions it applies (which flow through
-// preflightInner, not here), so on the outer path it is always illegitimate. It
-// follows fee and sequence validation, so a transaction that is both
-// inner-flagged and malformed there surfaces the earlier code.
-//
-// Without BatchV1_1 the flag is undefined. With BatchV1_1 it is valid only on
-// an inner transaction carrying a parent batch ID, so the standalone path is
-// rejected as temINVALID_INNER_BATCH.
-func preflightInnerBatchFlag(common *txcore.Common, rules *amendment.Rules) ter.Result {
-	if common.Flags == nil || *common.Flags&txcore.TfInnerBatchTxn == 0 {
-		return ter.TesSUCCESS
-	}
-	if !rules.Enabled(amendment.FeatureBatchV1_1) {
+// preflightInnerBatchFlag validates tfInnerBatchTxn against the amendment and
+// the caller's parent-batch context. The amendment check precedes the
+// flag/parent consistency check, matching rippled preflight1.
+func preflightInnerBatchFlag(common *txcore.Common, rules *amendment.Rules, hasParentBatch bool) ter.Result {
+	hasInnerFlag := common.GetFlags()&txcore.TfInnerBatchTxn != 0
+	if hasInnerFlag && !rules.Enabled(amendment.FeatureBatchV1_1) {
 		return ter.TemINVALID_FLAG
 	}
-	return ter.TemINVALID_INNER_BATCH
+	if hasInnerFlag != hasParentBatch {
+		return ter.TemINVALID_INNER_BATCH
+	}
+	return ter.TesSUCCESS
 }
 
 // checkDelegate validates the sfDelegate field.
