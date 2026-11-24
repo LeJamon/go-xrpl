@@ -42,13 +42,12 @@ func setupAMMWithdrawMPTFixture(t *testing.T, poolMPT int64) *ammWithdrawMPTFixt
 	).Build()))
 	env.Close()
 
-	// Bob receives only LP tokens. The unrelated trust line leaves one spare
-	// owner object so the missing MPT holding is reserve-gated.
 	jtx.RequireTxSuccess(t, env.Submit(ammtest.AMMDeposit(env.Bob, ammtest.XRP(), asset).
 		Amount(ammtest.XRPAmount(100)).
 		SingleAsset().
 		Build()))
 	env.Close()
+	// The trust line makes the missing MPT holding Bob's third owner object.
 	env.Trust(env.Bob, env.GW, "USD", 1)
 	env.Close()
 	require.Equal(t, uint32(2), env.OwnerCount(env.Bob))
