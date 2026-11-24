@@ -52,6 +52,53 @@ type pathAlternativeJSON struct {
 // Reference: rippled RipplePathFind.cpp + PathRequest::parseJson/isValid.
 type ripplePathFindMethod struct{ baseHandler }
 
+// ValidatePathFindAccounts applies the ledger-dependent checks shared by the
+// path_find APIs. The request must have an existing source account. A missing
+// destination is only valid for native XRP payments that meet the effective
+// account reserve; convert-all requests intentionally bypass that reserve
+// check, matching rippled's PathRequest::isValid.
+func ValidatePathFindAccounts(
+	view types.LedgerStateView,
+	srcAccount, dstAccount [20]byte,
+	dstAmount state.Amount,
+	convertAll bool,
+) *rpcerrors.RpcError {
+	return validatePathFindAccounts(view, srcAccount, dstAccount, dstAmount, convertAll, "path_find")
+}
+
+func validatePathFindAccounts(
+	view types.LedgerStateView,
+	srcAccount, dstAccount [20]byte,
+	dstAmount state.Amount,
+	convertAll bool,
+	operation string,
+) *rpcerrors.RpcError {
+	if exists, err := view.Exists(keylet.Account(srcAccount)); err != nil {
+		return rpcInternalError(operation+": source account lookup failed", err)
+	} else if !exists {
+		return rpcerrors.RpcErrorSrcActNotFound("Source account not found.")
+	}
+
+	if exists, err := view.Exists(keylet.Account(dstAccount)); err != nil {
+		return rpcInternalError(operation+": destination account lookup failed", err)
+	} else if !exists {
+		if !dstAmount.IsNative() {
+			return rpcerrors.RpcErrorActNotFound("Account not found.")
+		}
+		if !convertAll {
+			fees, err := state.FeesForView(view)
+			if err != nil {
+				return rpcInternalError(operation+": fee settings lookup failed", err)
+			}
+			if dstAmount.Drops() < int64(fees.Reserve) {
+				return rpcerrors.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+			}
+		}
+	}
+
+	return nil
+}
+
 func (m *ripplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *rpcerrors.RpcError) {
 	if rpcErr := RequirePathSearch(ctx); rpcErr != nil {
 		return nil, rpcErr
@@ -166,28 +213,8 @@ func (m *ripplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	}
 
 	// Existence checks. Reference: rippled PathRequest::isValid.
-	if exists, err := view.Exists(keylet.Account(srcAccount)); err != nil {
-		return nil, rpcInternalError("ripple_path_find: source account lookup failed", err)
-	} else if !exists {
-		return nil, rpcerrors.RpcErrorSrcActNotFound("Source account not found.")
-	}
-	if exists, err := view.Exists(keylet.Account(dstAccount)); err != nil {
-		return nil, rpcInternalError("ripple_path_find: destination account lookup failed", err)
-	} else if !exists {
-		// Only XRP can be sent to a non-existent account, and the payment
-		// must meet the account reserve.
-		if !dstAmount.IsNative() {
-			return nil, rpcerrors.RpcErrorActNotFound("Account not found.")
-		}
-		if !convertAll {
-			fees, err := state.FeesForView(view)
-			if err != nil {
-				return nil, rpcInternalError("ripple_path_find: fee settings lookup failed", err)
-			}
-			if dstAmount.Drops() < int64(fees.Reserve) {
-				return nil, rpcerrors.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
-			}
-		}
+	if rpcErr := validatePathFindAccounts(view, srcAccount, dstAccount, dstAmount, convertAll, "ripple_path_find"); rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	// Run pathfinding at the production search level (rippled PATH_SEARCH).

@@ -255,6 +255,19 @@ func (m *pathFindRefreshManager) runJob(job pathFindRefreshJob) {
 		return
 	}
 
+	if rpcErr := job.target.session.validate(job.view); rpcErr != nil {
+		status := job.target.session.BuildErrorEvent(rpcErr)
+		event := clonePathFindEvent(status)
+		event.Type = "path_find"
+		data, err := json.Marshal(event)
+		if err != nil {
+			wsLog().Error("Failed to marshal path_find validation update", "err", err)
+			return
+		}
+		m.commit(job, status, data)
+		return
+	}
+
 	result := m.execute(job)
 	if result == nil || !m.jobCurrent(job) {
 		return

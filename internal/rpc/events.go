@@ -203,8 +203,11 @@ type PeerStatusEvent struct {
 // PathFindEvent represents path finding results
 // This is sent in response to path_find create requests
 type PathFindEvent struct {
-	Type               string            `json:"type,omitempty"`      // "path_find" on pushed updates
-	ID                 any               `json:"id,omitempty"`        // Request ID
+	Type               string            `json:"type,omitempty"` // "path_find" on pushed updates
+	ID                 any               `json:"id,omitempty"`   // Request ID
+	Error              string            `json:"error,omitempty"`
+	ErrorCode          int               `json:"error_code,omitempty"`
+	ErrorMessage       string            `json:"error_message,omitempty"`
 	SourceAccount      string            `json:"source_account"`      // Source account
 	DestinationAccount string            `json:"destination_account"` // Destination account
 	DestinationAmount  json.RawMessage   `json:"destination_amount"`  // Amount to deliver
@@ -212,6 +215,28 @@ type PathFindEvent struct {
 	Alternatives       []PathAlternative `json:"alternatives"`        // Alternative paths found
 	Status             string            `json:"status,omitempty"`
 	Closed             bool              `json:"closed,omitempty"`
+}
+
+func (e PathFindEvent) MarshalJSON() ([]byte, error) {
+	if e.Error != "" {
+		return json.Marshal(struct {
+			Type         string `json:"type,omitempty"`
+			Error        string `json:"error"`
+			ErrorCode    int    `json:"error_code"`
+			ErrorMessage string `json:"error_message,omitempty"`
+			Status       string `json:"status,omitempty"`
+			Closed       bool   `json:"closed,omitempty"`
+		}{
+			Type:         e.Type,
+			Error:        e.Error,
+			ErrorCode:    e.ErrorCode,
+			ErrorMessage: e.ErrorMessage,
+			Status:       e.Status,
+			Closed:       e.Closed,
+		})
+	}
+	type pathFindEvent PathFindEvent
+	return json.Marshal(pathFindEvent(e))
 }
 
 // PathAlternative represents a single path alternative
