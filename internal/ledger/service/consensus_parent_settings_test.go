@@ -105,3 +105,43 @@ func TestConsensusCloseParentSettingsReadError(t *testing.T) {
 		})
 	}
 }
+
+func TestConsensusCloseFeeSettingsLookup(t *testing.T) {
+	foreign, err := pseudo.SerializeAmendmentsSLE(&pseudo.AmendmentsSLE{
+		Amendments: [][32]byte{amendment.FeatureXRPFees},
+	})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name    string
+		leaf    []byte
+		wantErr bool
+	}{
+		{name: "absent"},
+		{name: "different entry type", leaf: foreign},
+		{name: "unreadable type", leaf: make([]byte, 16), wantErr: true},
+		{name: "malformed different entry", leaf: foreign[:len(foreign)-1], wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newConsensusParentGuardService(t)
+			genesis := svc.GetClosedLedger()
+			closeTime := genesis.CloseTime().Add(time.Second)
+			parent, err := ledger.NewOpen(genesis, closeTime)
+			require.NoError(t, err)
+			if tc.leaf == nil {
+				require.NoError(t, parent.Erase(keylet.Fees()))
+			} else {
+				require.NoError(t, parent.Update(keylet.Fees(), tc.leaf))
+			}
+			require.NoError(t, parent.Close(closeTime, 0))
+			require.NoError(t, svc.SwitchToPreferredLedger(parent))
+			_, err = svc.AcceptConsensusResult(t.Context(), parent, nil, nil, closeTime.Add(time.Second), true)
+			if tc.wantErr {
+				require.ErrorContains(t, err, "read parent fee settings")
+				require.Same(t, parent, svc.GetClosedLedger())
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, parent.Hash(), svc.GetClosedLedger().ParentHash())
+		})
+	}
+}

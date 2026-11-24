@@ -22,6 +22,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
@@ -387,20 +388,36 @@ func readFeesFromLedgerContext(ctx context.Context, l *ledger.Ledger) (baseFee, 
 	}
 	fees = l.Fees()
 
-	data, err := l.ReadContext(ctx, keylet.Fees())
+	data, err := l.ReadContext(ctx, keylet.Keylet{Key: keylet.Fees().Key})
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	if data == nil {
-		return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
-	}
-
-	feeSettings, err := state.ParseFeeSettings(data)
+	feeSettings, err := decodeFeeSettingsAtKey(data)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("parse FeeSettings: %w", err)
 	}
-	fees = mergeFeeSettings(fees, feeSettings)
+	if feeSettings != nil {
+		fees = mergeFeeSettings(fees, feeSettings)
+	}
 	return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
+}
+
+func decodeFeeSettingsAtKey(data []byte) (*state.FeeSettings, error) {
+	if data == nil {
+		return nil, nil
+	}
+	typ, err := state.DecodeType(data)
+	if err != nil {
+		return nil, err
+	}
+	if typ == entry.TypeFeeSettings {
+		return state.ParseFeeSettings(data)
+	}
+	other := entry.New(typ)
+	if other == nil {
+		return nil, fmt.Errorf("unsupported ledger entry type %d", typ)
+	}
+	return nil, other.Decode(data)
 }
 
 // FeesFromLedger returns the fee and reserve settings carried by a specific
