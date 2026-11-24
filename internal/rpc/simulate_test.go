@@ -16,6 +16,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	binarycodectypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -41,6 +42,7 @@ type mockLedgerServiceSimulate struct {
 	autofillSeqErr       error
 	currentNetworkFee    uint64
 	lastSeqHasTicket     bool
+	lastAutofillFeeJSON  []byte
 	feeAutofillCallCount int
 	seqAutofillCallCount int
 	transactionRules     *amendment.Rules
@@ -75,6 +77,7 @@ func (m *mockLedgerServiceSimulate) SimulateTransaction(txJSON []byte) (*types.S
 
 func (m *mockLedgerServiceSimulate) GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (uint64, error) {
 	m.feeAutofillCallCount++
+	m.lastAutofillFeeJSON = append(m.lastAutofillFeeJSON[:0], txJSON...)
 	if m.autofillFeeErr != nil {
 		return 0, m.autofillFeeErr
 	}
@@ -423,6 +426,23 @@ func TestSimulateMethod_SignedMultisig(t *testing.T) {
 		assert.Equal(t, "Invalid field 'tx.Signers'.", rpcErr.Message)
 	})
 
+	t.Run("Null Signers field — not an array", func(t *testing.T) {
+		params := map[string]any{
+			"tx_json": map[string]any{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+				"Signers":         nil,
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Invalid field 'tx.Signers'.", rpcErr.Message)
+	})
+
 	t.Run("Invalid Signers entry — not an object", func(t *testing.T) {
 		params := map[string]any{
 			"tx_json": map[string]any{
@@ -476,6 +496,96 @@ func TestSimulateMethod_SignedMultisig(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, "", signer["SigningPubKey"], "Signer SigningPubKey should be autofilled")
 		assert.Equal(t, "", signer["TxnSignature"], "Signer TxnSignature should be autofilled")
+	})
+
+	t.Run("Non-object SponsorSignature is rejected", func(t *testing.T) {
+		params := map[string]any{
+			"tx_json": map[string]any{
+				"TransactionType":  "AccountSet",
+				"Account":          validAccountAddress,
+				"SponsorSignature": "",
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Invalid field 'SponsorSignature', not object.", rpcErr.Message)
+	})
+
+	t.Run("SponsorSignature Signers errors use nested field path", func(t *testing.T) {
+		params := map[string]any{
+			"tx_json": map[string]any{
+				"TransactionType":  "AccountSet",
+				"Account":          validAccountAddress,
+				"SponsorSignature": map[string]any{"Signers": nil},
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Invalid field 'tx.SponsorSignature.Signers'.", rpcErr.Message)
+	})
+
+	t.Run("SponsorSignature autofill populates nested signing fields", func(t *testing.T) {
+		mock := newMockLedgerServiceSimulate()
+		mock.serverInfo = types.LedgerServerInfo{NetworkID: 1025}
+		sponsorCtx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleUser,
+			ApiVersion: types.ApiVersion2,
+			Services:   newSimulateTestServices(mock),
+		}
+		params := map[string]any{
+			"tx_json": map[string]any{
+				"TransactionType": "AccountSet",
+				"Account":         validAccountAddress,
+				"Sponsor":         validAccountAddress,
+				"SponsorFlags":    1,
+				"SponsorSignature": map[string]any{
+					"Signers": []any{
+						map[string]any{
+							"Signer": map[string]any{"Account": validAccountAddress},
+						},
+					},
+				},
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(sponsorCtx, paramsJSON)
+		require.Nil(t, rpcErr)
+		var feeProbe map[string]any
+		require.NoError(t, json.Unmarshal(mock.lastAutofillFeeJSON, &feeProbe))
+		assert.Equal(t, float64(1), feeProbe["Sequence"])
+		assert.Equal(t, float64(1025), feeProbe["NetworkID"])
+		assert.Equal(t, "", feeProbe["SigningPubKey"])
+		assert.Equal(t, "", feeProbe["TxnSignature"])
+		assert.NotContains(t, feeProbe, "Fee")
+		feeSponsor := feeProbe["SponsorSignature"].(map[string]any)
+		assert.Equal(t, "", feeSponsor["SigningPubKey"])
+		assert.Equal(t, "", feeSponsor["TxnSignature"])
+		feeSigner := feeSponsor["Signers"].([]any)[0].(map[string]any)["Signer"].(map[string]any)
+		assert.Equal(t, "", feeSigner["SigningPubKey"])
+		assert.Equal(t, "", feeSigner["TxnSignature"])
+		response := result.(map[string]any)
+		txJSON := response["tx_json"].(map[string]any)
+		sponsor, ok := txJSON["SponsorSignature"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "", sponsor["SigningPubKey"])
+		assert.Equal(t, "", sponsor["TxnSignature"])
+		signers, ok := sponsor["Signers"].([]any)
+		require.True(t, ok)
+		require.Len(t, signers, 1)
+		signer := signers[0].(map[string]any)["Signer"].(map[string]any)
+		assert.Equal(t, "", signer["SigningPubKey"])
+		assert.Equal(t, "", signer["TxnSignature"])
 	})
 }
 
@@ -748,6 +858,114 @@ func TestSimulateMethodBinarySentinelRoundTripAndJSONBoundary(t *testing.T) {
 	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
 }
 
+const simulateMPTIssuanceID = "000000010000000000000000000000000000000000000001"
+
+func simulateMPTPaymentFields(value any, txnSignature string) map[string]any {
+	return map[string]any{
+		"TransactionType": "Payment",
+		"Account":         validAccountAddress,
+		"Destination":     validAccountAddress,
+		"Amount": map[string]any{
+			"value":           value,
+			"mpt_issuance_id": simulateMPTIssuanceID,
+		},
+		"Fee":           "10",
+		"Sequence":      uint32(1),
+		"SigningPubKey": "",
+		"TxnSignature":  txnSignature,
+	}
+}
+
+func encodeSimulateMPTBlob(t *testing.T, value any, txnSignature string) string {
+	t.Helper()
+	blob, err := binarycodec.EncodeDecodedFields(simulateMPTPaymentFields(value, txnSignature))
+	require.NoError(t, err)
+	return strings.ToUpper(hex.EncodeToString(blob))
+}
+
+func TestSimulateMethod_MPTNegativeZeroCanonicalizesPublicProjection(t *testing.T) {
+	negativeZeroBlob := encodeSimulateMPTBlob(t, binarycodectypes.RawMPTValue{Negative: true}, "")
+	positiveZeroBlob := encodeSimulateMPTBlob(t, "0", "")
+
+	decodedBlob, err := hex.DecodeString(negativeZeroBlob)
+	require.NoError(t, err)
+	decoded, err := binarycodec.DecodeBytesAllowOverCap(decodedBlob)
+	require.NoError(t, err)
+	amount, ok := decoded["Amount"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, binarycodectypes.RawMPTValue{Negative: true}, amount["value"])
+
+	for _, binaryOutput := range []bool{false, true} {
+		t.Run(fmt.Sprintf("binary=%t", binaryOutput), func(t *testing.T) {
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleUser,
+				ApiVersion: types.ApiVersion2,
+				Services:   newSimulateTestServices(newMockLedgerServiceSimulate()),
+			}
+			paramsJSON, err := json.Marshal(map[string]any{
+				"tx_blob": strings.ToLower(negativeZeroBlob),
+				"binary":  binaryOutput,
+			})
+			require.NoError(t, err)
+
+			result, rpcErr := (&handlers.SimulateMethod{}).Handle(ctx, paramsJSON)
+			require.Nil(t, rpcErr)
+			response, ok := result.(map[string]any)
+			require.True(t, ok)
+
+			if binaryOutput {
+				assert.Equal(t, positiveZeroBlob, response["tx_blob"])
+				return
+			}
+
+			txJSON, ok := response["tx_json"].(map[string]any)
+			require.True(t, ok)
+			amount, ok := txJSON["Amount"].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, "0", amount["value"])
+			assert.Equal(t, strings.ToUpper(simulateMPTIssuanceID), amount["mpt_issuance_id"])
+		})
+	}
+}
+
+func TestSimulateMethod_MPTOverCapAmountBlobReturnsInvalidParams(t *testing.T) {
+	paramsJSON, err := json.Marshal(map[string]any{
+		"tx_blob": encodeSimulateMPTBlob(t, binarycodectypes.RawMPTValue{Magnitude: 1 << 63}, ""),
+	})
+	require.NoError(t, err)
+
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSimulateTestServices(newMockLedgerServiceSimulate()),
+	}
+	_, rpcErr := (&handlers.SimulateMethod{}).Handle(ctx, paramsJSON)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, "Field 'tx_json.Amount' has invalid data.", rpcErr.Message)
+}
+
+func TestSimulateMethod_SignedMPTOverCapBlobWinsAutofill(t *testing.T) {
+	paramsJSON, err := json.Marshal(map[string]any{
+		"tx_blob": encodeSimulateMPTBlob(t, binarycodectypes.RawMPTValue{Magnitude: 1 << 63}, "ABCD"),
+	})
+	require.NoError(t, err)
+
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSimulateTestServices(newMockLedgerServiceSimulate()),
+	}
+	_, rpcErr := (&handlers.SimulateMethod{}).Handle(ctx, paramsJSON)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, rpcerrors.RpcTX_SIGNED, rpcErr.Code)
+	assert.Equal(t, "transactionSigned", rpcErr.ErrorString)
+	assert.Equal(t, "Transaction should not be signed.", rpcErr.Message)
+}
+
 func TestSimulateMethod_MPTokensV2UsesCurrentRules(t *testing.T) {
 	const (
 		amountID  = "000000010000000000000000000000000000000000000001"
@@ -922,7 +1140,7 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 	t.Run("Sequence supplied skips GetAutofillSequence", func(t *testing.T) {
 		// rippled only invokes getAutofillSequence when Sequence is absent
-		// (Simulate.cpp:140-146); when the caller supplies Sequence, the
+		// (Simulate.cpp:150-156); when the caller supplies Sequence, the
 		// handler must not perform the source-account lookup that would
 		// otherwise surface rpcSRC_ACT_NOT_FOUND.
 		mock := newMockLedgerServiceSimulate()
@@ -989,7 +1207,7 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		txJSON := resp["tx_json"].(map[string]any)
 
 		assert.Equal(t, uint32(0), txJSON["Sequence"],
-			"rippled Simulate.cpp:68,140-146 writes Sequence=0 when TicketSequence is set")
+			"rippled Simulate.cpp:75,150-156 writes Sequence=0 when TicketSequence is set")
 		assert.True(t, mock.lastSeqHasTicket, "hasTicketSequence must propagate to the service")
 		assert.Equal(t, uint32(5), txJSON["TicketSequence"],
 			"caller-supplied TicketSequence is normalized to uint32 for downstream consumers")
@@ -1057,7 +1275,7 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		assert.Equal(t, "Fee of 5000 exceeds the requested tx limit of 100", rpcErr.Message)
 	})
 
-	t.Run("highFee precedes txSigned when both inputs conflict", func(t *testing.T) {
+	t.Run("txSigned precedes highFee when both inputs conflict", func(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
 		mock.autofillFeeErr = &svcerr.HighFeeError{Fee: 5000, Limit: 100}
 
@@ -1073,13 +1291,17 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, "highFee", rpcErr.ErrorString,
-			"rippled autofillTx runs Fee before the TxnSignature signed-check (Simulate.cpp:74-138)")
+		assert.Equal(t, "transactionSigned", rpcErr.ErrorString,
+			"rippled autofillTx normalizes signatures before Fee (Simulate.cpp:137-179)")
+		assert.Equal(t, 0, mock.feeAutofillCallCount,
+			"GetAutofillFee must not run after the signed-check rejects")
+		assert.Equal(t, 0, mock.seqAutofillCallCount,
+			"GetAutofillSequence must not run after the signed-check rejects")
 	})
 
 	t.Run("txSigned precedes srcActNotFound (signed-check before Sequence autofill)", func(t *testing.T) {
 		// rippled autofillTx runs the top-level TxnSignature signed-check at
-		// Simulate.cpp:129-138, BEFORE the Sequence autofill at 140-146. So a
+		// Simulate.cpp:121-130, BEFORE the Sequence autofill at 150-156. So a
 		// request with a non-empty TxnSignature and a missing source account
 		// must surface rpcTX_SIGNED, not rpcSRC_ACT_NOT_FOUND.
 		mock := newMockLedgerServiceSimulate()
@@ -1098,14 +1320,14 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, "transactionSigned", rpcErr.ErrorString,
-			"signed-check fires before Sequence autofill — rippled Simulate.cpp:129-146")
+			"signed-check fires before Sequence autofill — rippled Simulate.cpp:121-156")
 		assert.Equal(t, 0, mock.seqAutofillCallCount,
 			"GetAutofillSequence must not run once the signed-check has rejected")
 	})
 
 	t.Run("Signers signed-check precedes later signer's structural error", func(t *testing.T) {
 		// rippled's autofillTx Signers loop interleaves structural and
-		// signed-checks per-iteration (Simulate.cpp:97-127), so a signed
+		// signed-checks per-iteration (Simulate.cpp:87-118), so a signed
 		// TxnSignature on signers[0] fires rpcTX_SIGNED before signers[2]'s
 		// structural error is reached.
 		mock := newMockLedgerServiceSimulate()
@@ -1136,8 +1358,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 	t.Run("txSigned precedes srcActMalformed (Account check deferred to Sequence step)", func(t *testing.T) {
 		// rippled checks Account validity inside getAutofillSequence
-		// (Simulate.cpp:43-55), AFTER the top-level TxnSignature signed-check
-		// at 129-138. A bad Account combined with a non-empty TxnSignature
+		// (Simulate.cpp:46-75), AFTER the top-level TxnSignature signed-check
+		// at 121-130. A bad Account combined with a non-empty TxnSignature
 		// must therefore surface rpcTX_SIGNED, not rpcSRC_ACT_MALFORMED.
 		mock := newMockLedgerServiceSimulate()
 
@@ -1154,12 +1376,12 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		_, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, "transactionSigned", rpcErr.ErrorString,
-			"signed-check fires before Account format check — rippled Simulate.cpp:129-138 vs 50-54")
+			"signed-check fires before Account format check — rippled Simulate.cpp:121-130 vs 46-75")
 	})
 
 	t.Run("Sequence supplied + bad Account surfaces invalid_field, not srcActMalformed", func(t *testing.T) {
 		// rippled's autofill skips the Account check inside
-		// getAutofillSequence (Simulate.cpp:43-55) when Sequence is
+		// getAutofillSequence (Simulate.cpp:46-75) when Sequence is
 		// supplied, but STParsedJSONObject at Simulate.cpp:328-330 then
 		// validates the AccountID and surfaces invalid_field on
 		// failure — distinct from the rpcSRC_ACT_MALFORMED that the
@@ -1213,7 +1435,7 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 	})
 
 	t.Run("Custom NetworkID > 1024 is autofilled", func(t *testing.T) {
-		// rippled Simulate.cpp:148-153: NetworkID is autofilled only when
+		// rippled Simulate.cpp:158-163: NetworkID is autofilled only when
 		// the server's NETWORK_ID exceeds 1024.
 		mock := newMockLedgerServiceSimulate()
 		mock.serverInfo = types.LedgerServerInfo{NetworkID: 1025}
@@ -1230,7 +1452,32 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		result, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
 		require.Nil(t, rpcErr)
 		txJSON := result.(map[string]any)["tx_json"].(map[string]any)
-		assert.EqualValues(t, 1025, txJSON["NetworkID"])
+		assert.Equal(t, uint32(1025), txJSON["NetworkID"])
+	})
+
+	t.Run("Custom NetworkID > 1024 is autofilled for tx_blob", func(t *testing.T) {
+		mock := newMockLedgerServiceSimulate()
+		mock.serverInfo = types.LedgerServerInfo{NetworkID: 1025}
+		blob, err := binarycodec.Encode(map[string]any{
+			"TransactionType": "AccountSet",
+			"Account":         validAccountAddress,
+			"Fee":             "10",
+			"Sequence":        uint32(1),
+			"SigningPubKey":   "",
+			"TxnSignature":    "",
+		})
+		require.NoError(t, err)
+		paramsJSON, err := json.Marshal(map[string]any{"tx_blob": blob})
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
+		require.Nil(t, rpcErr)
+		txJSON := result.(map[string]any)["tx_json"].(map[string]any)
+		assert.Equal(t, uint32(1025), txJSON["NetworkID"])
+		assert.Equal(t, 0, mock.feeAutofillCallCount,
+			"Fee supplied by the blob must not invoke fee autofill")
+		assert.Equal(t, 0, mock.seqAutofillCallCount,
+			"Sequence supplied by the blob must not invoke sequence autofill")
 	})
 
 	t.Run("NetworkID <= 1024 is not autofilled", func(t *testing.T) {

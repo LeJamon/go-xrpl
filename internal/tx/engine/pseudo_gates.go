@@ -88,7 +88,7 @@ func (e *Engine) pseudoPreflight(tx txcore.Transaction, rules *amendment.Rules) 
 	// than a literal "0" so encodings like "00" or an absent Fee field map
 	// to the same beast::zero check rippled performs after parse.
 	// Reference: Change.cpp:50-56.
-	if !isZeroFee(common.Fee) {
+	if common.HasRawNonnativeFee() || !isZeroFee(common.Fee) {
 		return ter.TemBAD_FEE
 	}
 

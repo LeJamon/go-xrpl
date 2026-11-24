@@ -384,8 +384,8 @@ func DecodeBytes(b []byte) (map[string]any, error) {
 	return st.ToJSONStrict(p)
 }
 
-// DecodeBytesAllowOverCap decodes a transaction wire object while preserving
-// native amount magnitudes above the JSON supply cap.
+// DecodeBytesAllowOverCap preserves over-cap XRP and MPT magnitudes and the
+// wire sign of zero-valued MPTs in a decoded transaction.
 // Callers decoding generic ledger objects must use DecodeBytes.
 func DecodeBytesAllowOverCap(b []byte) (map[string]any, error) {
 	p := serdes.NewBinaryParserAllowOverCap(b, definitions.Get())

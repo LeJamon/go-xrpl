@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -46,6 +47,25 @@ func TestHasInvalidAmount_JSON(t *testing.T) {
 				t.Fatalf("HasInvalidAmount(%v) = %v, want %v", tt.fields, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestHasOverCapMPTTraversesBeyondCanonicalDepth(t *testing.T) {
+	amount := map[string]any{
+		"value":           binarytypes.RawMPTValue{Magnitude: maxMPTAmount + 1},
+		"mpt_issuance_id": "00000000000000000000000000000000000000000000000000",
+	}
+	leaf := map[string]any{"Amount": amount}
+	for i := 0; i < 12; i++ {
+		leaf = map[string]any{"RawTransaction": leaf}
+	}
+	fields := map[string]any{"RawTransactions": []any{leaf}}
+	if !HasOverCapMPT(fields) {
+		t.Fatal("HasOverCapMPT must inspect amounts beyond the canonical depth limit")
+	}
+	amount["value"] = "0"
+	if HasOverCapMPT(fields) {
+		t.Fatal("historical rules must accept a representable amount at this depth")
 	}
 }
 
