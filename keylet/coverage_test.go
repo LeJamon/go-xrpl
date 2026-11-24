@@ -6,6 +6,12 @@ import (
 	"github.com/LeJamon/go-xrpl/ledger/entry/schema"
 )
 
+// rc1StagedWithoutKeylet are the rippled 3.5.0-rc1 ledger entry types staged
+// for decoding only; go-xrpl has no keylet constructor for them yet.
+var rc1StagedWithoutKeylet = map[string]bool{
+	"TransactionProposal": true,
+}
+
 func TestEveryLedgerEntryTypeHasKeylet(t *testing.T) {
 	var account [20]byte
 	var key [32]byte
@@ -47,6 +53,12 @@ func TestEveryLedgerEntryTypeHasKeylet(t *testing.T) {
 	for _, spec := range schema.Specs {
 		known[spec.Name] = true
 		k, ok := keylets[spec.Name]
+		if rc1StagedWithoutKeylet[spec.Name] {
+			if ok {
+				t.Errorf("staged rc1 ledger entry type %s now has a keylet; list it in the table instead", spec.Name)
+			}
+			continue
+		}
 		if !ok {
 			t.Errorf("ledger entry type %s has no keylet constructor in this table", spec.Name)
 			continue
