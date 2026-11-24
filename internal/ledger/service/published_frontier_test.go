@@ -17,7 +17,7 @@ func awaitPublishedLedger(t *testing.T, published <-chan uint32) uint32 {
 	select {
 	case seq := <-published:
 		return seq
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("timed out waiting for published ledger")
 		return 0
 	}
@@ -111,7 +111,7 @@ func TestPublishedFrontier_LagsValidatedQueueUntilOrderedDelivery(t *testing.T) 
 
 	select {
 	case <-firstStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("first publication was not delivered")
 	}
 	assert.Equal(t, uint32(20), svc.GetServerInfo().PublishedLedgerSeq)
@@ -123,7 +123,7 @@ func TestPublishedFrontier_LagsValidatedQueueUntilOrderedDelivery(t *testing.T) 
 	close(releaseFirst)
 	select {
 	case <-secondDelivered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("second publication was not delivered")
 	}
 	assert.Equal(t, uint32(21), svc.GetServerInfo().PublishedLedgerSeq)
@@ -156,7 +156,7 @@ func TestPublishedFrontier_LosslessBeyondFormerQueueCapacity(t *testing.T) {
 	svc.dispatchLedgerEvent(&LedgerAcceptedEvent{Ledger: first})
 	select {
 	case <-firstStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("first publication was not delivered")
 	}
 
@@ -172,7 +172,7 @@ func TestPublishedFrontier_LosslessBeyondFormerQueueCapacity(t *testing.T) {
 
 	select {
 	case <-allDelivered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("publication queue did not deliver every event")
 	}
 	assert.Equal(t, uint32(eventCount), calls.Load())

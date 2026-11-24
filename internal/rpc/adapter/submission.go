@@ -91,19 +91,8 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 		if parseErr != nil {
 			return malformedSubmitResult(), nil
 		}
-		fields, canonicalErr := binarycodec.DecodeBytesAllowOverCap(rawBlob)
-		if canonicalErr != nil {
-			return malformedSubmitResult(), nil
-		}
-		canonicalHex, canonicalErr := binarycodec.Encode(fields)
-		if canonicalErr != nil {
-			return malformedSubmitResult(), nil
-		}
-		rawBlob, canonicalErr = hex.DecodeString(canonicalHex)
-		if canonicalErr != nil {
-			return nil, fmt.Errorf("decode canonical tx_blob: %w", canonicalErr)
-		}
-		if bindErr := tx.BindRawBytes(transaction, rawBlob); bindErr != nil {
+		rawBlob = transaction.GetRawBytes()
+		if len(rawBlob) == 0 {
 			return malformedSubmitResult(), nil
 		}
 	} else {
@@ -116,30 +105,22 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 
 	if rawBlob == nil {
 		if txMap, fErr := transaction.Flatten(); fErr == nil {
-			if hexStr, eErr := binarycodec.Encode(txMap); eErr == nil {
-				var decodeErr error
-				rawBlob, decodeErr = hex.DecodeString(hexStr)
-				if decodeErr != nil {
-					return nil, fmt.Errorf("decode encoded transaction: %w", decodeErr)
-				}
+			if encoded, eErr := binarycodec.EncodeBytes(txMap); eErr == nil {
+				rawBlob = encoded
 			}
 		}
 	}
 	if rawBlob == nil {
 		var jsonMap map[string]any
 		if jErr := json.Unmarshal(txJSON, &jsonMap); jErr == nil {
-			if hexStr, eErr := binarycodec.Encode(jsonMap); eErr == nil {
-				var decodeErr error
-				rawBlob, decodeErr = hex.DecodeString(hexStr)
-				if decodeErr != nil {
-					return nil, fmt.Errorf("decode encoded transaction: %w", decodeErr)
-				}
+			if encoded, eErr := binarycodec.EncodeBytes(jsonMap); eErr == nil {
+				rawBlob = encoded
 			}
 		}
 	}
 
 	// Submit to the service with the raw blob for canonical ordering
-	result, err := a.svc.SubmitTransaction(transaction, rawBlob, failHard)
+	result, err := a.backend().SubmitTransaction(transaction, rawBlob, failHard)
 	if err != nil {
 		return internalSubmitResult(), nil
 	}

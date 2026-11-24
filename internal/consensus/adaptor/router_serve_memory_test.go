@@ -129,12 +129,12 @@ func TestLedgerServeWorkspaceConcurrentCeiling(t *testing.T) {
 	for range 2 {
 		select {
 		case <-entered:
-		case <-time.After(5 * time.Second):
+		case <-time.After(progressTimeout):
 			unblock()
 			t.Fatal("admitted serving workers did not reach queue admission")
 		}
 	}
-	require.Eventually(t, func() bool { return account.Snapshot().Denied == 6 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return account.Snapshot().Denied == 6 }, progressTimeout, time.Millisecond)
 	require.Equal(t, 2*reservation, account.Snapshot().Used)
 	require.Equal(t, 2*reservation, account.Snapshot().Peak)
 	unblock()

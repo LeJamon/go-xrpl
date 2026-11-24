@@ -199,7 +199,7 @@ func Deserialize(data []byte) (*Manifest, error) {
 		serialized:      append([]byte(nil), data...),
 		masterSignature: masterSignature,
 	}
-	canonical, err := binarycodec.EncodeBytes(decoded)
+	canonical, err := binarycodec.EncodeDecodedFields(decoded)
 	if err != nil {
 		return nil, fmt.Errorf("manifest: canonical encoding: %w", err)
 	}
@@ -297,7 +297,7 @@ func signingPreimageFromDecoded(decoded map[string]any) ([]byte, error) {
 			delete(decoded, k)
 		}
 	}
-	body, err := binarycodec.EncodeBytes(decoded)
+	body, err := binarycodec.EncodeDecodedFields(decoded)
 	if err != nil {
 		return nil, err
 	}

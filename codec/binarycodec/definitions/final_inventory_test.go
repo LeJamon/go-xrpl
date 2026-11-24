@@ -95,7 +95,7 @@ func TestFinalDefinitionsMatchRippled(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(types) != 31 {
-		t.Fatalf("rippled v3.4.1 has %d type definitions, want 31", len(types))
+		t.Fatalf("pinned rippled has %d type definitions, want 31", len(types))
 	}
 
 	fieldSpecs, err := parseOracleSFields(rippled.File(t, "include/xrpl/protocol/detail/sfields.macro"))
@@ -103,7 +103,7 @@ func TestFinalDefinitionsMatchRippled(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(fieldSpecs) != 349 {
-		t.Fatalf("rippled v3.4.1 has %d active SFields, want 349", len(fieldSpecs))
+		t.Fatalf("pinned rippled has %d active SFields, want 349", len(fieldSpecs))
 	}
 	addRC1Staged(t, "FIELDS", fieldSpecs, rc1StagedSFields)
 	expectedFields, err := buildExpectedFields(types, fieldSpecs)
@@ -120,7 +120,7 @@ func TestFinalDefinitionsMatchRippled(t *testing.T) {
 	}
 	transactionTypes["Invalid"] = -1
 	if len(transactionTypes) != 83 {
-		t.Fatalf("rippled v3.4.1 has %d transaction definitions including Invalid, want 83", len(transactionTypes))
+		t.Fatalf("pinned rippled has %d transaction definitions including Invalid, want 83", len(transactionTypes))
 	}
 	addRC1Staged(t, "TRANSACTION_TYPES", transactionTypes, rc1StagedTransactionTypes)
 
@@ -130,7 +130,7 @@ func TestFinalDefinitionsMatchRippled(t *testing.T) {
 	}
 	ledgerEntryTypes["Invalid"] = -1
 	if len(ledgerEntryTypes) != 32 {
-		t.Fatalf("rippled v3.4.1 has %d ledger-entry definitions including Invalid, want 32", len(ledgerEntryTypes))
+		t.Fatalf("pinned rippled has %d ledger-entry definitions including Invalid, want 32", len(ledgerEntryTypes))
 	}
 	addRC1Staged(t, "LEDGER_ENTRY_TYPES", ledgerEntryTypes, rc1StagedLedgerEntryTypes)
 
@@ -139,7 +139,7 @@ func TestFinalDefinitionsMatchRippled(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(transactionResults) != 197 {
-		t.Fatalf("rippled v3.4.1 has %d transaction results, want 197", len(transactionResults))
+		t.Fatalf("pinned rippled has %d transaction results, want 197", len(transactionResults))
 	}
 	addRC1Staged(t, "TRANSACTION_RESULTS", transactionResults, rc1StagedTransactionResults)
 

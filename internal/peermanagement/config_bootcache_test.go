@@ -123,7 +123,7 @@ func TestOverlayStopWaitsForRunCompletionBeforeFinalCacheSave(t *testing.T) {
 	close(runComplete)
 	select {
 	case <-stopDone:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Stop did not complete after Run completion")
 	}
 
@@ -151,7 +151,7 @@ func TestOverlayRunRejectsCorruptReservationBeforeReadiness(t *testing.T) {
 		assert.Contains(t, err.Error(), "discovery error")
 	case <-o.ListenerReady():
 		t.Fatal("corrupt persisted state was reported ready")
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("overlay did not reject corrupt persisted state")
 	}
 	require.NoError(t, o.Stop())

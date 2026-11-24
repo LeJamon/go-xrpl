@@ -1,6 +1,8 @@
 package payment
 
 import (
+	"encoding/json"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
@@ -59,6 +61,24 @@ type PathStep struct {
 	TypeHex       string `json:"type_hex,omitempty"`
 }
 
+func (p *PathStep) UnmarshalJSON(data []byte) error {
+	type plain PathStep
+	value := plain(*p)
+	fields := struct {
+		*plain
+		Currency *string `json:"currency"`
+	}{plain: &value}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	// Only an explicit currency identifies an asset on this step.
+	if fields.Currency != nil {
+		value.Currency = tx.NormalizeNativeCurrency(*fields.Currency)
+	}
+	*p = PathStep(value)
+	return nil
+}
+
 // Payment flags
 const (
 	// tfNoDirectRipple prevents direct rippling (tfNoRippleDirect in rippled)
@@ -105,6 +125,19 @@ func NewPayment(account, destination string, amount tx.Amount) *Payment {
 
 func (p *Payment) TxType() tx.Type {
 	return tx.TypePayment
+}
+
+// Consequences reports the XRP the payment may spend: SendMax when present,
+// otherwise Amount, and nothing when that amount is not XRP.
+func (p *Payment) Consequences() tx.Consequences {
+	maxAmount := p.Amount
+	if p.SendMax != nil {
+		maxAmount = *p.SendMax
+	}
+	if !maxAmount.IsNative() {
+		return tx.Consequences{}
+	}
+	return tx.Consequences{PotentialSpend: uint64(maxAmount.Drops())}
 }
 
 // GetDomainID exposes the payment's DomainID to the ValidPermissionedDEX invariant.

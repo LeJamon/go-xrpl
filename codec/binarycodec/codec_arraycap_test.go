@@ -79,6 +79,17 @@ func TestEncode_JSONArraySizeCap(t *testing.T) {
 	})
 }
 
+func TestEncodeDecodedFields_JSONArraySizeCap(t *testing.T) {
+	hashes := make([]any, 513)
+	for i := range hashes {
+		hashes[i] = strings.Repeat("A", 64)
+	}
+	_, err := EncodeDecodedFields(map[string]any{"Amendments": hashes})
+	if _, ok := AsArrayTooLargeError(err); !ok {
+		t.Fatalf("decoded-field encode must retain the Vector256 array cap, got %v", err)
+	}
+}
+
 func TestEncodeBytesTrusted_BypassesJSONInputArrayCap(t *testing.T) {
 	const issuer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 

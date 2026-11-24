@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -488,4 +489,142 @@ func TestChannelVerifyOddLengthHex(t *testing.T) {
 	_, rpcErr = verify("0330E7FC9D56BB25D6893BA3F317AE5BCF33B3291BD63DB32654A313222F7FD020", "ABG")
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, rpcerrors.RpcINVALID_PARAMS, rpcErr.Code)
+}
+
+func TestChannelVerify_ParamTypes(t *testing.T) {
+	channelID := channelJSONString(t, channelRegressionID)
+	publicKey := channelJSONString(t, channelRegressionPublicKey)
+	signature := channelJSONString(t, channelRegressionSignature)
+	request := func(pk, id, amount, sig string) json.RawMessage {
+		return json.RawMessage(`{"public_key":` + pk + `,"channel_id":` + id + `,"amount":` + amount + `,"signature":` + sig + `}`)
+	}
+
+	errTests := []struct {
+		name    string
+		params  json.RawMessage
+		code    int
+		message string
+	}{
+		{name: "numeric amount", params: request(publicKey, channelID, `1000`, signature), code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "boolean amount", params: request(publicKey, channelID, `false`, signature), code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "null amount", params: request(publicKey, channelID, `null`, signature), code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "object amount", params: request(publicKey, channelID, `{}`, signature), code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "array amount", params: request(publicKey, channelID, `[]`, signature), code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "trailing amount text", params: request(publicKey, channelID, `"1000x"`, signature), code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "trailing amount whitespace", params: request(publicKey, channelID, `"1000 "`, signature), code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "leading amount text", params: request(publicKey, channelID, `"x1000"`, signature), code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "non-numeric amount", params: request(publicKey, channelID, `"x"`, signature), code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "space amount", params: request(publicKey, channelID, `" "`, signature), code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "split amount", params: request(publicKey, channelID, `"1000 1000"`, signature), code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "comma amount", params: request(publicKey, channelID, `"1,000"`, signature), code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "leading amount whitespace", params: request(publicKey, channelID, `" 1000"`, signature), code: rpcerrors.RpcCHANNEL_AMT_MALFORMED, message: "Payment channel amount is malformed."},
+		{name: "numeric public key", params: request(`5`, channelID, `"1000"`, signature), code: rpcerrors.RpcPUBLIC_MALFORMED, message: "Public key is malformed."},
+		{name: "boolean public key", params: request(`true`, channelID, `"1000"`, signature), code: rpcerrors.RpcPUBLIC_MALFORMED, message: "Public key is malformed."},
+		{name: "null public key", params: request(`null`, channelID, `"1000"`, signature), code: rpcerrors.RpcPUBLIC_MALFORMED, message: "Public key is malformed."},
+		{name: "double public key", params: request(`5.0`, channelID, `"1000"`, signature), code: rpcerrors.RpcPUBLIC_MALFORMED, message: "Public key is malformed."},
+		{name: "object public key", params: request(`{}`, channelID, `"1000"`, signature), code: rpcerrors.RpcINTERNAL, message: "Internal error."},
+		{name: "array public key", params: request(`[]`, channelID, `"1000"`, signature), code: rpcerrors.RpcINTERNAL, message: "Internal error."},
+		{name: "public key checked before amount", params: request(`5`, channelID, `5`, signature), code: rpcerrors.RpcPUBLIC_MALFORMED, message: "Public key is malformed."},
+		{name: "numeric channel id", params: request(publicKey, `5`, `"1000"`, signature), code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid parameters."},
+		{name: "null channel id", params: request(publicKey, `null`, `"1000"`, signature), code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid parameters."},
+		{name: "boolean channel id", params: request(publicKey, `true`, `"1000"`, signature), code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid parameters."},
+		{name: "double channel id", params: request(publicKey, `0.0`, `"1000"`, signature), code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid parameters."},
+		{name: "object channel id", params: request(publicKey, `{}`, `"1000"`, signature), code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid parameters."},
+		{name: "array channel id", params: request(publicKey, `[]`, `"1000"`, signature), code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid parameters."},
+		{name: "double signature", params: request(publicKey, channelID, `"1000"`, `5.0`), code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid parameters."},
+		{name: "scientific signature", params: request(publicKey, channelID, `"1000"`, `5e0`), code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid parameters."},
+		{name: "null signature", params: request(publicKey, channelID, `"1000"`, `null`), code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid parameters."},
+		{name: "boolean signature", params: request(publicKey, channelID, `"1000"`, `true`), code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid parameters."},
+		{name: "object signature", params: request(publicKey, channelID, `"1000"`, `{}`), code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid parameters."},
+		{name: "array signature", params: request(publicKey, channelID, `"1000"`, `[]`), code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid parameters."},
+		{name: "integer signature", params: request(publicKey, channelID, `"1000"`, `5`), code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid parameters."},
+		{name: "zero integer signature", params: request(publicKey, channelID, `"1000"`, `0`), code: rpcerrors.RpcINVALID_PARAMS, message: "Invalid parameters."},
+	}
+
+	handler := &handlers.ChannelVerifyMethod{}
+	for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2} {
+		apiName := "api1"
+		if apiVersion == types.ApiVersion2 {
+			apiName = "api2"
+		}
+		ctx := &types.RpcContext{ApiVersion: apiVersion}
+		for _, tc := range errTests {
+			t.Run(apiName+"/"+tc.name, func(t *testing.T) {
+				_, rpcErr := handler.Handle(ctx, tc.params)
+				require.NotNil(t, rpcErr)
+				assert.Equal(t, tc.code, rpcErr.Code)
+				assert.Equal(t, tc.message, rpcErr.Message)
+			})
+		}
+	}
+
+	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1}
+	verified := func(amount, sig string) bool {
+		result, rpcErr := handler.Handle(ctx, request(publicKey, channelID, amount, sig))
+		require.Nil(t, rpcErr)
+		return result.(map[string]any)["signature_verified"].(bool)
+	}
+	assert.True(t, verified(`"+1000"`, signature), "a leading plus sign is accepted")
+	assert.False(t, verified(`"1000"`, `"ABC"`), "an odd-length signature is decoded and checked")
+}
+
+func TestChannelVerify_ZeroChannelIDAliases(t *testing.T) {
+	authorizeHandler := &handlers.ChannelAuthorizeMethod{}
+	authorizeParams := json.RawMessage(`{"channel_id":"` + strings.Repeat("0", 64) + `","amount":"1000","secret":"` + channelRegressionSecret + `"}`)
+	authorizeResult, authorizeErr := authorizeHandler.Handle(channelAuthorizeTestContext(types.ApiVersion1), authorizeParams)
+	require.Nil(t, authorizeErr)
+	signature := channelJSONString(t, authorizeResult.(map[string]any)["signature"].(string))
+
+	verifyHandler := &handlers.ChannelVerifyMethod{}
+	request := func(channelID string) json.RawMessage {
+		return json.RawMessage(`{"public_key":` + channelJSONString(t, channelRegressionPublicKey) + `,"channel_id":` + channelID + `,"amount":"1000","signature":` + signature + `}`)
+	}
+	for _, channelID := range []string{
+		`"` + strings.Repeat("0", 64) + `"`,
+		`"0"`,
+	} {
+		result, rpcErr := verifyHandler.Handle(&types.RpcContext{ApiVersion: types.ApiVersion1}, request(channelID))
+		require.Nil(t, rpcErr)
+		assert.True(t, result.(map[string]any)["signature_verified"].(bool))
+	}
+}
+
+func TestChannelVerify_PublicKeyBoundaries(t *testing.T) {
+	handler := &handlers.ChannelVerifyMethod{}
+	request := func(publicKey string) json.RawMessage {
+		return json.RawMessage(`{"public_key":` + publicKey + `,"channel_id":` + channelJSONString(t, channelRegressionID) + `,"amount":"1000","signature":` + channelJSONString(t, channelRegressionSignature) + `}`)
+	}
+
+	oddPublicKey := channelJSONString(t, channelRegressionPublicKey[1:])
+	result, rpcErr := handler.Handle(&types.RpcContext{ApiVersion: types.ApiVersion1}, request(oddPublicKey))
+	require.Nil(t, rpcErr)
+	assert.True(t, result.(map[string]any)["signature_verified"].(bool))
+
+	_, rpcErr = handler.Handle(&types.RpcContext{ApiVersion: types.ApiVersion1}, request(channelJSONString(t, channelRegressionInvalidBase58PK)))
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, rpcerrors.RpcPUBLIC_MALFORMED, rpcErr.Code)
+}
+
+func TestChannelVerify_NULStringsAreTruncated(t *testing.T) {
+	handler := &handlers.ChannelVerifyMethod{}
+	verify := func(apiVersion int, publicKey, channelID, amount, signature string) bool {
+		params, err := json.Marshal(map[string]string{
+			"public_key": publicKey,
+			"channel_id": channelID,
+			"amount":     amount,
+			"signature":  signature,
+		})
+		require.NoError(t, err)
+		result, rpcErr := handler.Handle(&types.RpcContext{ApiVersion: apiVersion}, params)
+		require.Nil(t, rpcErr)
+		return result.(map[string]any)["signature_verified"].(bool)
+	}
+
+	for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2} {
+		assert.True(t, verify(apiVersion, channelRegressionPublicKey, channelRegressionID, "1000", channelRegressionSignature))
+		assert.True(t, verify(apiVersion, channelRegressionPublicKey+"\x00ignored", channelRegressionID, "1000", channelRegressionSignature))
+		assert.True(t, verify(apiVersion, channelRegressionPublicKey, channelRegressionID+"\x00ignored", "1000", channelRegressionSignature))
+		assert.True(t, verify(apiVersion, channelRegressionPublicKey, channelRegressionID, "1000\x00ignored", channelRegressionSignature))
+		assert.True(t, verify(apiVersion, channelRegressionPublicKey, channelRegressionID, "1000", channelRegressionSignature+"\x00ignored"))
+	}
 }

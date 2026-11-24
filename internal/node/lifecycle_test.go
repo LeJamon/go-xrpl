@@ -94,7 +94,7 @@ func TestWaitForShutdownReturnsContextCause(t *testing.T) {
 		if !errors.Is(err, cause) {
 			t.Fatalf("waitForShutdown() error = %v, want %v", err, cause)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("waitForShutdown() did not return after context cancellation")
 	}
 }
@@ -174,7 +174,7 @@ func TestValidatorReloadLoopCancellationDoesNotWaitForLoader(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("reload loop did not stop after cancellation")
 	}
 	close(release)
@@ -269,13 +269,13 @@ func TestValidatorReloadLoopSerializesAndCoalescesRequests(t *testing.T) {
 		if call != 2 {
 			t.Fatalf("pending reload call = %d, want 2", call)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("coalesced pending reload was not processed")
 	}
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("reload loop did not stop")
 	}
 	if got := calls.Load(); got != 2 {
@@ -321,7 +321,7 @@ func TestNodeRuntimeShutdownReportsCloseErrorsInDependencyOrder(t *testing.T) {
 	}}
 
 	runtime := &nodeRuntime{nodeStore: db, repo: repo, serverLog: xrpllog.Discard()}
-	err := runtime.shutdownWithin(time.Second)
+	err := runtime.shutdownWithin(progressTimeout)
 	if !errors.Is(err, dbErr) || !errors.Is(err, repoErr) {
 		t.Fatalf("shutdown error = %v, want both close errors", err)
 	}
@@ -353,6 +353,7 @@ func TestNodeRuntimeShutdownBoundsBlockingStoreClose(t *testing.T) {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("shutdown error = %v, want deadline exceeded", err)
 		}
+	// The bound is the property: staying below storeShutdownGrace proves the total budget ended shutdown.
 	case <-time.After(time.Second):
 		t.Fatal("shutdown exceeded its total budget")
 	}
@@ -388,7 +389,7 @@ func TestNodeRuntimeShutdownLeavesStoresOpenWhileCheckpointFlushIsRunning(t *tes
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("shutdown error = %v, want deadline exceeded", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("shutdown exceeded its total budget")
 	}
 	if nodeStoreClosed.Load() || repositoryClosed.Load() {
@@ -433,7 +434,7 @@ func TestNodeRuntimeShutdownLeavesStoresOpenWhileTransportHandlerIsRunning(t *te
 	}()
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("HTTP handler did not start")
 	}
 
@@ -458,7 +459,7 @@ func TestNodeRuntimeShutdownLeavesStoresOpenWhileTransportHandlerIsRunning(t *te
 	close(release)
 	select {
 	case <-requestDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("transport handler did not exit after release")
 	}
 }
@@ -509,7 +510,7 @@ func TestNodeRuntimeStopsPeerConnectSchedulerBeforeConsensus(t *testing.T) {
 	}
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("peer connect worker did not start")
 	}
 	runtime := &nodeRuntime{
@@ -520,7 +521,7 @@ func TestNodeRuntimeStopsPeerConnectSchedulerBeforeConsensus(t *testing.T) {
 		}}},
 		serverLog: xrpllog.Discard(),
 	}
-	if err := runtime.shutdownWithin(time.Second); err != nil {
+	if err := runtime.shutdownWithin(progressTimeout); err != nil {
 		t.Fatalf("shutdown error = %v", err)
 	}
 	mu.Lock()
@@ -541,7 +542,7 @@ func TestNodeRuntimeDoesNotStopConsensusWhilePeerConnectIsRunning(t *testing.T) 
 	require.NoError(t, scheduler.Enqueue("blocked"))
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("peer connect worker did not start")
 	}
 	var consensusStopped atomic.Bool

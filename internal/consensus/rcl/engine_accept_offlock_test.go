@@ -94,7 +94,7 @@ func TestEngine_AcceptLedger_OffLockDoesNotBlockPeerHandlers(t *testing.T) {
 
 	select {
 	case <-entered:
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("BuildLedger never started")
 	}
 	if got := engine.BuildingLedgerSeq(); got != round.Seq {
@@ -132,7 +132,7 @@ func TestEngine_AcceptLedger_OffLockDoesNotBlockPeerHandlers(t *testing.T) {
 			if err != nil {
 				t.Fatalf("peer handler returned error: %v", err)
 			}
-		case <-time.After(2 * time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("peer handler blocked during the off-lock apply — e.mu was held across BuildLedger")
 		}
 	}
@@ -149,7 +149,7 @@ func TestEngine_AcceptLedger_OffLockDoesNotBlockPeerHandlers(t *testing.T) {
 	close(release)
 	select {
 	case <-acceptDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("acceptLedger never completed after releasing the build")
 	}
 
@@ -216,7 +216,7 @@ func TestEngine_AcceptLedger_BroadcastsValidationAfterFinality(t *testing.T) {
 
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("local validation did not reach finality")
 	}
 
@@ -234,14 +234,14 @@ func TestEngine_AcceptLedger_BroadcastsValidationAfterFinality(t *testing.T) {
 	}()
 	select {
 	case <-tickDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("finality callback held the engine lock")
 	}
 
 	releaseOnce.Do(func() { close(release) })
 	select {
 	case <-acceptDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("accepted-ledger completion did not resume")
 	}
 
@@ -304,7 +304,7 @@ func TestEngine_StopCancelsInFlightBuild(t *testing.T) {
 	}()
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("BuildLedger did not start")
 	}
 
@@ -315,12 +315,12 @@ func TestEngine_StopCancelsInFlightBuild(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Stop: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Stop did not cancel the in-flight BuildLedger")
 	}
 	select {
 	case <-acceptDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("acceptance owner did not finish after cancellation")
 	}
 	if got := base.lastLCL.Seq(); got != 100 {

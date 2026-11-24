@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -193,7 +194,7 @@ func (n *NFTokenCreateOffer) Preclaim(view tx.ReadOnlyLedgerView, config tx.Engi
 	}
 
 	if !isSellOffer {
-		funds := tx.AccountFunds(view, accountID, n.Amount, true, config.ReserveBase, config.ReserveIncrement)
+		funds := mptutil.AccountFunds(view, accountID, n.Amount, true, config.ReserveBase, config.ReserveIncrement)
 		if funds.Signum() <= 0 {
 			return ter.TecUNFUNDED_OFFER
 		}

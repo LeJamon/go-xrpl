@@ -645,7 +645,7 @@ func buildQueueTxBody(qtx types.QueuedTxInfo, binary, expanded bool, apiVersion 
 	}
 	if binary {
 		body := map[string]any{}
-		if blob, err := binarycodec.Encode(qtx.TxJSON); err == nil {
+		if blob, err := encodeCanonicalTransaction(qtx.TxJSON); err == nil {
 			body["tx_blob"] = blob
 		}
 		if apiVersion > 1 {
@@ -722,7 +722,7 @@ func expandStoredTransaction(
 
 	if binary {
 		// Encode tx_json back to binary hex
-		txBlob, err := binarycodec.Encode(storedTx.TxJSON)
+		txBlob, err := encodeCanonicalTransaction(storedTx.TxJSON)
 		if err == nil {
 			txEntry["tx_blob"] = txBlob
 		} else {

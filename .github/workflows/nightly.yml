@@ -3,8 +3,8 @@ name: Nightly
 # Heavy, slow, or possibly-flaky checks that are too expensive for the per-PR
 # gate but catch the bugs that gate can't afford to look for: data races in the
 # heaviest suite, native macOS/arm64 + 32-bit *runtime* behaviour, a longer
-# multi-node consensus soak, coverage trend, and benchmark rot. None of these
-# block a PR; failures are triaged the next morning.
+# multi-node consensus soak, coverage trend, ledger-entry encoder parity, and
+# benchmark rot. None of these block a PR; failures are triaged the next morning.
 
 on:
   schedule:
@@ -26,7 +26,7 @@ jobs:
     name: Offer suite (-race)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: go test -race -count=1 -timeout 45m ./internal/testing/offer/...
 
@@ -37,25 +37,14 @@ jobs:
     name: Test (macOS / arm64)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
-      - name: Check out rippled v3.2.0 oracle
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/oracle-pin
+      - name: Check out equivalent inventory sources (public rippled)
+        uses: actions/checkout@v7
         with:
-          repository: XRPLF/rippled
-          ref: 3c43f4614f87965298773279ff5b85d4c56c637b
-          path: rippled-worktrees/v3.2.0-oracle
-      - name: Check out rippled v3.3.0 oracle
-        uses: actions/checkout@v5
-        with:
-          repository: XRPLF/rippled
-          ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
-          path: rippled-worktrees/v3.3.0-oracle
-      - name: Check out equivalent inventory sources (public rippled v3.4.1)
-        uses: actions/checkout@v5
-        with:
-          repository: XRPLF/rippled
-          ref: 00e640751460c137636fdb6dae6b4280de355d81
-          path: rippled-worktrees/v3.4.1-oracle
+          repository: ${{ env.ORACLE_PUBLIC_REPOSITORY }}
+          ref: ${{ env.ORACLE_PUBLIC_COMMIT }}
+          path: ${{ env.ORACLE_CHECKOUT }}
       - uses: ./.github/actions/setup
       - run: go test -count=1 -timeout 30m ./codec/... ./crypto/... ./shamap/... ./ledger/... ./keylet/... ./drops/... ./internal/tx/...
 
@@ -71,25 +60,14 @@ jobs:
       GOARCH: "386"
       CGO_ENABLED: "0"
     steps:
-      - uses: actions/checkout@v5
-      - name: Check out rippled v3.2.0 oracle
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/oracle-pin
+      - name: Check out equivalent inventory sources (public rippled)
+        uses: actions/checkout@v7
         with:
-          repository: XRPLF/rippled
-          ref: 3c43f4614f87965298773279ff5b85d4c56c637b
-          path: rippled-worktrees/v3.2.0-oracle
-      - name: Check out rippled v3.3.0 oracle
-        uses: actions/checkout@v5
-        with:
-          repository: XRPLF/rippled
-          ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
-          path: rippled-worktrees/v3.3.0-oracle
-      - name: Check out equivalent inventory sources (public rippled v3.4.1)
-        uses: actions/checkout@v5
-        with:
-          repository: XRPLF/rippled
-          ref: 00e640751460c137636fdb6dae6b4280de355d81
-          path: rippled-worktrees/v3.4.1-oracle
+          repository: ${{ env.ORACLE_PUBLIC_REPOSITORY }}
+          ref: ${{ env.ORACLE_PUBLIC_COMMIT }}
+          path: ${{ env.ORACLE_CHECKOUT }}
       - uses: ./.github/actions/setup
         with:
           cgo: "false"
@@ -113,13 +91,13 @@ jobs:
           ./internal/observability/...
 
   consensus-soak:
-    name: Consensus soak (private rippled 3.4.1)
+    name: Consensus soak (pinned private rippled)
     runs-on: ubuntu-latest
     env:
-      ORACLE_IMAGE: goxrpl-oracle:3.4.1
       EVIDENCE_DIR: /tmp/issue-2017-nightly-oracle
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/oracle-pin
 
       - name: Build goxrpl docker image
         run: docker build --build-arg "VERSION=${{ github.sha }}" -t goxrpl:latest .
@@ -153,7 +131,7 @@ jobs:
 
       - name: Upload oracle provenance
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nightly-oracle-${{ github.sha }}
           path: ${{ env.EVIDENCE_DIR }}
@@ -163,25 +141,14 @@ jobs:
     name: Coverage (informational)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - name: Check out rippled v3.2.0 oracle
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/oracle-pin
+      - name: Check out equivalent inventory sources (public rippled)
+        uses: actions/checkout@v7
         with:
-          repository: XRPLF/rippled
-          ref: 3c43f4614f87965298773279ff5b85d4c56c637b
-          path: rippled-worktrees/v3.2.0-oracle
-      - name: Check out rippled v3.3.0 oracle
-        uses: actions/checkout@v5
-        with:
-          repository: XRPLF/rippled
-          ref: 00a178fb92ca49521b937ae1a99d863765ea8a90
-          path: rippled-worktrees/v3.3.0-oracle
-      - name: Check out equivalent inventory sources (public rippled v3.4.1)
-        uses: actions/checkout@v5
-        with:
-          repository: XRPLF/rippled
-          ref: 00e640751460c137636fdb6dae6b4280de355d81
-          path: rippled-worktrees/v3.4.1-oracle
+          repository: ${{ env.ORACLE_PUBLIC_REPOSITORY }}
+          ref: ${{ env.ORACLE_PUBLIC_COMMIT }}
+          path: ${{ env.ORACLE_CHECKOUT }}
       - uses: ./.github/actions/setup
       - name: Run tests with coverage
         run: >
@@ -190,7 +157,7 @@ jobs:
           ./amendment/... ./protocol/... ./config/...
           ./internal/tx/... ./internal/ledger/... ./internal/txq/... ./internal/rpc/...
       - name: Upload to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         continue-on-error: true
         with:
           files: coverage.out
@@ -201,7 +168,7 @@ jobs:
     name: Benchmark smoke (must still run)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       # Compile and run every benchmark once (-benchtime=1x, -run='^$' skips
       # tests). Guards against benchmarks silently rotting into non-compiling or
@@ -209,4 +176,29 @@ jobs:
       # (e.g. benchmark-action/github-action-benchmark) layered on later.
       - run: >
           go test -run='^$' -bench=. -benchtime=1x -timeout 30m
-          ./codec/... ./crypto/... ./shamap/... ./internal/tx/... ./internal/consensus/adaptor/...
+          ./codec/... ./crypto/... ./shamap/... ./ledger/... ./internal/tx/... ./internal/consensus/adaptor/...
+
+  # The ledger-entry encoder writes binary directly; the map-based encoder it
+  # replaced stays as an oracle. Built with entryencodeparity, every Encode()
+  # also runs the old encoder and panics on any byte difference, so the pinned
+  # corpus and the engine suites check the new writer on real traffic.
+  entry-encode-parity:
+    name: Entry encoder parity (pinned corpus)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/oracle-pin
+      # The tx shard's descriptor and template tests read transactions.macro.
+      - name: Check out equivalent inventory sources (public rippled)
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.ORACLE_PUBLIC_REPOSITORY }}
+          ref: ${{ env.ORACLE_PUBLIC_COMMIT }}
+          path: ${{ env.ORACLE_CHECKOUT }}
+      - uses: ./.github/actions/setup
+      - name: Pinned conformance corpus
+        run: >
+          GOXRPL_FIXTURES_DIR="$ORACLE_CORPUS" GOXRPL_CONFORMANCE_REQUIRED=1
+          go test -tags entryencodeparity -count=1 -timeout 30m ./internal/testing/conformance
+      - name: Transaction engine and ledger packages
+        run: go test -tags entryencodeparity -count=1 -timeout 45m ./internal/tx/... ./internal/ledger/...

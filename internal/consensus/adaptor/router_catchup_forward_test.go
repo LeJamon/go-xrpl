@@ -616,7 +616,7 @@ func TestAdaptor_FastLoadedLedgerIsReplacedBySameHeightQuorum(t *testing.T) {
 	select {
 	case err = <-switchDone:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("quorum-backed provisional replacement was not handed to consensus")
 	}
 	require.Equal(t, replacementHash, svc.GetClosedLedger().Hash())
@@ -624,10 +624,10 @@ func TestAdaptor_FastLoadedLedgerIsReplacedBySameHeightQuorum(t *testing.T) {
 		validated := svc.GetValidatedLedger()
 		return validated != nil && validated.Hash() == replacementHash &&
 			!svc.IsFastLoadProvisional() && !svc.NeedsInitialSync()
-	}, time.Second, 10*time.Millisecond)
+	}, progressTimeout, 10*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return r.adaptor.GetOperatingMode() == consensus.OpModeTracking
-	}, time.Second, 10*time.Millisecond)
+	}, progressTimeout, 10*time.Millisecond)
 	require.Contains(t, engine.getLedgers(), consensus.LedgerID(replacementHash))
 }
 
@@ -654,7 +654,7 @@ func TestRouter_FastLoadedSameHeightQuorumAcquiresUnknownReplacement(t *testing.
 
 	require.Eventually(t, func() bool {
 		return len(sender.legacyCalls()) == 1
-	}, time.Second, 10*time.Millisecond)
+	}, progressTimeout, 10*time.Millisecond)
 	assert.Empty(t, sender.replayCalls())
 	legacy := sender.legacyCalls()
 	require.Len(t, legacy, 1)

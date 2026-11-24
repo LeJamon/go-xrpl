@@ -116,7 +116,7 @@ func TestRouter_QueuesDisconnectCleanupOffOverlayLoop(t *testing.T) {
 	}()
 	select {
 	case <-queued:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		r.catchupReplay.peersMu.Unlock()
 		t.Fatal("queuePeerDisconnect blocked on peer cleanup")
 	}
@@ -133,11 +133,11 @@ func TestRouter_QueuesDisconnectCleanupOffOverlayLoop(t *testing.T) {
 		remaining := len(r.catchupReplay.peerStates)
 		r.catchupReplay.peersMu.RUnlock()
 		return remaining == 0 && !containsPeer(il.Peers(), 1)
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	cancel()
 	select {
 	case <-runDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("router did not join peer disconnect cleanup")
 	}
 }
@@ -340,10 +340,7 @@ func TestRouter_DisconnectRemovesPeerFromActiveAcquisitions(t *testing.T) {
 }
 
 func TestRouter_HistoryPeerNotFoundDoesNotHotLoop(t *testing.T) {
-	r, _, sender, svc := makeRouter(t)
-	// History is strictly below the local validated tip, not a future target.
-	targetSeq := svc.GetClosedLedgerIndex() - 1
-	targetHash := [32]byte{0xD8}
+	r, sender, svc, targetSeq, targetHash := newRouterWithHistoryGap(t)
 	sessions := &testPeerSessions{connected: map[peermanagement.PeerID]bool{1: true}}
 	r.setPeerSessionView(sessions)
 	trackCatchupPeer(r, 1, svc.GetClosedLedgerIndex())
@@ -428,7 +425,7 @@ func TestRouter_GenericAcquisitionWaitsForReplacementPeer(t *testing.T) {
 
 	sessions.set(2, true)
 	trackCatchupPeer(r, 2, targetSeq, targetHash)
-	r.catchupReplay.escalateAcquisition(il, time.Now().Add(4*time.Second))
+	r.catchupReplay.escalateAcquisition(il)
 
 	calls := sender.legacyCalls()
 	require.Len(t, calls, 2)
@@ -447,7 +444,7 @@ func TestRouter_PeerlessAcquisitionSkipsFetchPackEscalation(t *testing.T) {
 	require.NoError(t, il.GotBase(r.buildLedgerBaseNodes(context.Background(), parent)))
 	require.True(t, il.RemovePeer(1))
 
-	r.catchupReplay.escalateAcquisition(il, time.Now().Add(4*time.Second))
+	r.catchupReplay.escalateAcquisition(il)
 
 	assert.False(t, il.FetchPackRequested())
 }
@@ -482,14 +479,14 @@ func TestRouter_CatchupBaseRequestFailureUsesInboundRetryTimer(t *testing.T) {
 
 	now := time.Now().Add(4 * time.Second)
 	require.Equal(t, inbound.TimerEscalate, il.OnTimer(now))
-	r.catchupReplay.escalateAcquisition(il, now)
+	r.catchupReplay.escalateAcquisition(il)
 	require.Len(t, sender.legacyCalls(), 2)
 	assert.Equal(t, 1, il.Timeouts())
 
 	for timeout := 2; timeout <= 6; timeout++ {
 		now = now.Add(4 * time.Second)
 		require.Equal(t, inbound.TimerEscalate, il.OnTimer(now))
-		r.catchupReplay.escalateAcquisition(il, now)
+		r.catchupReplay.escalateAcquisition(il)
 	}
 	now = now.Add(4 * time.Second)
 	require.Equal(t, inbound.TimerFailed, il.OnTimer(now))

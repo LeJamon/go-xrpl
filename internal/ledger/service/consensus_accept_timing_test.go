@@ -125,7 +125,7 @@ func TestConsensusAcceptanceTimingsIncludeCanceledAdmission(t *testing.T) {
 			if phase == "persistence" {
 				svc.persistAdmissions = persistenceAdmissionLimit
 			} else {
-				svc.nodeStore = state
+				svc.nodeStore = bindNodeStore(state)
 			}
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
@@ -140,13 +140,13 @@ func TestConsensusAcceptanceTimingsIncludeCanceledAdmission(t *testing.T) {
 					svc.persistMu.Lock()
 					defer svc.persistMu.Unlock()
 					return svc.persistCapacityWake != nil
-				}, time.Second, time.Millisecond)
+				}, progressTimeout, time.Millisecond)
 			} else {
 				select {
 				case <-state.entered:
 				case err := <-done:
 					t.Fatalf("acceptance returned before state admission: %v", err)
-				case <-time.After(time.Second):
+				case <-time.After(progressTimeout):
 					t.Fatal("acceptance did not reach state admission")
 				}
 			}
@@ -154,7 +154,7 @@ func TestConsensusAcceptanceTimingsIncludeCanceledAdmission(t *testing.T) {
 			select {
 			case err := <-done:
 				require.ErrorIs(t, err, context.Canceled)
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("acceptance did not cancel admission")
 			}
 			record, ok := logger.latest()

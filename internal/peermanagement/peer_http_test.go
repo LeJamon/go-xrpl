@@ -110,6 +110,8 @@ func TestPeerHTTPHealth(t *testing.T) {
 		{"load warning boundary", "load_factor_server", 25728, 503, `{"load_factor":100.5}`},
 		{"load warning upper", "load_factor_server", 255744, 503, `{"load_factor":999}`},
 		{"load critical boundary", "load_factor_server", 256000, 500, `{"load_factor":1000}`},
+		{"persistence healthy", "ledger_persistence", map[string]any{"consecutive_failures": 0}, 200, `{}`},
+		{"persistence failing", "ledger_persistence", map[string]any{"consecutive_failures": 2, "last_failed_seq": 9}, 503, `{"ledger_persistence":2}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := healthyPeerServerInfo()

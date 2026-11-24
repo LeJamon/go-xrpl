@@ -138,7 +138,7 @@ func TestAcquisitionWork_DoesNotBlockRouter(t *testing.T) {
 	}
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("acquisition worker did not start")
 	}
 	time.Sleep(150 * time.Millisecond)
@@ -157,13 +157,13 @@ func TestAcquisitionWork_DoesNotBlockRouter(t *testing.T) {
 		Type:    message.TypeProposeLedger,
 		Payload: encodePayload(t, proposal),
 	}
-	require.Eventually(t, func() bool { return len(engine.getProposals()) == 1 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return len(engine.getProposals()) == 1 }, progressTimeout, time.Millisecond)
 
 	close(release)
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("router did not join acquisition worker")
 	}
 }
@@ -510,7 +510,7 @@ func TestHandlePeerConnect_EmitsManifestBeforeAcquisitionTraversalCompletes(t *t
 	}
 	select {
 	case <-engine.entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("proposal did not block Router.Run")
 	}
 
@@ -526,26 +526,26 @@ func TestHandlePeerConnect_EmitsManifestBeforeAcquisitionTraversalCompletes(t *t
 	if !processedOffRouter {
 		select {
 		case <-entered:
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("queued peer connect was not admitted by Router.Run")
 		}
 	}
 	require.Eventually(t, func() bool {
 		got := events.snapshot()
 		return len(got) == 1 && got[0] == "manifest"
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	close(release)
 
 	require.Eventually(t, func() bool {
 		got := events.snapshot()
 		return len(got) == 2 && got[0] == "manifest" && got[1] == "state request"
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	assert.Equal(t, []string{"manifest", "state request"}, events.snapshot())
 	assert.Contains(t, ledger.Peers(), uint64(22))
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Router.Run did not stop")
 	}
 }
@@ -801,10 +801,10 @@ func TestAcquisitionWorkResultPromotesResolvedHashOnlyConsensusLedger(t *testing
 
 	result := <-lane.results()
 	require.Equal(t, pivotHeader.LedgerIndex, pivotAcquisition.Seq())
-	require.False(t, router.catchupReplay.standardReplay.active)
+	require.False(t, router.catchupReplay.standardReplay.isActive())
 	router.catchupReplay.handleAcquisitionWorkResult(result)
 
-	require.True(t, router.catchupReplay.standardReplay.active)
+	require.True(t, router.catchupReplay.standardReplay.isActive())
 	require.Equal(t, pivotHeader.LedgerIndex, router.catchupReplay.standardReplay.pivotSeq)
 	require.Equal(t, pivotHeader.Hash, router.catchupReplay.standardReplay.pivotHash)
 	require.Same(t, pivotAcquisition, router.catchupReplay.fetchTracker.Find(pivotHeader.Hash))
@@ -928,7 +928,7 @@ func TestAcquisitionWorkLane_BoundsAndCoalesces(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		return calls[a] == 2 && calls[b] == 1
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	cancel()
 	lane.stop()
 	mu.Lock()
@@ -1071,12 +1071,11 @@ func TestProcessAcquisitionWork_UsesNewestTimerCheck(t *testing.T) {
 
 	result := processAcquisitionWork(t.Context(), ledger, []acquisitionWorkEvent{
 		{kind: acquisitionWorkTimerCheck, at: newest},
-		{kind: acquisitionWorkTimerCheck, at: newest.Add(-time.Second)},
+		{kind: acquisitionWorkTimerCheck, at: clock},
 	})
 
 	require.NoError(t, result.err)
 	require.True(t, result.timerEscalate)
-	assert.Equal(t, newest, result.timerAt)
 }
 
 func TestProcessAcquisitionWork_UsefulDataPreventsTimerFailure(t *testing.T) {
@@ -1231,7 +1230,7 @@ func TestAcquisitionWorkLane_PersistenceFailureStopsYieldedBatch(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return !lane.has(ledger)
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	mu.Lock()
 	defer mu.Unlock()
 	require.Equal(t, 1, calls)
@@ -1328,7 +1327,7 @@ func TestAcquisitionWorkLane_CancelLedgerPreemptsObsoleteTraversal(t *testing.T)
 	close(exactResult.ack)
 	select {
 	case <-exactStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("exact acquisition remained queued behind canceled traversal")
 	}
 
@@ -1359,7 +1358,7 @@ func TestRouterClearFetchInfoCancelsActiveAcquisitionWork(t *testing.T) {
 	assert.Same(t, ledger, result.ledger)
 	assert.ErrorIs(t, result.err, context.Canceled)
 	close(result.ack)
-	require.Eventually(t, func() bool { return !lane.has(ledger) }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return !lane.has(ledger) }, progressTimeout, time.Millisecond)
 }
 
 func TestAcquisitionWork_PendingReservesTimerEvent(t *testing.T) {
@@ -1411,7 +1410,7 @@ func TestAcquisitionWork_PendingReservesTimerEvent(t *testing.T) {
 		"queued data must not be overtaken by a terminal timer event")
 
 	close(release)
-	require.Eventually(t, func() bool { return !lane.has(queued) }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return !lane.has(queued) }, progressTimeout, time.Millisecond)
 	cancel()
 	lane.stop()
 }
@@ -1486,7 +1485,7 @@ func TestAcquisitionWork_UsefulLargeReplyPrecedesTerminalTimerCheck(t *testing.T
 	assert.False(t, result.timerEscalate)
 	assert.False(t, result.complete)
 	router.catchupReplay.handleAcquisitionWorkResult(result)
-	require.Eventually(t, func() bool { return !lane.has(ledger) }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return !lane.has(ledger) }, progressTimeout, time.Millisecond)
 
 	assert.Same(t, ledger, router.catchupReplay.fetchTracker.Find(ledger.Hash()))
 	assert.NotEqual(t, inbound.StateFailed, ledger.State())
@@ -1724,11 +1723,11 @@ func TestRouter_MaintenanceDrainsBufferedReplyBeforeTerminalTimer(t *testing.T) 
 		case result = <-lane.results():
 			require.Empty(t, result.replies, "the buffered reply must be applied once")
 			router.catchupReplay.handleAcquisitionWorkResult(result)
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("discovery continuation did not run")
 		}
 	}
-	require.Eventually(t, func() bool { return !lane.has(ledger) }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return !lane.has(ledger) }, progressTimeout, time.Millisecond)
 	assert.NotEqual(t, inbound.StateFailed, ledger.State())
 	assert.Same(t, ledger, router.catchupReplay.fetchTracker.Find(ledger.Hash()))
 }
@@ -1760,13 +1759,13 @@ func TestRouter_MaintenanceRunsUnderSustainedAcquisitionInput(t *testing.T) {
 		}
 	}()
 
-	require.Eventually(t, func() bool { return len(recorder.baseIndirects()) > 0 }, 2*time.Second, time.Millisecond,
+	require.Eventually(t, func() bool { return len(recorder.baseIndirects()) > 0 }, progressTimeout, time.Millisecond,
 		"bounded acquisition draining must return to maintenance under sustained input")
 	assert.GreaterOrEqual(t, ledger.Timeouts(), 1)
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Router.Run did not stop")
 	}
 }

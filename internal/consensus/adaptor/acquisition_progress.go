@@ -2,19 +2,19 @@ package adaptor
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 )
 
 func (c *catchupReplayCoordinator) reportAcquisitionProgress(ledger *inbound.Ledger, yielded bool) {
-	snapshot, due := ledger.ProgressSnapshot(time.Now())
+	snapshot, due := ledger.ProgressSnapshot(ledger.Now())
 	if !due {
 		return
 	}
 	c.acquisitionMu.Lock()
 	identity := c.standardReplayIdentityLocked()
 	occupancy := len(c.standardReplay.entries)
+	replayPhase := c.standardReplay.phase
 	c.acquisitionMu.Unlock()
 	c.acquisitionWorkMu.RLock()
 	store := c.acquisitionStore
@@ -77,7 +77,7 @@ func (c *catchupReplayCoordinator) reportAcquisitionProgress(ledger *inbound.Led
 		"peers", snapshot.Peers, "request_peers", snapshot.RequestPeers,
 		"state_received", snapshot.StateReceived, "state_useful", snapshot.StateUseful,
 		"tx_received", snapshot.TxReceived, "tx_useful", snapshot.TxUseful,
-		"pivot_seq", identity.pivotSeq, "pivot_ready", identity.pivotReady,
+		"pivot_seq", identity.pivotSeq, "pivot_ready", identity.pivotReady, "replay_phase", replayPhase.String(),
 		"prepared_occupancy", occupancy, "prepared_limit", standardReplayPreparedLimit,
 	)
 }

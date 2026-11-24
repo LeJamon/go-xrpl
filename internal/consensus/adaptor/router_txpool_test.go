@@ -111,7 +111,7 @@ func TestRunDrainsTxLane(t *testing.T) {
 	}
 
 	require.Eventually(t, func() bool { return adaptorHasTx(t, a, txID) },
-		2*time.Second, 5*time.Millisecond,
+		progressTimeout, 5*time.Millisecond,
 		"Run must drain the tx lane and apply the transaction")
 }
 

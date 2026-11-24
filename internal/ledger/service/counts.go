@@ -59,7 +59,7 @@ func (s *Service) Counts() Counts {
 	}
 
 	if s.nodeStore != nil {
-		st := s.nodeStore.Stats()
+		st := s.nodeStore.database().Stats()
 		c.NodeStore = &NodeStoreCounts{
 			Reads:      st.Reads,
 			FetchHits:  st.FetchHits,

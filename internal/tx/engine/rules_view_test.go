@@ -61,6 +61,62 @@ type boundaryPreclaimTx struct {
 	check func(txcore.ReadOnlyLedgerView)
 }
 
+type boundaryApplyTx struct {
+	*txcore.BaseTx
+	check func(*txcore.ApplyContext)
+}
+
+func (tx boundaryApplyTx) Apply(ctx *txcore.ApplyContext) ter.Result {
+	tx.check(ctx)
+	return ter.TesSUCCESS
+}
+
+func TestApplyPreservesPreclaimView(t *testing.T) {
+	base := newRecordingBaseView()
+	key := fundRecoveryAccount(t, base, 1_000_000, 1)
+	e := recoveryEngine(base, txcore.TapNONE)
+	called := false
+	txn := boundaryApplyTx{BaseTx: recoveryTx(10, 1), check: func(ctx *txcore.ApplyContext) {
+		called = true
+		if ctx.PreclaimView == nil {
+			t.Fatal("missing preclaim view")
+		}
+		for _, method := range []string{"Insert", "Update", "Erase", "AdjustDropsDestroyed"} {
+			if _, exposed := reflect.TypeOf(ctx.PreclaimView).MethodByName(method); exposed {
+				t.Errorf("preclaim view exposes %s", method)
+			}
+		}
+		if ctx.PreclaimView.Rules() != e.config.Rules {
+			t.Error("preclaim view lost engine rules")
+		}
+		prior, result := ctx.PreclaimAccount()
+		if result != ter.TesSUCCESS || prior.Balance != 1_000_000 || prior.Sequence != 1 {
+			t.Fatalf("preclaim account = %+v, result = %s", prior, result)
+		}
+		if ctx.Account.Balance != 999_990 || ctx.Account.Sequence != 2 {
+			t.Fatalf("apply account = %+v", ctx.Account)
+		}
+		data, err := ctx.PreclaimView.Read(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data[0]++
+		prior.Balance = 0
+		again, result := ctx.PreclaimAccount()
+		if result != ter.TesSUCCESS || again.Balance != 1_000_000 {
+			t.Fatal("preclaim read mutated the base account")
+		}
+	}}
+	result := e.Apply(txn)
+	if !called || result.Result != ter.TesSUCCESS || !result.Applied {
+		t.Fatalf("called = %v, result = %+v", called, result)
+	}
+	account := readRecoveryAccount(t, base, key)
+	if account.Balance != 999_990 || account.Sequence != 2 {
+		t.Fatalf("committed account = %+v", account)
+	}
+}
+
 func (tx boundaryPreclaimTx) Preclaim(view txcore.ReadOnlyLedgerView, _ txcore.EngineConfig) ter.Result {
 	tx.check(view)
 	return ter.TecUNFUNDED_PAYMENT

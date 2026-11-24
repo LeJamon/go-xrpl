@@ -201,19 +201,19 @@ func (c *catchupReplayCoordinator) cancelFrozenPivotForHeaderDiscovery(
 ) {
 	c.replayCommitMu.Lock()
 	c.acquisitionMu.Lock()
-	if !c.standardReplay.active {
+	if !c.standardReplay.isActive() {
 		c.acquisitionMu.Unlock()
 		c.replayCommitMu.Unlock()
 		return
 	}
-	if c.standardReplay.pivotReady &&
+	if c.standardReplay.isPivotReady() &&
 		c.standardReplayHeaderDiscoveryCompatibleLocked(baseSeq, baseHash, targetSeq, targetHash) {
 		c.acquisitionMu.Unlock()
 		c.replayCommitMu.Unlock()
 		return
 	}
 	reason := "header_discovery_speculative"
-	if c.standardReplay.pivotReady {
+	if c.standardReplay.isPivotReady() {
 		reason = "header_discovery_conflict"
 	}
 	retired := c.cancelStandardReplayPipelineLocked(reason)
@@ -239,7 +239,7 @@ func (c *catchupReplayCoordinator) maybeStartHeaderParentDiscovery(target catchu
 		return false
 	}
 	c.acquisitionMu.Lock()
-	activePivotReachesTarget := c.standardReplay.active &&
+	activePivotReachesTarget := c.standardReplay.isActive() &&
 		c.standardReplay.pivotSeq < target.seq &&
 		c.recoveryAnchorReachesTarget(
 			c.standardReplay.pivotSeq,
@@ -631,7 +631,10 @@ func decodeHeaderDiscoveryHeader(ld *message.LedgerData) (*header.LedgerHeader, 
 	if len(ld.Nodes) == 0 || len(ld.Nodes[0].NodeData) == 0 {
 		return nil, errors.New("header reply has no header node")
 	}
-	data := ld.Nodes[0].NodeData
+	return decodePeerLedgerHeader(ld.Nodes[0].NodeData)
+}
+
+func decodePeerLedgerHeader(data []byte) (*header.LedgerHeader, error) {
 	if len(data) < header.SizeBase {
 		return nil, fmt.Errorf("invalid header node size: %d", len(data))
 	}

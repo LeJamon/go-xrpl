@@ -8,6 +8,7 @@ import (
 	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/batch"
 	checktx "github.com/LeJamon/go-xrpl/internal/tx/check"
 	lendingtx "github.com/LeJamon/go-xrpl/internal/tx/lending"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
@@ -125,6 +126,132 @@ func TestPreflightAdmissionOverCapTypeAmountsReturnTERBeforeAndAfterCleanup320(t
 				})
 			}
 		})
+	}
+}
+
+func TestPreflightAdmissionMPTNegativeZero(t *testing.T) {
+	fields := map[string]any{
+		"TransactionType": "Payment",
+		"Account":         admissionPreflightAccount,
+		"Destination":     admissionPreflightDestination,
+		"Amount": map[string]any{
+			"mpt_issuance_id": "00000002430427B80BD2D09D36B70B969E12801065F22308",
+			"value":           binarytypes.RawMPTValue{Negative: true},
+		},
+		"Sequence":      uint32(1),
+		"Fee":           "10",
+		"SigningPubKey": admissionPreflightPublicKey,
+	}
+	transaction, err := txcore.ParseFromDecodedFields(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := preflightEngine(allRules())
+	if got := engine.preflightStructure(transaction, transaction.GetCommon()); got != ter.TemBAD_AMOUNT {
+		t.Fatalf("preflight MPT negative zero = %v, want temBAD_AMOUNT", got)
+	}
+	transaction.GetCommon().Account = protocol.ZeroAccount
+	if got := engine.preflightStructure(transaction, transaction.GetCommon()); got != ter.TemBAD_SRC_ACCOUNT {
+		t.Fatalf("preflight zero source account and MPT negative zero = %v, want temBAD_SRC_ACCOUNT", got)
+	}
+}
+
+func TestPreflightAdmissionOverCapMPTAmountPreservesRawWireValue(t *testing.T) {
+	fields := map[string]any{
+		"TransactionType": "Payment",
+		"Account":         admissionPreflightAccount,
+		"Destination":     admissionPreflightDestination,
+		"Amount": map[string]any{
+			"mpt_issuance_id": "00000002430427B80BD2D09D36B70B969E12801065F22308",
+			"value":           binarytypes.RawMPTValue{Magnitude: uint64(1) << 63},
+		},
+		"Sequence":      uint32(1),
+		"Fee":           "10",
+		"SigningPubKey": admissionPreflightPublicKey,
+	}
+	transaction, err := txcore.ParseFromDecodedFields(fields)
+	if err != nil {
+		t.Fatalf("parse over-cap MPT amount: %v", err)
+	}
+	flattened, err := transaction.Flatten()
+	if err != nil {
+		t.Fatalf("flatten over-cap MPT amount: %v", err)
+	}
+	amount, ok := flattened["Amount"].(map[string]any)
+	if !ok {
+		t.Fatalf("flattened Amount has type %T, want map", flattened["Amount"])
+	}
+	raw, ok := amount["value"].(binarytypes.RawMPTValue)
+	if !ok || raw.Magnitude != uint64(1)<<63 {
+		t.Fatalf("flattened MPT value = %#v, want preserved over-cap marker", amount["value"])
+	}
+
+	for _, rules := range []*amendment.Rules{allRules(), rulesWithout("fixCleanup3_2_0")} {
+		if got := preflightEngine(rules).preflight(transaction); got != ter.TemBAD_AMOUNT {
+			t.Fatalf("preflight over-cap MPT amount with cleanup=%t = %v, want temBAD_AMOUNT", rules.FixCleanup3_2_0Enabled(), got)
+		}
+	}
+}
+
+func TestPreflightAdmissionNonnativeFeeReturnsBadFee(t *testing.T) {
+	fields := map[string]any{
+		"TransactionType": "AccountSet",
+		"Account":         admissionPreflightAccount,
+		"Fee": map[string]any{
+			"mpt_issuance_id": "00000002430427B80BD2D09D36B70B969E12801065F22308",
+			"value":           binarytypes.RawMPTValue{Magnitude: 1},
+		},
+		"Sequence":      uint32(1),
+		"SigningPubKey": admissionPreflightPublicKey,
+	}
+	transaction, err := txcore.ParseFromDecodedFields(fields)
+	if err != nil {
+		t.Fatalf("parse nonnative fee: %v", err)
+	}
+	if transaction.GetCommon().Fee != "" {
+		t.Fatalf("parsed nonnative fee = %q, want empty sentinel", transaction.GetCommon().Fee)
+	}
+	if got := preflightEngine(allRules()).preflight(transaction); got != ter.TemBAD_FEE {
+		t.Fatalf("preflight nonnative fee = %v, want temBAD_FEE", got)
+	}
+	transaction.GetCommon().Fee = "0"
+	if transaction.GetCommon().HasRawNonnativeFee() {
+		t.Fatal("assigning native zero fee must clear the preserved nonnative fee")
+	}
+}
+
+func TestPreflightAdmissionBatchInnerNonnativeFeeReturnsBadFee(t *testing.T) {
+	innerFields := map[string]any{
+		"TransactionType": "AccountSet",
+		"Account":         admissionPreflightAccount,
+		"Fee": map[string]any{
+			"mpt_issuance_id": "00000002430427B80BD2D09D36B70B969E12801065F22308",
+			"value":           binarytypes.RawMPTValue{Magnitude: 1},
+		},
+		"Sequence":      uint32(2),
+		"SigningPubKey": "",
+		"Flags":         txcore.TfInnerBatchTxn,
+	}
+	inner, err := txcore.ParseFromDecodedFields(innerFields)
+	if err != nil {
+		t.Fatalf("parse Batch inner with nonnative fee: %v", err)
+	}
+	if got := preflightEngine(allRules()).preflightInner(inner); got != ter.TemBAD_FEE {
+		t.Fatalf("direct inner preflight with nonnative fee = %v, want temBAD_FEE", got)
+	}
+	second := txcore.NewBaseTx(txcore.TypeAccountSet, admissionPreflightAccount)
+	second.Fee = "0"
+	second.SetSequence(3)
+	second.SetFlags(txcore.TfInnerBatchTxn)
+	outer := batch.NewBatch(admissionPreflightAccount)
+	outer.Fee = "40"
+	outer.SetSequence(1)
+	outer.SetFlags(batch.BatchFlagIndependent)
+	outer.AddInnerTransaction(inner)
+	outer.AddInnerTransaction(second)
+
+	if got := preflightEngine(allRules()).preflight(outer); got != ter.TemBAD_FEE {
+		t.Fatalf("preflight Batch inner nonnative fee = %v, want temBAD_FEE", got)
 	}
 }
 

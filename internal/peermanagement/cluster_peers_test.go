@@ -164,7 +164,7 @@ func TestClusterPeerRetainsDirectionalResourceAccounting(t *testing.T) {
 	}
 	select {
 	case <-removed:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("cluster peer was not removed after resource drop")
 	}
 	_, exists := o.getPeer(peer.ID())

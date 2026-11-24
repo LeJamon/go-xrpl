@@ -156,16 +156,17 @@ type ValidatorListReader interface {
 	// TrustedMasterKeys returns the master pubkeys currently in the
 	// effective trusted UNL contributed by publishers.
 	TrustedMasterKeys() [][33]byte
-	// ListedValidators returns every validator master key that appears in
-	// any publisher's list, each tagged with whether it is currently
-	// trusted. Mirrors rippled ValidatorList::for_each_listed
-	// (ValidatorList.cpp:1750), which iterates keyListings_ (the union of
-	// all listed keys) and reports trusted = membership in trustedMasterKeys_.
+	// ListedValidators returns every validator master key in the local or
+	// publisher validator lists, each tagged with whether it is currently
+	// trusted. Mirrors rippled ValidatorList::forEachListed
+	// (ValidatorList.cpp:1643-1649), which iterates keyListings_ (the union of
+	// configured, local, and publisher-listed keys) and reports trusted as
+	// membership in trustedMasterKeys_.
 	ListedValidators() []ListedValidator
 }
 
-// ListedValidator is one entry from the union of all publisher-listed
-// validators.
+// ListedValidator is one entry from the union of locally configured and
+// publisher-listed validators.
 type ListedValidator struct {
 	MasterKey [33]byte
 	Trusted   bool
@@ -266,9 +267,10 @@ type ServiceContainer struct {
 	// Nil in standalone mode, where server status reports a quorum of zero.
 	ValidationQuorum func() int
 
-	// ValidatorList is the publisher-trust subsystem's read facet for
-	// the `validators` and `validator_list_sites` RPC methods. Nil when
-	// no validator_list_keys are configured — handlers must nil-check.
+	// ValidatorList is the validator-list read facet for the `validators`,
+	// `validator_list_sites`, and `unl_list` RPC methods. It may be present
+	// without validator_list_keys so unl_list can expose static/local keys;
+	// handlers must still nil-check it in standalone or partially wired modes.
 	ValidatorList ValidatorListReader
 
 	// LocalStaticTrustedKeysBase58 returns the operator's static
@@ -1221,6 +1223,10 @@ type LedgerServerInfo struct {
 	ValidatedRangeMin  uint32
 	ValidatedRangeMax  uint32
 	NetworkID          uint32
+	// PersistFailures counts validated-ledger persists failed since the last
+	// success; LastFailedPersist is the most recent failed sequence.
+	PersistFailures   uint32
+	LastFailedPersist uint32
 }
 
 // LoadFactorFees carries rippled's per-source LoadFeeTrack fees used

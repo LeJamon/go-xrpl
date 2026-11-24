@@ -1,9 +1,28 @@
 // Package peermanagement implements XRPL peer-to-peer networking.
+//
+// # Adding a peer message type
+//
+// Per-type policy is data in two tables, one per layer:
+//
+//  1. Add the message to proto/xrpl.proto and regenerate.
+//  2. In the message package, add the Type constant, the Go message
+//     struct, and one codecs entry: payload cap, bounded repeated root
+//     fields, and the protobuf codec.
+//  3. Add one messageDescriptors entry: inbound peer lane, overlay route,
+//     feature gate, outbound send class and traffic category.
+//  4. Write the handler: a handleLocally case when the overlay consumes
+//     the message (routeNone, or a pre-forward observer), otherwise the
+//     consumer of the route's channel.
+//
+// The completeness and pinning tests in message_descriptor_test.go and
+// message/descriptor_test.go fail until every wire type has both entries
+// and a routing pin.
 package peermanagement
 
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +59,61 @@ func ParseEndpoint(s string) (Endpoint, error) {
 		return Endpoint{}, err
 	}
 	return Endpoint{Host: host, Port: port}, nil
+}
+
+const gossipWhitespace = " \t\r\n\v\f"
+
+func parseGossipEndpoint(s string) (Endpoint, error) {
+	if len(s) > 64 {
+		return Endpoint{}, ErrInvalidEndpoint
+	}
+	s = strings.Trim(s, gossipWhitespace)
+	if s == "" {
+		return Endpoint{}, ErrInvalidEndpoint
+	}
+
+	// Whitespace is the legacy port separator. A colon separates an IPv4
+	// port but remains part of an unbracketed IPv6 address.
+	separators := gossipWhitespace
+	bracketed := s[0] == '['
+	if bracketed {
+		s = s[1:]
+		separators += "]"
+	} else if first := strings.IndexAny(s, ".:"); first >= 0 && s[first] == '.' {
+		separators += ":"
+	}
+
+	host, portText := s, ""
+	if i := strings.IndexAny(s, separators); i >= 0 {
+		host, portText = s[:i], s[i+1:]
+		if bracketed && portText != "" {
+			if !strings.ContainsRune(gossipWhitespace+":", rune(portText[0])) {
+				return Endpoint{}, ErrInvalidEndpoint
+			}
+			portText = portText[1:]
+		}
+	}
+	addr, err := netip.ParseAddr(host)
+	if err != nil || addr.Zone() != "" {
+		return Endpoint{}, ErrInvalidEndpoint
+	}
+	endpoint := Endpoint{Host: addr.String()}
+	portText = strings.TrimLeft(portText, gossipWhitespace)
+	if portText != "" {
+		negative := portText[0] == '-'
+		if negative || portText[0] == '+' {
+			portText = portText[1:]
+		}
+		port, err := parsePort(portText)
+		if err != nil {
+			return Endpoint{}, err
+		}
+		if negative {
+			port = -port
+		}
+		endpoint.Port = port
+	}
+	return endpoint, nil
 }
 
 func parsePort(s string) (uint16, error) {
@@ -117,6 +191,9 @@ type Event struct {
 
 	// Payload is the message payload (for MessageReceived events).
 	Payload []byte
+
+	decodedEndpoints   *message.Endpoints
+	endpointsOversized bool
 
 	// ManifestFrame carries an oversized manifest payload spooled to disk.
 	ManifestFrame *ManifestFrame

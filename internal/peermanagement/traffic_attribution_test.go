@@ -26,21 +26,21 @@ func TestInboundClusterTrafficAttribution(t *testing.T) {
 	require.NoError(t, o.addPeer(outsider))
 	require.NoError(t, o.addPeer(member))
 
-	assert.Equal(t, CategoryUnknown, outsider.inboundCategory(message.TypeCluster))
-	assert.Equal(t, CategoryUnknown, member.inboundCategory(message.TypeCluster), "not yet a member")
+	assert.Equal(t, CategoryUnknown, outsider.inboundCategory(message.TypeCluster, nil))
+	assert.Equal(t, CategoryUnknown, member.inboundCategory(message.TypeCluster, nil), "not yet a member")
 
 	pub, err := addresscodec.EncodeNodePublicKey(memberID.PublicKey())
 	require.NoError(t, err)
 	require.NoError(t, o.cluster.Load([]string{pub + " test-member"}))
-	assert.Equal(t, CategoryCluster, member.inboundCategory(message.TypeCluster))
-	assert.Equal(t, CategoryUnknown, outsider.inboundCategory(message.TypeCluster))
+	assert.Equal(t, CategoryCluster, member.inboundCategory(message.TypeCluster, nil))
+	assert.Equal(t, CategoryUnknown, outsider.inboundCategory(message.TypeCluster, nil))
 
-	// Every other category is left as the message type says, member or not.
+	// Every other category is left as the message says, member or not.
 	for _, msgType := range []message.MessageType{message.TypePing, message.TypeValidation, message.TypeGetLedger} {
-		assert.Equal(t, CategorizeMessage(msgType), outsider.inboundCategory(msgType))
-		assert.Equal(t, CategorizeMessage(msgType), member.inboundCategory(msgType))
+		assert.Equal(t, categorizeMessagePayload(msgType, nil, true), outsider.inboundCategory(msgType, nil))
+		assert.Equal(t, categorizeMessagePayload(msgType, nil, true), member.inboundCategory(msgType, nil))
 	}
 
 	// A peer the overlay never admitted has no membership check.
-	assert.Equal(t, CategoryUnknown, (&Peer{}).inboundCategory(message.TypeCluster))
+	assert.Equal(t, CategoryUnknown, (&Peer{}).inboundCategory(message.TypeCluster, nil))
 }

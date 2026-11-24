@@ -41,7 +41,7 @@ func TestRouterTransactionWireCharges(t *testing.T) {
 			var connection manifestOverlayConnection
 			select {
 			case connection = <-connections:
-			case <-time.After(5 * time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("transaction source did not connect")
 			}
 
@@ -83,7 +83,7 @@ func TestRouterTransactionWireCharges(t *testing.T) {
 				select {
 				case inbound := <-client.overlay.TxMessages():
 					router.handleInboundMessage(inbound)
-				case <-time.After(5 * time.Second):
+				case <-time.After(progressTimeout):
 					t.Fatal("transaction did not reach the processing lane")
 				}
 			}
@@ -118,7 +118,7 @@ func TestRouterTransactionWireCharges(t *testing.T) {
 					select {
 					case inbound := <-client.overlay.TxMessages():
 						router.handleInboundMessage(inbound)
-					case <-time.After(5 * time.Second):
+					case <-time.After(progressTimeout):
 						t.Fatal("transaction did not reach the processing lane")
 					}
 				}

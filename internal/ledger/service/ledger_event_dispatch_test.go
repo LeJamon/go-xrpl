@@ -48,7 +48,7 @@ func TestLedgerEventDispatch_FIFOAndSingleThreaded(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("timed out waiting for all events to be delivered")
 	}
 

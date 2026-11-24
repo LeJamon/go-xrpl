@@ -149,7 +149,7 @@ func TestStoredLedgerValidationAdvancesIndependentlyOfConsensusSwitch(t *testing
 		require.Len(t, event.TransactionResults, 1)
 		require.Equal(t, txHash, event.TransactionResults[0].TxHash)
 		require.True(t, event.TransactionResults[0].Validated)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("stored validated ledger event was not published")
 	}
 	svc.mu.RLock()
@@ -237,7 +237,7 @@ func TestStoredLedgerValidationPublishesTransactionResultsAfterConsensusSwitch(t
 		require.Len(t, event.TransactionResults, 1)
 		require.Equal(t, txHash, event.TransactionResults[0].TxHash)
 		require.True(t, event.TransactionResults[0].Validated)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("validated ledger event was not published")
 	}
 }

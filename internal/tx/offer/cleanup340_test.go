@@ -30,7 +30,9 @@ func TestOfferCleanup340TrustlineRetry(t *testing.T) {
 				if retry {
 					expected = ter.TerNO_LINE
 				}
-				require.Equal(t, expected, checkAcceptAsset(view, holder, issuer, "USD", config))
+				issuerAccount, err := tx.ReadAccountRoot(view, issuer)
+				require.NoError(t, err)
+				require.Equal(t, expected, checkAcceptAsset(view, holder, issuer, issuerAccount, "USD", config))
 			})
 		}
 	}

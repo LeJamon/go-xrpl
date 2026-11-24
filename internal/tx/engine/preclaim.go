@@ -81,7 +81,7 @@ func (e *Engine) preclaimWithCause(tx txcore.Transaction, txHash [32]byte) (resu
 	// (terINSUF_FEE_B, ...) may precede the signature check, which would risk
 	// charging a fee on an unauthorized transaction.
 	// Reference: rippled applySteps.cpp invoke_preclaim (PR #6192).
-	if result := e.checkSign(tx, common); result != ter.TesSUCCESS {
+	if result := e.checkSign(tx, common, account); result != ter.TesSUCCESS {
 		return result, nil
 	}
 	// checkBatchSign is part of the signature stage (rippled Batch::checkSign =
@@ -166,7 +166,7 @@ func (e *Engine) preclaimInnerWithCause(tx txcore.Transaction, txHash [32]byte) 
 	if result := e.checkPermission(tx, common, accountID); result != ter.TesSUCCESS {
 		return result, nil
 	}
-	if result := e.checkPseudoAccountSign(common); result != ter.TesSUCCESS {
+	if result := e.checkPseudoAccountSign(common, account); result != ter.TesSUCCESS {
 		return result, nil
 	}
 	if preclaimer, ok := tx.(txcore.Preclaimer); ok {
@@ -449,11 +449,13 @@ func (e *Engine) checkSponsor(common *txcore.Common) ter.Result {
 
 // checkSign validates the effective initiator, applies the dry-run unsigned
 // shortcut, then checks sponsor and transaction signature authorization.
+// account is the source AccountRoot preclaim read from e.view (nil when
+// absent); it is only read.
 // Reference: rippled Transactor::checkSign in Transactor.cpp.
 // When a delegate is present, the idAccount for signature checking is the
 // delegate.
-func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common) ter.Result {
-	if result := e.checkPseudoAccountSign(common); result != ter.TesSUCCESS {
+func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common, account *state.AccountRoot) ter.Result {
+	if result := e.checkPseudoAccountSign(common, account); result != ter.TesSUCCESS {
 		return result
 	}
 	hasSigners := len(common.Signers) > 0 || common.HasField("Signers")
@@ -486,26 +488,34 @@ func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common) ter.Res
 		return e.checkMultiSign(common)
 	}
 	if common.SigningPubKey != "" {
-		return e.checkSingleSign(common)
+		return e.checkSingleSign(common, account)
 	}
 	return ter.TesSUCCESS
 }
 
-func (e *Engine) checkPseudoAccountSign(common *txcore.Common) ter.Result {
-	idAccount := common.Account
+// checkPseudoAccountSign rejects a pseudo-account initiator. account is the
+// source AccountRoot preclaim read from e.view (nil when absent).
+func (e *Engine) checkPseudoAccountSign(common *txcore.Common, account *state.AccountRoot) ter.Result {
 	if common.Delegate != "" {
-		idAccount = common.Delegate
+		return e.checkPseudoAccount(common.Delegate)
 	}
-	return e.checkPseudoAccount(idAccount)
+	if e.pseudoAccountSigningRejected() && account != nil && account.IsPseudoAccount() {
+		return ter.TefBAD_AUTH
+	}
+	return ter.TesSUCCESS
 }
 
 func (e *Engine) checkPseudoAccount(idAccount string) ter.Result {
-	if !e.rules().Enabled(amendment.FeatureLendingProtocol) &&
-		!e.rules().Enabled(amendment.FeatureBatchV1_1) &&
-		!e.rules().Enabled(amendment.FeatureFixCleanup3_3_0) {
+	if !e.pseudoAccountSigningRejected() {
 		return ter.TesSUCCESS
 	}
 	return e.rejectPseudoAccount(idAccount)
+}
+
+func (e *Engine) pseudoAccountSigningRejected() bool {
+	return e.rules().Enabled(amendment.FeatureLendingProtocol) ||
+		e.rules().Enabled(amendment.FeatureBatchV1_1) ||
+		e.rules().Enabled(amendment.FeatureFixCleanup3_3_0)
 }
 
 func (e *Engine) rejectPseudoAccount(idAccount string) ter.Result {
@@ -551,14 +561,21 @@ func (e *Engine) checkMultiSignForAccount(idAccount string, signers []txcore.Sig
 }
 
 // checkSingleSign validates a single-signed transaction's signing key against
-// the idAccount's master/regular key configuration.
+// the idAccount's master/regular key configuration. account is the source
+// AccountRoot preclaim read from e.view (nil when absent).
 // Reference: rippled Transactor::checkSingleSign in Transactor.cpp lines 682-740.
-func (e *Engine) checkSingleSign(common *txcore.Common) ter.Result {
-	idAccount := common.Account
+func (e *Engine) checkSingleSign(common *txcore.Common, account *state.AccountRoot) ter.Result {
 	if common.Delegate != "" {
-		idAccount = common.Delegate
+		return e.checkSingleSignForAccount(common.Delegate, common.SigningPubKey)
 	}
-	return e.checkSingleSignForAccount(idAccount, common.SigningPubKey)
+	signerAddress, addrErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(common.SigningPubKey)
+	if addrErr != nil {
+		return ter.TefBAD_AUTH
+	}
+	if account == nil {
+		return ter.TerNO_ACCOUNT
+	}
+	return authorizeSingleSigner(common.Account, account, signerAddress)
 }
 
 func (e *Engine) checkSingleSignForAccount(idAccount, signingPubKey string) ter.Result {
@@ -586,7 +603,12 @@ func (e *Engine) checkSingleSignForAccount(idAccount, signingPubKey string) ter.
 	if idParseErr != nil {
 		return ter.TefINTERNAL
 	}
+	return authorizeSingleSigner(idAccount, idAccountRoot, signerAddress)
+}
 
+// authorizeSingleSigner checks signerAddress against idAccount's regular and
+// master key configuration.
+func authorizeSingleSigner(idAccount string, idAccountRoot *state.AccountRoot, signerAddress string) ter.Result {
 	isMasterDisabled := (idAccountRoot.Flags & state.LsfDisableMaster) != 0
 
 	// Check regular key first, then master. This allows the master key to serve

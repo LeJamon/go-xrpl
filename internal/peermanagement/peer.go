@@ -188,10 +188,6 @@ type Peer struct {
 	sendDrops        atomic.Uint64
 	sendDropsByClass [outboundClassCount]atomic.Uint64
 
-	// consecutiveDecompressFailures: back-to-back LZ4 errors; closed
-	// at maxConsecutiveDecompressFailures.
-	consecutiveDecompressFailures atomic.Uint32
-
 	serverDomain      string
 	networkID         string
 	userAgent         string
@@ -376,42 +372,33 @@ func inboundFrameReservation(header message.Header) int64 {
 func (p *Peer) dispatchEvent(evt Event) bool {
 	if evt.Type == EventMessageReceived {
 		evt.ReceivedAt = time.Now()
-	}
-	if evt.Type == EventMessageReceived && evt.MessageType == message.TypeManifests && p.manifestMessages != nil {
-		msg := evt.inboundMessage()
-		select {
-		case p.manifestMessages <- msg:
-			return true
-		case <-p.closeCh:
-			_ = msg.Close()
-			return false
-		}
-	}
-	if evt.Type == EventMessageReceived && isConsensusPriorityMessageType(evt.MessageType) && p.consensusEvents != nil {
-		select {
-		case p.consensusEvents <- evt:
-			return true
-		case <-p.closeCh:
-			evt.release()
-			return false
-		}
-	}
-	if evt.Type == EventMessageReceived && isConsensusControlMessageType(evt.MessageType) && p.consensusControlEvents != nil {
-		select {
-		case p.consensusControlEvents <- evt:
-			return true
-		case <-p.closeCh:
-			evt.release()
-			return false
-		}
-	}
-	if evt.Type == EventMessageReceived && isAcquisitionMessageType(evt.MessageType) && p.acquisitionEvents != nil {
-		select {
-		case p.acquisitionEvents <- evt:
-			return true
-		case <-p.closeCh:
-			evt.release()
-			return false
+		switch describeMessage(evt.MessageType).lane {
+		case laneManifests:
+			if evt.charge == nil {
+				evt.charge = newMessageCharge(p, evt.MessageType.String())
+			}
+			if p.manifestMessages != nil {
+				msg := evt.inboundMessage()
+				select {
+				case p.manifestMessages <- msg:
+					return true
+				case <-p.closeCh:
+					_ = msg.Close()
+					return false
+				}
+			}
+		case laneConsensus:
+			if p.consensusEvents != nil {
+				return p.dispatchBackpressured(p.consensusEvents, evt)
+			}
+		case laneConsensusControl:
+			if p.consensusControlEvents != nil {
+				return p.dispatchBackpressured(p.consensusControlEvents, evt)
+			}
+		case laneAcquisition:
+			if p.acquisitionEvents != nil {
+				return p.dispatchBackpressured(p.acquisitionEvents, evt)
+			}
 		}
 	}
 	if p.events == nil {
@@ -430,34 +417,12 @@ func (p *Peer) dispatchEvent(evt Event) bool {
 	}
 }
 
-func isConsensusPriorityMessageType(msgType message.MessageType) bool {
-	switch msgType {
-	case message.TypeProposeLedger,
-		message.TypeValidation,
-		message.TypeValidatorListCollection:
+func (p *Peer) dispatchBackpressured(lane chan<- Event, evt Event) bool {
+	select {
+	case lane <- evt:
 		return true
-	default:
-		return false
-	}
-}
-
-func isConsensusControlMessageType(msgType message.MessageType) bool {
-	switch msgType {
-	case message.TypeStatusChange, message.TypeHaveSet:
-		return true
-	default:
-		return false
-	}
-}
-
-func isAcquisitionMessageType(msgType message.MessageType) bool {
-	switch msgType {
-	case message.TypeLedgerData,
-		message.TypeReplayDeltaResponse,
-		message.TypeProofPathResponse,
-		message.TypeGetObjects:
-		return true
-	default:
+	case <-p.closeCh:
+		evt.release()
 		return false
 	}
 }
@@ -563,6 +528,35 @@ func (p *Peer) compressionNegotiated() bool {
 	return p.handshakeCfg.EnableCompression &&
 		p.capabilities != nil &&
 		p.capabilities.SupportsCompression()
+}
+
+func (p *Peer) txReduceRelayNegotiated() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.handshakeCfg.EnableTxReduceRelay &&
+		p.capabilities != nil &&
+		p.capabilities.HasFeature(FeatureTxReduceRelay)
+}
+
+func (p *Peer) prepareOutboundFrame(data []byte) ([]byte, bool) {
+	header, err := message.DecodeHeader(data)
+	if err != nil {
+		return data, false
+	}
+
+	wire := data
+	if !header.Compressed && p.compressionNegotiated() {
+		wire, _ = message.CompressFrameIfWorthwhile(data)
+	}
+	return wire, true
+}
+
+func (p *Peer) recordOutboundAccepted(data, wire []byte) {
+	header, err := message.DecodeHeader(data)
+	if err != nil {
+		return
+	}
+	p.traffic.AddCount(outboundTrafficCategory(header, data), false, len(wire))
 }
 
 func (p *Peer) applyHandshakeExtras(x HandshakeExtras) {
@@ -1251,7 +1245,29 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			}
 			p.metrics.recv.addMessage(payloadWireSize + headerSize)
 			p.bootstrapManifest.Store(true)
-			p.traffic.AddCount(p.inboundCategory(header.MessageType), true, int(header.PayloadSize))
+			admissionErr := manifestFrame.admit(ctx)
+			if admissionErr != nil {
+				_ = manifestFrame.Close()
+				if p.closed.Load() {
+					return nil
+				}
+				now = p.readPolicy.now()
+				if errors.Is(admissionErr, context.Canceled) || errors.Is(admissionErr, context.DeadlineExceeded) {
+					return admissionErr
+				}
+				var localSpoolErr *manifestSpoolLocalError
+				if errors.As(admissionErr, &localSpoolErr) {
+					if p.onBootstrapReady != nil {
+						return frameReader.failure(admissionErr, now)
+					}
+					continue
+				}
+				return frameReader.failure(
+					fmt.Errorf("manifest spool admission failed: %w", admissionErr),
+					now,
+				)
+			}
+			p.traffic.AddCount(CategoryManifests, true, int(payloadWireSize))
 
 			delivered := p.dispatchEvent(Event{
 				Type:          EventMessageReceived,
@@ -1353,27 +1369,46 @@ func (p *Peer) readLoop(ctx context.Context) error {
 		if header.Compressed {
 			payload, err = message.DecompressLZ4(payload, int(header.UncompressedSize))
 			if err != nil {
-				p.IncBadData("decompress-lz4-failed")
-				if header.MessageType == message.TypeManifests && p.onBootstrapReady != nil {
-					releaseRetainedReservation()
-					return fmt.Errorf("bootstrap manifests decompression failed: %w", err)
-				}
-				if p.consecutiveDecompressFailures.Add(1) >= maxConsecutiveDecompressFailures {
-					releaseRetainedReservation()
-					return fmt.Errorf("decompress-lz4 failed %d times in a row: %w",
-						maxConsecutiveDecompressFailures, err)
-				}
 				releaseRetainedReservation()
-				continue
+				return frameReader.failure(fmt.Errorf("decompress-lz4 failed: %w", err), now)
 			}
-			p.consecutiveDecompressFailures.Store(0)
 			if retainedReservation > 0 {
 				p.inboundReadBudget.release(int64(header.PayloadSize))
 				retainedReservation -= int64(header.PayloadSize)
 			}
 		}
-		if err := message.Preflight(header.MessageType, payload); err != nil {
+		var decodedEndpoints *message.Endpoints
+		var endpointsOversized bool
+		if header.MessageType == message.TypeEndpoints {
+			decodedEndpoints, endpointsOversized, err = message.DecodeEndpointsForPeer(payload)
+		} else {
+			err = message.ValidatePayload(header.MessageType, payload)
+		}
+		if err != nil {
+			var limitErr *message.WireLimitError
+			if !errors.As(err, &limitErr) || limitErr.Unverified() {
+				releaseRetainedReservation()
+				return frameReader.failure(err, now)
+			}
+			p.traffic.AddCount(p.inboundCategory(header.MessageType, payload), true, int(payloadWireSize))
+			if header.MessageType == message.TypeGetObjects && limitErr.GetObjectQuery &&
+				p.SendQueueLen() >= peerSendQueueDropThreshold {
+				p.Charge(resource.FeeTrivialPeer(), header.MessageType.String())
+				releaseRetainedReservation()
+				continue
+			}
 			reason := wirePreflightChargeReason(err)
+			if !p.txReduceRelayNegotiated() {
+				switch {
+				case header.MessageType == message.TypeTransactions &&
+					limitErr.Reason == message.WireLimitTransactions:
+					reason = "transactions-batch-unnegotiated"
+				case header.MessageType == message.TypeGetObjects &&
+					limitErr.Reason == message.WireLimitGetObjectTransactions &&
+					limitErr.GetObjectQuery:
+					reason = "get-objects-txn-unnegotiated"
+				}
+			}
 			p.IncBadData(reason)
 			releaseRetainedReservation()
 			if header.MessageType == message.TypeManifests && p.onBootstrapReady != nil {
@@ -1381,15 +1416,17 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			}
 			continue
 		}
-		p.traffic.AddCount(p.inboundCategory(header.MessageType), true, len(payload))
+		p.traffic.AddCount(p.inboundCategory(header.MessageType, payload), true, int(payloadWireSize))
 
 		delivered := p.dispatchEvent(Event{
-			Type:        EventMessageReceived,
-			PeerID:      p.id,
-			MessageType: header.MessageType,
-			Payload:     payload,
-			WireSize:    payloadWireSize,
-			reservation: newInboundReservation(p.inboundReadBudget, retainedReservation),
+			Type:               EventMessageReceived,
+			PeerID:             p.id,
+			MessageType:        header.MessageType,
+			Payload:            payload,
+			WireSize:           payloadWireSize,
+			decodedEndpoints:   decodedEndpoints,
+			endpointsOversized: endpointsOversized,
+			reservation:        newInboundReservation(p.inboundReadBudget, retainedReservation),
 		})
 		retainedReservation = 0
 		if !delivered && header.MessageType == message.TypeManifests && p.onBootstrapReady != nil {
@@ -1426,13 +1463,12 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 
 		wire := data
 		compressionEnabled := p.compressionNegotiated()
-		if header, err := message.DecodeHeader(data); err == nil && header.Compressed {
+		header, headerErr := message.DecodeHeader(data)
+		if headerErr == nil && header.Compressed {
 			if !compressionEnabled {
 				p.completeOutbound(token, errCompressionUnnegotiated)
 				return errCompressionUnnegotiated
 			}
-		} else if compressionEnabled {
-			wire, _ = message.CompressFrameIfWorthwhile(data)
 		}
 
 		if err := conn.SetWriteDeadline(time.Now().Add(p.frameReadBudget(uint32(len(wire))))); err != nil {
@@ -1443,13 +1479,12 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 			err = ErrWriteIdle
 		}
+		if err == nil {
+			p.metrics.sent.addMessage(uint64(n))
+		}
 		p.completeOutbound(token, err)
 		if err != nil {
 			return err
-		}
-		p.metrics.sent.addMessage(uint64(n))
-		if hdr, derr := message.DecodeHeader(wire); derr == nil {
-			p.traffic.AddCount(CategorizeMessage(hdr.MessageType), false, n)
 		}
 	}
 }
@@ -1642,10 +1677,6 @@ const (
 	sendqIntervals = 4
 	// targetSendQueue is rippled's retained-frame pressure threshold.
 	targetSendQueue = 128
-	// maxConsecutiveDecompressFailures: close after this many
-	// back-to-back LZ4 errors. A single bad frame still charges
-	// bad-data but resets on the next successful decompress.
-	maxConsecutiveDecompressFailures = 4
 	// readIdleDeadline: belt-and-braces backstop to ErrPingTimeout for
 	// a peer that completes the handshake then goes silent. Set above
 	// pingTimeout so the existing disconnect path stays primary.
@@ -1856,8 +1887,8 @@ func (p *Peer) releaseUsage() {
 // inboundCategory is the traffic category for a received message. Any peer
 // can send a cluster message, so one from outside the cluster counts as
 // unknown, leaving the cluster category to traffic between members.
-func (p *Peer) inboundCategory(msgType message.MessageType) TrafficCategory {
-	category := CategorizeMessage(msgType)
+func (p *Peer) inboundCategory(msgType message.MessageType, payload []byte) TrafficCategory {
+	category := categorizeMessagePayload(msgType, payload, true)
 	if category == CategoryCluster && (p.clusterMember == nil || !p.clusterMember()) {
 		return CategoryUnknown
 	}
@@ -1957,7 +1988,6 @@ func chargeForReason(reason string) resource.Charge {
 		"squelch-duration",
 		"squelch-map-full",
 		"squelch-malformed-pubkey",
-		"decompress-lz4-failed",
 		"message-too-large",
 		"wire-invalid":
 		return resource.FeeInvalidData()
@@ -2024,6 +2054,9 @@ func chargeForReason(reason string) resource.Charge {
 func wirePreflightChargeReason(err error) string {
 	var limitErr *message.WireLimitError
 	if errors.As(err, &limitErr) {
+		if limitErr.GetObjectLedgerHashInvalid {
+			return "get-objects-ledgerhash"
+		}
 		switch limitErr.Reason {
 		case message.WireLimitEndpoints:
 			return "endpoints-too-large"
@@ -2033,6 +2066,8 @@ func wirePreflightChargeReason(err error) string {
 			return "transactions-batch-too-large"
 		case message.WireLimitValidatorBlobs:
 			return "vl-coll-heavy-too-many-blobs"
+		case message.WireLimitValidatorVersion:
+			return "vl-coll-wrong-version"
 		}
 	}
 	return "wire-invalid"
@@ -2122,9 +2157,13 @@ func (p *Peer) Send(data []byte) error {
 		p.largeSendQ.Store(0)
 	}
 	class := outboundClassForFrame(data)
-	if err := p.outbound.enqueueReliable(class, data); err != nil {
+	wire, count := p.prepareOutboundFrame(data)
+	if err := p.outbound.enqueueReliable(class, wire); err != nil {
 		p.recordSendDrop(class, err)
 		return err
+	}
+	if count {
+		p.recordOutboundAccepted(data, wire)
 	}
 	return nil
 }
@@ -2134,16 +2173,7 @@ func outboundClassForFrame(data []byte) OutboundSendClass {
 	if err != nil {
 		return OutboundClassOrdinary
 	}
-	switch {
-	case isConsensusPriorityMessageType(header.MessageType):
-		return OutboundClassConsensus
-	case header.MessageType == message.TypePing,
-		header.MessageType == message.TypeSquelch,
-		isConsensusControlMessageType(header.MessageType):
-		return OutboundClassControl
-	default:
-		return OutboundClassOrdinary
-	}
+	return describeMessage(header.MessageType).outbound
 }
 
 // SendPriority admits acquisition traffic to the same reliable FIFO while
@@ -2157,9 +2187,13 @@ func (p *Peer) SendPriority(data []byte) error {
 	if p.SendQueueLen() < targetSendQueue {
 		p.largeSendQ.Store(0)
 	}
-	if err := p.outbound.enqueueReliable(OutboundClassAcquisition, data); err != nil {
+	wire, count := p.prepareOutboundFrame(data)
+	if err := p.outbound.enqueueReliable(OutboundClassAcquisition, wire); err != nil {
 		p.recordSendDrop(OutboundClassAcquisition, err)
 		return err
+	}
+	if count {
+		p.recordOutboundAccepted(data, wire)
 	}
 	return nil
 }
@@ -2172,9 +2206,16 @@ func (p *Peer) SendManifestFrames(frames [][]byte) error {
 	if p.closed.Load() || p.gracefulClosing {
 		return ErrConnectionClosed
 	}
-	if err := p.outbound.enqueueBulk(frames); err != nil {
+	prepared := make([][]byte, len(frames))
+	for i, frame := range frames {
+		prepared[i], _ = p.prepareOutboundFrame(frame)
+	}
+	if err := p.outbound.enqueueBulk(prepared); err != nil {
 		p.recordSendDrop(OutboundClassBulk, err)
 		return err
+	}
+	for i, frame := range frames {
+		p.recordOutboundAccepted(frame, prepared[i])
 	}
 	return nil
 }

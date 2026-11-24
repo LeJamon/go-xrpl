@@ -5,6 +5,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -47,6 +48,15 @@ func NewEscrowCreate(account, destination string, amount tx.Amount) *EscrowCreat
 
 func (e *EscrowCreate) TxType() tx.Type {
 	return tx.TypeEscrowCreate
+}
+
+// Consequences reports Amount as the potential spend when it is XRP; token
+// escrows spend no XRP.
+func (e *EscrowCreate) Consequences() tx.Consequences {
+	if !e.Amount.IsNative() {
+		return tx.Consequences{}
+	}
+	return tx.Consequences{PotentialSpend: uint64(e.Amount.Drops())}
 }
 
 // Reference: rippled Escrow.cpp EscrowCreate::preflight()
@@ -377,23 +387,17 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			if parseErr != nil {
 				return ctx.Internal("parse MPT issuance", parseErr)
 			}
-			capturedTransferRate = getMPTTransferRate(issuance.TransferFee)
+			capturedTransferRate = mptutil.TransferRateFromFee(issuance.TransferFee)
 		} else {
 			issuerID, issuerErr := state.DecodeAccountID(e.Amount.Issuer)
 			if issuerErr != nil {
 				return ctx.Internal("decode IOU issuer", issuerErr)
 			}
-			issuer, readErr := tx.ReadAccountRoot(ctx.View, issuerID)
+			rate, readErr := tx.ReadTransferRate(ctx.View, issuerID)
 			if readErr != nil {
 				return ctx.Internal("read IOU issuer", readErr)
 			}
-			if issuer == nil {
-				return ter.TecNO_ISSUER
-			}
-			capturedTransferRate = issuer.TransferRate
-			if capturedTransferRate == 0 {
-				capturedTransferRate = parityRate
-			}
+			capturedTransferRate = rate
 		}
 	}
 
@@ -473,22 +477,10 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	if err != nil {
 		return ctx.Internal("SerializeEscrow", err)
 	}
-	sponsorAddress, result := tx.IncreaseOwnerCount(ctx, accountID, ctx.Account, 1)
-	if result != ter.TesSUCCESS {
-		return result
-	}
-	escrowData, err = tx.SetLedgerEntrySponsor(escrowData, "Sponsor", sponsorAddress)
-	if err != nil {
-		return ctx.Internal("EscrowCreate.SetSponsor", err)
-	}
 
-	// Insert escrow - creation tracked automatically by ApplyStateTable
-	if err := ctx.View.Insert(escrowKey, escrowData); err != nil {
-		return ctx.Internal("insert escrow", err)
-	}
-
-	// Deduct the escrow amount from the sender.
-	// Reference: rippled Escrow.cpp:587-599
+	// Deduct the escrow amount from the sender before charging the escrow's
+	// owner reserve: an IOU lock that exhausts the holding releases the source's
+	// trust-line reserve through the view, which ctx.Account must absorb first.
 	if isNative {
 		// XRP: deduct from account balance
 		ctx.Account.Balance -= uint64(e.Amount.Drops())
@@ -508,41 +500,34 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		if issuerID == accountID {
 			return ter.TecINTERNAL
 		}
-		if lockResult := escrowLockIOU(
-			ctx.View,
-			accountID,
-			issuerID,
-			e.Amount,
-			ctx.NumberContext(),
-		); lockResult != ter.TesSUCCESS {
+		if lockResult := escrowLockIOU(ctx, accountID, issuerID, e.Amount); lockResult != ter.TesSUCCESS {
 			return lockResult
 		}
+	}
+
+	sponsorAddress, result := tx.IncreaseOwnerCount(ctx, accountID, ctx.Account, 1)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	escrowData, err = tx.SetLedgerEntrySponsor(escrowData, "Sponsor", sponsorAddress)
+	if err != nil {
+		return ctx.Internal("EscrowCreate.SetSponsor", err)
+	}
+
+	// Insert escrow - creation tracked automatically by ApplyStateTable
+	if err := ctx.View.Insert(escrowKey, escrowData); err != nil {
+		return ctx.Internal("insert escrow", err)
 	}
 
 	return ter.TesSUCCESS
 }
 
 // escrowLockIOU locks an IOU amount by transferring it from sender to issuer
-// via the trust line. This is the Go equivalent of rippled's
-// escrowLockApplyHelper<Issue> which calls rippleCredit(sender, issuer, amount).
+// via the trust line, the equivalent of rippled's escrowLockApplyHelper<Issue>.
 //
-// rippled's rippleCredit() auto-creates trust lines if absent, but escrow
-// locking intentionally does not: the sender must already hold the IOU, so a
-// missing line means there is no balance to escrow (tecNO_LINE). A genuine view
-// read error is the corrupt-ledger case (tecINTERNAL).
-// Reference: rippled Escrow.cpp:408-431
-func escrowLockIOU(
-	view tx.LedgerView,
-	senderID, issuerID [20]byte,
-	amount tx.Amount,
-	numberContext state.NumberContext,
-) ter.Result {
-	return rippleCreditEscrow(
-		view,
-		senderID,
-		issuerID,
-		amount,
-		ter.TecNO_LINE,
-		numberContext,
-	)
+// rippled's credit auto-creates an absent line, but escrow locking does not:
+// the sender must already hold the IOU, so a missing line means there is no
+// balance to escrow (tecNO_LINE).
+func escrowLockIOU(ctx *tx.ApplyContext, senderID, issuerID [20]byte, amount tx.Amount) ter.Result {
+	return rippleCreditEscrow(ctx, senderID, issuerID, amount)
 }

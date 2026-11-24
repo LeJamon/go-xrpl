@@ -26,7 +26,7 @@ func TestReplayOwnershipSurvivesTransactionHandoff(t *testing.T) {
 	parent := svc.GetClosedLedger()
 	links := buildStandardReplayTestChain(t, r, parent, 2)
 	armStandardReplayTestPipeline(t, r, a, sender, links)
-	c.standardReplay.pivotReady = false
+	c.standardReplay.phase = standardReplayAcquiringPivot
 	completeStandardReplayTestLink(t, r, links[0])
 	link := links[0]
 	require.Nil(t, c.fetchTracker.Find(link.hash))
@@ -120,7 +120,7 @@ func TestReplayOwnershipDiscardsDuplicateCompletion(t *testing.T) {
 	c := r.catchupReplay
 	links := buildStandardReplayTestChain(t, r, svc.GetClosedLedger(), 2)
 	armStandardReplayTestPipeline(t, r, a, sender, links)
-	c.standardReplay.pivotReady = false
+	c.standardReplay.phase = standardReplayAcquiringPivot
 	completeStandardReplayTestLink(t, r, links[0])
 	link := links[0]
 	entry := c.standardReplay.entries[link.seq]
@@ -214,14 +214,14 @@ func TestLegacyReplayColdParentDoesNotBlockRouter(t *testing.T) {
 					resume()
 					select {
 					case <-done:
-					case <-time.After(3 * time.Second):
+					case <-time.After(progressTimeout):
 						t.Error("router did not join legacy completion")
 					}
 					router.StopAcquisitions()
 				})
 				select {
 				case <-family.entered:
-				case <-time.After(3 * time.Second):
+				case <-time.After(progressTimeout):
 					t.Fatal("cold parent verification never started")
 				}
 				// This message must be processed while the parent read is blocked.
@@ -231,7 +231,7 @@ func TestLegacyReplayColdParentDoesNotBlockRouter(t *testing.T) {
 					c.peersMu.RLock()
 					defer c.peersMu.RUnlock()
 					return c.peerStates[17] != nil
-				}, time.Second, time.Millisecond, "cold legacy replay blocked Router.Run")
+				}, progressTimeout, time.Millisecond, "cold legacy replay blocked Router.Run")
 				require.True(t, c.isAcquiring(hash), "worker lost acquisition ownership")
 				if outcome == "replaced" {
 					if il != nil {
@@ -246,19 +246,19 @@ func TestLegacyReplayColdParentDoesNotBlockRouter(t *testing.T) {
 				if outcome != "shutdown" {
 					resume()
 					if outcome == "publish" {
-						require.Eventually(t, func() bool { stored, err := svc.GetLedgerByHash(hash); return err == nil && stored != nil }, 3*time.Second, time.Millisecond)
+						require.Eventually(t, func() bool { stored, err := svc.GetLedgerByHash(hash); return err == nil && stored != nil }, progressTimeout, time.Millisecond)
 					} else {
 						require.Eventually(t, func() bool {
 							c.completionMu.Lock()
 							defer c.completionMu.Unlock()
 							return c.completionTasks[1] == nil && c.legacyDeltaTask == nil
-						}, 3*time.Second, time.Millisecond)
+						}, progressTimeout, time.Millisecond)
 					}
 				}
 				cancel()
 				select {
 				case <-done:
-				case <-time.After(3 * time.Second):
+				case <-time.After(progressTimeout):
 					t.Fatal("shutdown did not cancel the cold parent read")
 				}
 				if outcome != "publish" {

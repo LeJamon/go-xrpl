@@ -174,7 +174,7 @@ func TestServiceRoleSubmissionRechecksPublishedRules(t *testing.T) {
 					}()
 					require.Eventually(t, func() bool {
 						return svc.openLedgerMu.Snapshot().QueuedIngress == 1
-					}, 5*time.Second, time.Millisecond)
+					}, progressTimeout, time.Millisecond)
 					next, err := openledger.New(svc.GetClosedLedger(), openledger.Config{Rules: finalRules, Logger: svc.logger})
 					require.NoError(t, err)
 					svc.mu.Lock()

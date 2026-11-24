@@ -29,7 +29,42 @@ type gossipNetwork interface {
 	RelayValidation(validation *consensus.Validation, exceptPeer uint64) error
 }
 
-func (r *Router) handleMessage(msg *peermanagement.InboundMessage) (transferred bool) {
+// A handler returning true has taken ownership of the inbound frame.
+type inboundHandler func(*Router, *peermanagement.InboundMessage) bool
+
+func inlineHandler(handle func(*Router, *peermanagement.InboundMessage)) inboundHandler {
+	return func(r *Router, msg *peermanagement.InboundMessage) bool {
+		handle(r, msg)
+		return false
+	}
+}
+
+var inboundHandlers = [...]inboundHandler{
+	message.TypeProposeLedger:           inlineHandler((*Router).handleProposal),
+	message.TypeValidation:              inlineHandler((*Router).handleValidation),
+	message.TypeHaveSet:                 inlineHandler((*Router).handleHaveSet),
+	message.TypeStatusChange:            inlineHandler((*Router).handleStatusChange),
+	message.TypeLedgerData:              (*Router).handleLedgerData,
+	message.TypeGetObjects:              inlineHandler((*Router).handleFetchPackReply),
+	message.TypeReplayDeltaResponse:     inlineHandler((*Router).handleReplayDeltaResponse),
+	message.TypeManifests:               inlineHandler((*Router).submitManifestJob),
+	message.TypeValidatorListCollection: inlineHandler((*Router).handleValidatorListCollection),
+	message.TypeProofPathResponse:       inlineHandler((*Router).handleProofPathResponse),
+	message.TypeTransaction: func(r *Router, msg *peermanagement.InboundMessage) bool {
+		r.submitTxJob(msg)
+		return true
+	},
+	message.TypeGetLedger: func(r *Router, msg *peermanagement.InboundMessage) bool {
+		if reason := r.validateGetLedgerMessage(msg); reason != "" {
+			r.chargeGetLedgerAdmission(msg, reason)
+			return false
+		}
+		r.submitServeJob(msg)
+		return true
+	},
+}
+
+func (r *Router) handleMessage(msg *peermanagement.InboundMessage) bool {
 	defer r.recoverFrame(msg, "dispatch")
 
 	msgType := msg.Type
@@ -43,51 +78,10 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) (transferred 
 		}
 	}()
 
-	switch msgType {
-	case message.TypeProposeLedger:
-		r.handleProposal(msg)
-	case message.TypeValidation:
-		r.handleValidation(msg)
-	case message.TypeTransaction:
-		// Offload to the bounded worker pool so a transaction flood can't
-		// starve proposal / validation / ledger-acquisition handling, which
-		// share this goroutine. Mirrors rippled dispatching inbound
-		// TMTransaction onto its jtTRANSACTION job queue rather than handling
-		// it on the read strand.
-		r.submitTxJob(msg)
-		transferred = true
-	case message.TypeHaveSet:
-		r.handleHaveSet(msg)
-	case message.TypeStatusChange:
-		r.handleStatusChange(msg)
-	case message.TypeGetLedger:
-		if reason := r.validateGetLedgerMessage(msg); reason != "" {
-			r.chargeGetLedgerAdmission(msg, reason)
-			return false
-		}
-		// Offload the serve to the bounded worker pool so building a large
-		// reply (notably the 15k-tx tx-set in serveTxSet) can't stall
-		// proposal / validation / acquisition-reply handling on this
-		// goroutine. Inline when the pool isn't running (synchronous tests).
-		r.submitServeJob(msg)
-		transferred = true
-	case message.TypeLedgerData:
-		transferred = r.handleLedgerData(msg)
-	case message.TypeGetObjects:
-		// Only fetch-pack REPLIES reach the router; the overlay serves
-		// otFETCH_PACK requests inline and forwards replies here (see
-		// handleGetObjectsMessage). handleFetchPackReply ignores anything
-		// that isn't an otFETCH_PACK reply.
-		r.handleFetchPackReply(msg)
-	case message.TypeReplayDeltaResponse:
-		r.handleReplayDeltaResponse(msg)
-	case message.TypeManifests:
-		r.submitManifestJob(msg)
-	case message.TypeValidatorListCollection:
-		r.handleValidatorListCollection(msg)
-	default:
+	if int(msgType) >= len(inboundHandlers) || inboundHandlers[msgType] == nil {
+		return false
 	}
-	return transferred
+	return inboundHandlers[msgType](r, msg)
 }
 
 func (r *Router) handleInboundMessage(msg *peermanagement.InboundMessage) {
@@ -121,13 +115,12 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 		msg.SelectPeerCharge(resource.FeeUselessData(), "empty")
 		return true
 	}
-	if count > manifestFrameMaxEntries && !msg.SelectPeerCharge(resource.FeeModerateBurdenPeer(), "manifests-oversize") {
+	if count > manifestFrameMaxEntries && !msg.SelectPeerCharge(resource.FeeModerateBurdenPeer(), "oversize") {
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "manifests-oversize")
 	}
 
 	accepted := make([][]byte, 0, min(count, manifestFrameMaxEntries))
 	valid := false
-	badManifest := false
 	untrusted := 0
 	skippedUntrusted := false
 	_, _ = message.WalkManifests(msg.Payload, func(wire []byte) {
@@ -135,7 +128,6 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 		if err != nil {
 			r.logger.Debug("manifest parse failed",
 				"error", err, "peer", msg.PeerID)
-			badManifest = true
 			return
 		}
 		hash := parsed.Hash()
@@ -159,8 +151,6 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 			if r.messageSeen != nil {
 				r.messageSeen.observe(hash)
 			}
-		case manifest.Invalid, manifest.BadMasterKey, manifest.BadEphemeralKey:
-			badManifest = true
 		case manifest.Stale:
 			valid = true
 			if r.messageSeen != nil {
@@ -170,11 +160,8 @@ func (r *Router) handleManifests(msg *peermanagement.InboundMessage) bool {
 			valid = true
 		}
 	})
-	if skippedUntrusted && !msg.SelectPeerCharge(resource.FeeMalformedRequest(), "manifests-untrusted-limit") {
+	if skippedUntrusted && !msg.ChargePeer(resource.FeeMalformedRequest(), "too many untrusted manifests") {
 		r.gossip.IncPeerBadData(uint64(msg.PeerID), "manifests-untrusted-limit")
-	}
-	if badManifest {
-		r.gossip.IncPeerBadData(uint64(msg.PeerID), "manifest-invalid")
 	}
 	r.relayManifests(accepted)
 	return valid
@@ -647,9 +634,7 @@ func (r *Router) isLoadedLocal() bool {
 // preserved untouched, so non-rotated validators still round-trip
 // through the engine on the signing-derived NodeID.
 //
-// The manifest cache is installed on the router via SetManifestCache
-// before Run(). When the cache is nil (tests constructing a bare
-// router), this is a no-op and the parser default stands.
+// Without a manifest cache, the signing-derived NodeID is retained.
 func (r *Router) resolveMasterNodeID(nid *consensus.NodeID, signing consensus.SigningPubKey) {
 	if r.manifests == nil {
 		return

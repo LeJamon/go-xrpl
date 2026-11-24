@@ -34,7 +34,7 @@ func TestColdReplayProofRefreshRequiresExactLedgerAndGeneration(t *testing.T) {
 			require.NoError(t, err)
 			state := persistedReplayAdmissionState(t, base, 32)
 			parent := replayAdmissionLedger(t, 500, [32]byte{50}, [32]byte{49}, state, shamap.New(shamap.TypeTransaction))
-			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), progressTimeout)
 			defer cancel()
 			type result struct {
 				proof *PreparedReplayParent
@@ -81,7 +81,7 @@ func TestColdReplayProofRefreshRequiresExactLedgerAndGeneration(t *testing.T) {
 				} else {
 					require.ErrorIs(t, got.err, context.Canceled)
 				}
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("cold verification did not release")
 			}
 		})
@@ -102,7 +102,7 @@ func TestColdVerificationCannotConsumePersistenceProgressReserve(t *testing.T) {
 	require.Equal(t, 1, workers, "leave a workspace for transaction completion")
 	// Execute actual persistence while the cold-walk reservation remains held.
 	state := buildStateForPersistenceProgress(t)
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), progressTimeout)
 	defer cancel()
 	stored := 0
 	require.NoError(t, state.StoreDirtyBatched(ctx, persist, func(entries []shamap.FlushEntry) error {
@@ -124,7 +124,7 @@ func buildStateForPersistenceProgress(t *testing.T) *shamap.SHAMap {
 func TestColdReplayVerificationUsesBoundedUncachedBatches(t *testing.T) {
 	svc, db, root, _ := newParallelStoredVerificationFixture(t)
 	tracked := &batchVerificationDatabase{Database: db}
-	svc.nodeStore = tracked
+	svc.nodeStore = bindNodeStore(tracked)
 	svc.shamapFamily = backend.New(tracked)
 	var expectedNodes uint64
 	require.NoError(t, svc.walkStoredSHAMap(t.Context(), root, shamap.TypeState, func([32]byte, *nodestore.Node) error {

@@ -136,7 +136,7 @@ func (v *VaultWithdraw) destination(accountID [20]byte) ([20]byte, error) {
 
 func checkVaultShareFrozen(view tx.ReadOnlyLedgerView, account [20]byte, vd *vaultData) ter.Result {
 	share := tx.Asset{MPTIssuanceID: hex.EncodeToString(vd.ShareMPTID[:])}
-	return checkFrozen(view, share, account)
+	return mptutil.CheckFrozen(view, account, share)
 }
 
 // Preclaim checks the vault exists, the amount denominates the asset or shares,
@@ -223,7 +223,7 @@ func (v *VaultWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineCon
 	if dstID != accountID {
 		authType = mptutil.StrongAuth
 	}
-	if res := requireAuth(view, asset, dstID, authType, config.ParentCloseTime); res != ter.TesSUCCESS {
+	if res := mptutil.RequireAssetAuthAt(view, asset, dstID, authType, config.ParentCloseTime); res != ter.TesSUCCESS {
 		return res
 	}
 	if fix340 && dstID == accountID {
@@ -257,7 +257,7 @@ func (v *VaultWithdraw) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineCon
 			return res
 		}
 	} else {
-		if res := checkFrozen(view, asset, dstID); res != ter.TesSUCCESS {
+		if res := mptutil.CheckFrozen(view, dstID, asset); res != ter.TesSUCCESS {
 			return res
 		}
 		if res := checkVaultShareFrozen(view, accountID, vd); res != ter.TesSUCCESS {
@@ -289,7 +289,7 @@ func (v *VaultWithdraw) sharesToAssetAmount(
 		return tx.Amount{}, ter.TefINTERNAL
 	}
 	issuance, perr := state.ParseMPTokenIssuance(shareData)
-	if perr != nil || issuance.OutstandingAmount == 0 {
+	if perr != nil {
 		return tx.Amount{}, ter.TefINTERNAL
 	}
 	sharesN, aerr := amountToNumberForRules(v.Amount, rules)
@@ -408,20 +408,6 @@ func (v *VaultWithdraw) withdrawalAmounts(
 }
 
 func addWithdrawDestinationHolding(ctx *tx.ApplyContext, asset tx.Asset) ter.Result {
-	if asset.IsMPT() {
-		id, ok := assetMPTID(asset)
-		if !ok {
-			return ter.TefINTERNAL
-		}
-		exists, err := ctx.View.Exists(keylet.MPTokenByID(id, ctx.AccountID))
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if !exists && mptIDIssuer(id) != ctx.AccountID && ctx.Account.OwnerCount >= 2 &&
-			ctx.PriorBalance() < ctx.AccountReserve(tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)) {
-			return ter.TecINSUFFICIENT_RESERVE
-		}
-	}
 	delta, result := addEmptyHolding(ctx, ctx.AccountID, asset, ctx.PriorBalance())
 	if result == ter.TecDUPLICATE {
 		return ter.TesSUCCESS

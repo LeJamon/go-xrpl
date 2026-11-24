@@ -56,7 +56,7 @@ func TestAcquisitionInboxWaitsForPendingLedgerCapacity(t *testing.T) {
 	close(release)
 	result := <-lane.results()
 	close(result.ack)
-	require.Eventually(t, func() bool { return !lane.has(first) }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return !lane.has(first) }, progressTimeout, time.Millisecond)
 	require.Equal(t, 1, router.drainAcquisitionInboxBeforeMaintenance(lane))
 	require.True(t, lane.has(ledger))
 	require.Empty(t, inbox)
@@ -90,7 +90,7 @@ func TestAcquisitionWorkCountsRepliesHeldByRunningBatch(t *testing.T) {
 	close(release)
 	result := <-lane.results()
 	close(result.ack)
-	require.Eventually(t, lane.canAcceptData, time.Second, time.Millisecond)
+	require.Eventually(t, lane.canAcceptData, progressTimeout, time.Millisecond)
 }
 
 type gatedAcquisitionStoreFamily struct {
@@ -214,7 +214,7 @@ func TestAcquisitionStoreBorrowedBatchPreservesWriteOrder(t *testing.T) {
 	go func() {
 		done <- lane.storeBorrowed(t.Context(), lane.unscoped, []shamap.FlushEntry{second})
 	}()
-	require.Eventually(t, func() bool { return len(lane.jobs) == 1 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return len(lane.jobs) == 1 }, progressTimeout, time.Millisecond)
 	require.NoError(t, lane.StoreBatch(t.Context(), []shamap.FlushEntry{third}))
 	select {
 	case err := <-done:
@@ -323,7 +323,7 @@ func TestAcquisitionWorkMemoryWakeResumesWithoutTimer(t *testing.T) {
 		defer lane.mu.Unlock()
 		batch := lane.pending[ledger]
 		return batch != nil && batch.waiting
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	coordinator := &catchupReplayCoordinator{acquisitionWork: lane, acquisitionMemory: budget}
 	budget.Release(1)
@@ -335,7 +335,7 @@ func TestAcquisitionWorkMemoryWakeResumesWithoutTimer(t *testing.T) {
 		require.NoError(t, next.err)
 		require.Same(t, ledger, next.ledger)
 		close(next.ack)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("memory release did not resume the retained reply")
 	}
 }
@@ -470,7 +470,7 @@ func TestAcquisitionWorkPartialRequestWaitsForReply(t *testing.T) {
 				require.Zero(t, budget.Snapshot().Used, "checkpoint should recover pressure before waiting for the reply")
 			}
 			close(first.ack)
-			require.Eventually(t, func() bool { return !lane.has(ledger) }, time.Second, time.Millisecond)
+			require.Eventually(t, func() bool { return !lane.has(ledger) }, progressTimeout, time.Millisecond)
 			require.True(t, lane.submit(ledger, acquisitionWorkEvent{kind: acquisitionWorkData}))
 			next := <-lane.results()
 			require.Empty(t, next.stateIDs, "the old timer output must not be sent again")

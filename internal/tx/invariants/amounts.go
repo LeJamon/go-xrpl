@@ -7,31 +7,10 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
-
-// ---------------------------------------------------------------------------
-// Non-canonical amount detection (rippled hasInvalidAmount / ValidAmounts)
-// ---------------------------------------------------------------------------
-//
-// An STAmount is non-canonical when it fails isLegalNet (a native XRP value
-// whose magnitude exceeds the total-supply cap) or isLegalMPT (an MPT value
-// that is negative or exceeds the 63-bit maximum). Issued-currency amounts are
-// always canonical for this purpose.
-//
-// Two entry points share these predicates:
-//   - HasInvalidAmount scans a transaction's flattened JSON map (the universal
-//     preflight check gated on fixCleanup3_2_0 — rippled Transactor.cpp:263).
-//   - checkValidAmounts scans the after-image of every modified ledger entry
-//     (the ValidAmounts invariant — rippled InvariantCheck.cpp ValidAmounts).
-//
-// The transaction path scans the parsed field values because go-xrpl's binary
-// codec caps native at 1e17 drops and MPT at 2^63-1 on both encode and decode,
-// so a serialized round-trip could never carry a non-canonical amount to the
-// check. The ledger-entry path scans the raw serialized bytes via WalkFieldsDeep
-// for the same reason: binarycodec.Decode would reject an over-cap amount before
-// the scan ever saw it.
 
 const (
 	// maxNativeN is rippled STAmount::kMaxNativeN — the isLegalNet ceiling on a
@@ -47,16 +26,19 @@ var (
 	maxMPTBig    = new(big.Int).SetUint64(maxMPTAmount)
 )
 
-// HasInvalidAmount reports whether a transaction's flattened field map contains
-// a non-canonical native or MPT amount, recursing into nested objects and arrays
-// exactly as rippled's hasInvalidAmount walks an STObject. The depth bound
-// mirrors rippled's (a structure nested past 10 levels is treated as invalid).
+// HasInvalidAmount checks the flattened transaction before JSON rendering can
+// discard a zero MPT's wire sign. Nested structures deeper than 10 are invalid.
 func HasInvalidAmount(fields map[string]any) bool {
-	return hasInvalidAmountMap(fields, 0)
+	return hasAmountMap(fields, 0, amountJSONInvalid, true)
 }
 
-func hasInvalidAmountMap(m map[string]any, depth int) bool {
-	if depth > 10 {
+// HasOverCapMPT identifies wire magnitudes outside the execution engine's signed range.
+func HasOverCapMPT(fields map[string]any) bool {
+	return hasAmountMap(fields, 0, rawMPTOverCap, false)
+}
+
+func hasAmountMap(m map[string]any, depth int, invalid func(any) bool, limitDepth bool) bool {
+	if limitDepth && depth > 10 {
 		return true
 	}
 	defs := definitions.Get()
@@ -67,17 +49,24 @@ func hasInvalidAmountMap(m map[string]any, depth int) bool {
 		}
 		switch fi.Type {
 		case "Amount":
-			if amountJSONInvalid(v) {
+			if invalid(v) {
 				return true
 			}
 		case "STObject":
-			if child, ok := v.(map[string]any); ok && hasInvalidAmountMap(child, depth+1) {
+			if child, ok := v.(map[string]any); ok && hasAmountMap(child, depth+1, invalid, limitDepth) {
 				return true
 			}
 		case "STArray":
-			if arr, ok := v.([]any); ok {
+			switch arr := v.(type) {
+			case []map[string]any:
+				for _, child := range arr {
+					if hasAmountMap(child, depth+1, invalid, limitDepth) {
+						return true
+					}
+				}
+			case []any:
 				for _, el := range arr {
-					if child, ok := el.(map[string]any); ok && hasInvalidAmountMap(child, depth+1) {
+					if child, ok := el.(map[string]any); ok && hasAmountMap(child, depth+1, invalid, limitDepth) {
 						return true
 					}
 				}
@@ -87,11 +76,25 @@ func hasInvalidAmountMap(m map[string]any, depth int) bool {
 	return false
 }
 
+func rawMPTOverCap(v any) bool {
+	amount, ok := v.(map[string]any)
+	if !ok {
+		return false
+	}
+	if _, ok := amount["mpt_issuance_id"]; !ok {
+		return false
+	}
+	raw, ok := amount["value"].(binarytypes.RawMPTValue)
+	return ok && raw.Magnitude > maxMPTAmount
+}
+
 // amountJSONInvalid validates a single amount in canonical JSON form: a decimal
 // drops string (native XRP), a {value, mpt_issuance_id} object (MPT), or a
 // {value, currency, issuer} object (issued currency, always canonical).
 func amountJSONInvalid(v any) bool {
 	switch a := v.(type) {
+	case binarytypes.RawXRPAmount:
+		return a.Drops > maxNativeN
 	case string:
 		mag := strings.TrimPrefix(a, "-")
 		n, ok := new(big.Int).SetString(mag, 10)
@@ -102,6 +105,9 @@ func amountJSONInvalid(v any) bool {
 	case map[string]any:
 		if _, isMPT := a["mpt_issuance_id"]; !isMPT {
 			return false // issued currency
+		}
+		if raw, ok := a["value"].(binarytypes.RawMPTValue); ok {
+			return raw.Negative || raw.Magnitude > maxMPTAmount
 		}
 		val, _ := a["value"].(string)
 		if strings.HasPrefix(val, "-") {

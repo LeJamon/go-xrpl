@@ -34,6 +34,8 @@ func WithHTTPConfig(cfg HTTPConfig) Option {
 	return func(c *Config) { c.HTTP = cfg }
 }
 
+// SetHTTPProviders wires the /crawl and /vl sources. A setter because they
+// come from the RPC service graph, which is built from the overlay.
 func (o *Overlay) SetHTTPProviders(providers HTTPProviders) {
 	o.providersMu.Lock()
 	o.httpProviders = providers
@@ -155,10 +157,13 @@ func healthResponse(server map[string]any) (int, map[string]any, error) {
 		ValidatedLedger *struct {
 			Age int `json:"age"`
 		} `json:"validated_ledger"`
-		Peers            int     `json:"peers"`
-		ServerState      string  `json:"server_state"`
-		LoadFactorServer float64 `json:"load_factor_server"`
-		LoadBase         float64 `json:"load_base"`
+		Peers             int     `json:"peers"`
+		ServerState       string  `json:"server_state"`
+		LoadFactorServer  float64 `json:"load_factor_server"`
+		LoadBase          float64 `json:"load_base"`
+		LedgerPersistence *struct {
+			ConsecutiveFailures int `json:"consecutive_failures"`
+		} `json:"ledger_persistence"`
 	}
 	data, err := json.Marshal(server)
 	if err != nil {
@@ -207,6 +212,11 @@ func healthResponse(server map[string]any) (int, map[string]any, error) {
 		if load >= 1000 {
 			severity = 2
 		}
+	}
+	// go-xrpl extension: validated ledgers are not being persisted.
+	if p := snapshot.LedgerPersistence; p != nil && p.ConsecutiveFailures > 0 {
+		info["ledger_persistence"] = p.ConsecutiveFailures
+		severity = max(severity, 1)
 	}
 	status := [...]int{http.StatusOK, http.StatusServiceUnavailable, http.StatusInternalServerError}[severity]
 	return status, map[string]any{"info": info}, nil

@@ -317,7 +317,7 @@ func TestEngineStopJoinsAcceptanceDeferrerBeforeEventBusClose(t *testing.T) {
 	go func() { stopDone <- engine.Stop() }()
 	select {
 	case <-adaptor.stopEntered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Engine.Stop did not join the acceptance deferrer")
 	}
 
@@ -330,7 +330,7 @@ func TestEngineStopJoinsAcceptanceDeferrerBeforeEventBusClose(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Stop: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Engine.Stop did not return after acceptance drain")
 	}
 }

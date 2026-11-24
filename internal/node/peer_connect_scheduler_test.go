@@ -35,7 +35,7 @@ func TestPeerConnectSchedulerBoundsWorkersAndQueue(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		select {
 		case <-started:
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("scheduler worker did not start")
 		}
 	}
@@ -46,7 +46,7 @@ func TestPeerConnectSchedulerBoundsWorkersAndQueue(t *testing.T) {
 	require.LessOrEqual(t, running.Load(), int32(2))
 	require.Equal(t, 4, peerConnectPendingCount(s))
 	close(release)
-	require.Eventually(t, func() bool { return peerConnectPendingCount(s) == 0 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return peerConnectPendingCount(s) == 0 }, progressTimeout, time.Millisecond)
 	s.Close()
 }
 
@@ -62,7 +62,7 @@ func TestPeerConnectSchedulerDeduplicatesRunningAndQueued(t *testing.T) {
 	require.NoError(t, s.Enqueue("first"))
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("first dial did not start")
 	}
 	require.NoError(t, s.Enqueue("first"))
@@ -70,7 +70,7 @@ func TestPeerConnectSchedulerDeduplicatesRunningAndQueued(t *testing.T) {
 	require.NoError(t, s.Enqueue("second"))
 	require.Equal(t, 2, peerConnectPendingCount(s))
 	close(release)
-	require.Eventually(t, func() bool { return peerConnectPendingCount(s) == 0 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return peerConnectPendingCount(s) == 0 }, progressTimeout, time.Millisecond)
 	s.Close()
 }
 
@@ -88,7 +88,7 @@ func TestPeerConnectSchedulerRetriesAfterCompletion(t *testing.T) {
 	s := newPeerConnectScheduler(context.Background(), dial, 1, 1, nil)
 	require.NoError(t, s.Enqueue("retry"))
 	<-completed
-	require.Eventually(t, func() bool { return peerConnectPendingCount(s) == 0 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return peerConnectPendingCount(s) == 0 }, progressTimeout, time.Millisecond)
 	require.NoError(t, s.Enqueue("retry"))
 	<-completed
 	require.EqualValues(t, 2, calls.Load())
@@ -114,7 +114,7 @@ func TestPeerConnectSchedulerObservesAsyncFailures(t *testing.T) {
 	case got := <-observed:
 		require.Equal(t, "bad:1", got.addr)
 		require.ErrorIs(t, got.err, wantErr)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("failure observer was not called")
 	}
 	s.Close()
@@ -132,7 +132,7 @@ func TestPeerConnectSchedulerCloseRejectsAdmissionAndJoinsWorkers(t *testing.T) 
 	require.NoError(t, s.Enqueue("blocked"))
 	select {
 	case <-started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("dial worker did not start")
 	}
 	closed := make(chan struct{})
@@ -142,12 +142,12 @@ func TestPeerConnectSchedulerCloseRejectsAdmissionAndJoinsWorkers(t *testing.T) 
 	}()
 	select {
 	case <-cancelled:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Close did not cancel running dial")
 	}
 	select {
 	case <-closed:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Close did not join worker")
 	}
 	require.ErrorIs(t, s.Enqueue("after-close"), types.ErrPeerConnectClosed)
@@ -163,6 +163,6 @@ func TestPeerConnectSchedulerParentCancellationRejectsAdmission(t *testing.T) {
 	cancel()
 	require.Eventually(t, func() bool {
 		return errors.Is(s.Enqueue("after-cancel"), types.ErrPeerConnectClosed)
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	s.Close()
 }

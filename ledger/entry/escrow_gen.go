@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -1096,7 +1097,7 @@ func (e *Escrow) PreviousTxn() (string, uint32) {
 }
 
 // ToMap returns the canonical JSON-map representation of the receiver,
-// suitable for binarycodec.EncodeBytes. Includes every present field —
+// suitable for binarycodec.EncodeDecodedFields. Includes every present field —
 // metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
 // header that every SLE blob carries.
 func (e *Escrow) ToMap() map[string]any {
@@ -1166,7 +1167,24 @@ func (e *Escrow) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (e *Escrow) Encode() ([]byte, error) {
-	if err := e.validateRequired(); err != nil {
+	if err := e.validateEncode(); err != nil {
+		return nil, err
+	}
+	if e.hasXAddress() {
+		return e.encodeViaMap()
+	}
+	data, err := e.appendBinary(make([]byte, 0, e.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(e, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeDecodedFields. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (e *Escrow) encodeViaMap() ([]byte, error) {
+	if err := e.validateEncode(); err != nil {
 		return nil, err
 	}
 	out := e.ToMap()
@@ -1176,7 +1194,206 @@ func (e *Escrow) Encode() ([]byte, error) {
 	if e.present&escrowBitPreviousTxnLgrSeq == 0 {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
-	return binarycodec.EncodeBytes(out)
+	return binarycodec.EncodeDecodedFields(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (e *Escrow) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x75)
+	if e.present&escrowBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), e.Flags)
+	}
+	if e.present&escrowBitSourceTag != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x23), e.SourceTag)
+	}
+	if e.present&escrowBitSequence != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x24), e.Sequence)
+	}
+	if e.present&escrowBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), e.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if e.present&escrowBitTransferRate != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x2B), e.TransferRate)
+	}
+	if e.present&escrowBitDestinationTag != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x2E), e.DestinationTag)
+	}
+	if e.present&escrowBitCancelAfter != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x24), e.CancelAfter)
+	}
+	if e.present&escrowBitFinishAfter != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x25), e.FinishAfter)
+	}
+	if e.present&escrowBitOwnerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x34), e.OwnerNode); err != nil {
+			return nil, err
+		}
+	}
+	if e.present&escrowBitDestinationNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x39), e.DestinationNode); err != nil {
+			return nil, err
+		}
+	}
+	if e.present&escrowBitIssuerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x30, 0x1B), e.IssuerNode); err != nil {
+			return nil, err
+		}
+	}
+	if e.present&escrowBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), e.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if e.present&escrowBitAmount != 0 {
+		if dst, err = appendAmount(append(dst, 0x61), e.Amount); err != nil {
+			return nil, err
+		}
+	}
+	if e.present&escrowBitCondition != 0 {
+		if dst, err = appendBlob(append(dst, 0x70, 0x11), e.Condition); err != nil {
+			return nil, err
+		}
+	}
+	if e.present&escrowBitData != 0 {
+		if dst, err = appendBlob(append(dst, 0x70, 0x1B), e.Data); err != nil {
+			return nil, err
+		}
+	}
+	if e.present&escrowBitBytecode != 0 {
+		if dst, err = appendBlob(append(dst, 0x70, 0x2F), e.Bytecode); err != nil {
+			return nil, err
+		}
+	}
+	if e.present&escrowBitAccount != 0 {
+		if dst, err = appendAccountID(append(dst, 0x81), e.Account); err != nil {
+			return nil, err
+		}
+	}
+	if e.present&escrowBitDestination != 0 {
+		if dst, err = appendAccountID(append(dst, 0x83), e.Destination); err != nil {
+			return nil, err
+		}
+	}
+	if e.present&escrowBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), e.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (e *Escrow) encodedSizeHint() int {
+	size := 41
+	if e.present&escrowBitFlags != 0 {
+		size += 5
+	}
+	if e.present&escrowBitSourceTag != 0 {
+		size += 5
+	}
+	if e.present&escrowBitSequence != 0 {
+		size += 5
+	}
+	if e.present&escrowBitTransferRate != 0 {
+		size += 5
+	}
+	if e.present&escrowBitDestinationTag != 0 {
+		size += 5
+	}
+	if e.present&escrowBitCancelAfter != 0 {
+		size += 6
+	}
+	if e.present&escrowBitFinishAfter != 0 {
+		size += 6
+	}
+	if e.present&escrowBitOwnerNode != 0 {
+		size += 9
+	}
+	if e.present&escrowBitDestinationNode != 0 {
+		size += 9
+	}
+	if e.present&escrowBitIssuerNode != 0 {
+		size += 10
+	}
+	if e.present&escrowBitAmount != 0 {
+		size += 1 + amountEncodedLen(e.Amount)
+	}
+	if e.present&escrowBitCondition != 0 {
+		size += 2 + blobEncodedLen(e.Condition)
+	}
+	if e.present&escrowBitData != 0 {
+		size += 2 + blobEncodedLen(e.Data)
+	}
+	if e.present&escrowBitBytecode != 0 {
+		size += 2 + blobEncodedLen(e.Bytecode)
+	}
+	if e.present&escrowBitAccount != 0 {
+		size += 1 + accountIDEncodedLen(e.Account)
+	}
+	if e.present&escrowBitDestination != 0 {
+		size += 1 + accountIDEncodedLen(e.Destination)
+	}
+	if e.present&escrowBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(e.Sponsor)
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (e *Escrow) hasXAddress() bool {
+	if e.present&escrowBitOwnerNode != 0 && isXAddress(e.OwnerNode) {
+		return true
+	}
+	if e.present&escrowBitDestinationNode != 0 && isXAddress(e.DestinationNode) {
+		return true
+	}
+	if e.present&escrowBitIssuerNode != 0 && isXAddress(e.IssuerNode) {
+		return true
+	}
+	if e.present&escrowBitPreviousTxnID != 0 && isXAddress(e.PreviousTxnID) {
+		return true
+	}
+	if e.present&escrowBitAmount != 0 && isXAddressValue(e.Amount) {
+		return true
+	}
+	if e.present&escrowBitCondition != 0 && isXAddress(e.Condition) {
+		return true
+	}
+	if e.present&escrowBitData != 0 && isXAddress(e.Data) {
+		return true
+	}
+	if e.present&escrowBitBytecode != 0 && isXAddress(e.Bytecode) {
+		return true
+	}
+	if e.present&escrowBitAccount != 0 && isXAddress(e.Account) {
+		return true
+	}
+	if e.present&escrowBitDestination != 0 && isXAddress(e.Destination) {
+		return true
+	}
+	if e.present&escrowBitSponsor != 0 && isXAddress(e.Sponsor) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (e *Escrow) validateEncode() error {
+	if err := e.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

@@ -5,8 +5,10 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	trustsettx "github.com/LeJamon/go-xrpl/internal/tx/trustset"
 	"github.com/stretchr/testify/require"
@@ -50,6 +52,24 @@ func batchParserFields(withExplicitEmptyFields bool) (map[string]any, []map[stri
 		},
 	}
 	return fields, []map[string]any{first, second}
+}
+
+func TestBatchParserRetainsMPTZeroSign(t *testing.T) {
+	fields, inner := batchParserFields(false)
+	inner[1]["Amount"] = map[string]any{
+		"mpt_issuance_id": "00000002430427B80BD2D09D36B70B969E12801065F22308",
+		"value":           binarytypes.RawMPTValue{Negative: true},
+	}
+	wire, err := binarycodec.EncodeDecodedFields(fields)
+	require.NoError(t, err)
+	parsed, err := tx.ParseFromBinary(wire)
+	require.NoError(t, err)
+	flat, err := parsed.Flatten()
+	require.NoError(t, err)
+	require.True(t, invariants.HasInvalidAmount(flat))
+	roundTrip, err := binarycodec.EncodeDecodedFields(flat)
+	require.NoError(t, err)
+	require.Equal(t, wire, roundTrip)
 }
 
 func TestBatchParserBindsNestedRawBytesAndPreservesPresence(t *testing.T) {
@@ -160,7 +180,7 @@ func TestBatchBinaryParserBindsInnerNoCurrencyIdentity(t *testing.T) {
 			map[string]any{"RawTransaction": second},
 		},
 	}
-	blob, err := binarycodec.EncodeBytes(fields)
+	blob, err := binarycodec.EncodeDecodedFields(fields)
 	require.NoError(t, err)
 
 	parsed, err := tx.ParseFromBinary(blob)
@@ -168,7 +188,7 @@ func TestBatchBinaryParserBindsInnerNoCurrencyIdentity(t *testing.T) {
 	parsedBatch := parsed.(*Batch)
 	inner := parsedBatch.RawTransactions[0].RawTransaction.InnerTx.(*trustsettx.TrustSet)
 	require.Equal(t, "1", inner.LimitAmount.Currency)
-	wantRaw, err := binarycodec.EncodeBytes(first)
+	wantRaw, err := binarycodec.EncodeDecodedFields(first)
 	require.NoError(t, err)
 	require.Equal(t, wantRaw, inner.GetRawBytes())
 	matches, err := tx.CurrentFieldsMatchRaw(inner)

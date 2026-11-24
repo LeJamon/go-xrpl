@@ -13,7 +13,7 @@ func (c *catchupReplayCoordinator) retryReplayHeadTail(now time.Time) {
 	pipeline := &c.standardReplay
 	entry := pipeline.entries[pipeline.anchorSeq+1]
 	var ledger *inbound.Ledger
-	if pipeline.active && pipeline.pivotReady && entry != nil && !entry.failed && !entry.durable {
+	if pipeline.isActive() && pipeline.isPivotReady() && entry != nil && !entry.failed && !entry.durable {
 		ledger = entry.acquisition
 	}
 	c.acquisitionMu.Unlock()
@@ -23,12 +23,13 @@ func (c *catchupReplayCoordinator) retryReplayHeadTail(now time.Time) {
 	if lane := c.currentAcquisitionWork(); lane != nil && lane.has(ledger) {
 		return
 	}
-	if !ledger.TxOnlyTailHedgeDue(now) {
+	leaseTime := ledger.Now()
+	if !ledger.TxOnlyTailHedgeDue(leaseTime) {
 		return
 	}
 	peers := c.replayTailCandidates(ledger, now)
 	if len(peers) > 0 {
-		c.submitAcquisitionWork(ledger, acquisitionWorkEvent{kind: acquisitionWorkTail, peers: peers, at: now})
+		c.submitAcquisitionWork(ledger, acquisitionWorkEvent{kind: acquisitionWorkTail, peers: peers, at: leaseTime})
 	}
 }
 

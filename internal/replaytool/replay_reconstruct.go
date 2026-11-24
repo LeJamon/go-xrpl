@@ -309,13 +309,9 @@ func currentObject(state *shamap.SHAMap, idx [32]byte, fields map[string]any) (m
 
 // putEncoded encodes obj to canonical SLE bytes and stores it at idx.
 func putEncoded(state *shamap.SHAMap, idx [32]byte, obj map[string]any) error {
-	encoded, err := binarycodec.Encode(obj)
+	raw, err := binarycodec.EncodeDecodedFields(obj)
 	if err != nil {
 		return fmt.Errorf("encoding object: %w", err)
-	}
-	raw, err := hex.DecodeString(encoded)
-	if err != nil {
-		return fmt.Errorf("decoding encoded hex: %w", err)
 	}
 	if obj["LedgerEntryType"] != "DirectoryNode" || obj["Indexes"] != nil {
 		if err := validateEncodedEntry(obj, raw); err != nil {

@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -539,7 +540,7 @@ func (t *TransactionProposal) PreviousTxn() (string, uint32) {
 }
 
 // ToMap returns the canonical JSON-map representation of the receiver,
-// suitable for binarycodec.EncodeBytes. Includes every present field —
+// suitable for binarycodec.EncodeDecodedFields. Includes every present field —
 // metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
 // header that every SLE blob carries.
 func (t *TransactionProposal) ToMap() map[string]any {
@@ -576,13 +577,25 @@ func (t *TransactionProposal) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (t *TransactionProposal) Encode() ([]byte, error) {
-	if err := t.validateRequired(); err != nil {
+	if err := t.validateEncode(); err != nil {
 		return nil, err
 	}
-	if t.present&transactionproposalBitProposedTransaction != 0 {
-		if err := validateInnerObjectForEncode("ProposedTransaction", t.ProposedTransaction); err != nil {
-			return nil, err
-		}
+	if t.hasXAddress() {
+		return t.encodeViaMap()
+	}
+	data, err := t.appendBinary(make([]byte, 0, t.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(t, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeDecodedFields. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (t *TransactionProposal) encodeViaMap() ([]byte, error) {
+	if err := t.validateEncode(); err != nil {
+		return nil, err
 	}
 	out := t.ToMap()
 	if t.present&transactionproposalBitPreviousTxnID == 0 {
@@ -591,7 +604,109 @@ func (t *TransactionProposal) Encode() ([]byte, error) {
 	if t.present&transactionproposalBitPreviousTxnLgrSeq == 0 {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
-	return binarycodec.EncodeBytes(out)
+	return binarycodec.EncodeDecodedFields(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (t *TransactionProposal) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x91)
+	if t.present&transactionproposalBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), t.Flags)
+	}
+	if t.present&transactionproposalBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), t.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if t.present&transactionproposalBitExpiration != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x2A), t.Expiration)
+	}
+	if t.present&transactionproposalBitOwnerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x34), t.OwnerNode); err != nil {
+			return nil, err
+		}
+	}
+	if t.present&transactionproposalBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), t.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if t.present&transactionproposalBitOwner != 0 {
+		if dst, err = appendAccountID(append(dst, 0x82), t.Owner); err != nil {
+			return nil, err
+		}
+	}
+	if t.present&transactionproposalBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), t.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if t.present&transactionproposalBitProposedTransaction != 0 {
+		if dst, err = appendInnerObjectField(dst, "ProposedTransaction", t.ProposedTransaction); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (t *TransactionProposal) encodedSizeHint() int {
+	size := 41
+	if t.present&transactionproposalBitFlags != 0 {
+		size += 5
+	}
+	if t.present&transactionproposalBitExpiration != 0 {
+		size += 5
+	}
+	if t.present&transactionproposalBitOwnerNode != 0 {
+		size += 9
+	}
+	if t.present&transactionproposalBitOwner != 0 {
+		size += 1 + accountIDEncodedLen(t.Owner)
+	}
+	if t.present&transactionproposalBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(t.Sponsor)
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (t *TransactionProposal) hasXAddress() bool {
+	if t.present&transactionproposalBitOwnerNode != 0 && isXAddress(t.OwnerNode) {
+		return true
+	}
+	if t.present&transactionproposalBitPreviousTxnID != 0 && isXAddress(t.PreviousTxnID) {
+		return true
+	}
+	if t.present&transactionproposalBitOwner != 0 && isXAddress(t.Owner) {
+		return true
+	}
+	if t.present&transactionproposalBitSponsor != 0 && isXAddress(t.Sponsor) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (t *TransactionProposal) validateEncode() error {
+	if err := t.validateRequired(); err != nil {
+		return err
+	}
+	if t.present&transactionproposalBitProposedTransaction != 0 {
+		if err := validateInnerObjectForEncode("ProposedTransaction", t.ProposedTransaction); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

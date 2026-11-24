@@ -9,6 +9,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -59,7 +60,7 @@ func TestComputeMPTTransferFeeUsesCanonicalRounding(t *testing.T) {
 	}{
 		{
 			name:        "issue 1402 rounding",
-			lockedRate:  getMPTTransferRate(100),
+			lockedRate:  mptutil.TransferRateFromFee(100),
 			currentFee:  100,
 			finalAmount: 9_990,
 		},
@@ -71,20 +72,20 @@ func TestComputeMPTTransferFeeUsesCanonicalRounding(t *testing.T) {
 		},
 		{
 			name:         "issuer is destination",
-			lockedRate:   getMPTTransferRate(100),
+			lockedRate:   mptutil.TransferRateFromFee(100),
 			currentFee:   100,
 			issuerIsDest: true,
 			finalAmount:  originalAmount,
 		},
 		{
 			name:        "locked rate is lower",
-			lockedRate:  getMPTTransferRate(100),
+			lockedRate:  mptutil.TransferRateFromFee(100),
 			currentFee:  200,
 			finalAmount: 9_990,
 		},
 		{
 			name:        "current rate is lower",
-			lockedRate:  getMPTTransferRate(200),
+			lockedRate:  mptutil.TransferRateFromFee(200),
 			currentFee:  100,
 			finalAmount: 9_990,
 		},
@@ -134,7 +135,7 @@ func TestComputeMPTTransferFeeUsesCanonicalRounding(t *testing.T) {
 		require.Panics(t, func() {
 			computeMPTTransferFee(
 				view,
-				getMPTTransferRate(100),
+				mptutil.TransferRateFromFee(100),
 				mptHexID,
 				senderID,
 				receiverID,

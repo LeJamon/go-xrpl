@@ -286,29 +286,6 @@ var (
 	ErrBatchInnerHashUncomputable = ter.Errorf(ter.TemINVALID, "failed to compute inner transaction hash")
 )
 
-// disabledInnerTxTypes are transaction types that may not appear as inner
-// transactions of a Batch. The check is unconditional — it is not gated on any
-// amendment — so a batch wrapping one of these is rejected at preflight
-// regardless of whether the wrapped feature is enabled.
-// Reference: rippled Batch::disabledTxTypes (Batch.h) / Batch::preflight.
-var disabledInnerTxTypes = map[tx.Type]struct{}{
-	tx.TypeVaultCreate:             {},
-	tx.TypeVaultSet:                {},
-	tx.TypeVaultDelete:             {},
-	tx.TypeVaultDeposit:            {},
-	tx.TypeVaultWithdraw:           {},
-	tx.TypeVaultClawback:           {},
-	tx.TypeLoanBrokerSet:           {},
-	tx.TypeLoanBrokerDelete:        {},
-	tx.TypeLoanBrokerCoverDeposit:  {},
-	tx.TypeLoanBrokerCoverWithdraw: {},
-	tx.TypeLoanBrokerCoverClawback: {},
-	tx.TypeLoanSet:                 {},
-	tx.TypeLoanDelete:              {},
-	tx.TypeLoanManage:              {},
-	tx.TypeLoanPay:                 {},
-}
-
 // NewBatch creates a new Batch transaction
 func NewBatch(account string) *Batch {
 	return &Batch{
@@ -396,7 +373,8 @@ func (b *Batch) PreflightInnerTransactions(rules *amendment.Rules, preflight fun
 			return ErrBatchInnerIsBatch
 		}
 
-		if _, disabled := disabledInnerTxTypes[inner.TxType()]; disabled {
+		// Not amendment-gated: the type is rejected even when its feature is disabled.
+		if d, _ := tx.Lookup(inner.TxType()); d.DisallowedInBatch {
 			return ErrBatchInnerDisabledType
 		}
 

@@ -196,7 +196,7 @@ func benchmarkIssue2090Acceptance(b *testing.B, withRefresh bool) {
 			case err := <-done:
 				svc.Stop()
 				b.Fatalf("refresh ended before first promotion: %v", err)
-			case <-time.After(5 * time.Second):
+			case <-time.After(progressTimeout):
 				svc.Stop()
 				b.Fatal("refresh did not reach first promotion")
 			}
@@ -614,7 +614,7 @@ func persistIssue2090Parent(tb testing.TB, parent *ledgerpkg.Ledger) *benchmarkR
 	base, err := nodestore.NewRotatingKVDatabase(backend, nodestore.DatabaseConfig{})
 	require.NoError(tb, err)
 	db := &countingGenerationDatabase{Database: base, generation: base}
-	writer := &Service{nodeStore: base}
+	writer := &Service{nodeStore: bindNodeStore(base)}
 	require.NoError(tb, writer.persistToNodeStore(tb.Context(), parent, parent.Sequence()))
 	fixture.root, err = parent.StateMapHash()
 	require.NoError(tb, err)
@@ -656,7 +656,7 @@ func issue2090OpenFixture(tb testing.TB, fixture *benchmarkRefreshFixture) {
 	db := &countingGenerationDatabase{Database: base, generation: base}
 	family := shamapbackend.New(db)
 	svc := &Service{
-		nodeStore:    db,
+		nodeStore:    bindNodeStore(db),
 		shamapFamily: family,
 		logger:       xrpllog.Discard(),
 	}

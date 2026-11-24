@@ -12,6 +12,7 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	sponsortx "github.com/LeJamon/go-xrpl/internal/tx/sponsor"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	trustsettx "github.com/LeJamon/go-xrpl/internal/tx/trustset"
@@ -82,6 +83,9 @@ func TestTrustSetNoCurrencyBinaryReplay(t *testing.T) {
 	if parsed.LimitAmount.Currency != "1" {
 		t.Fatalf("LimitAmount currency = %q, want canonical noCurrency string", parsed.LimitAmount.Currency)
 	}
+	if err := sign.VerifySignature(transaction, true); err != nil {
+		t.Fatalf("VerifySignature: %v", err)
+	}
 	if got := keylet.CurrencyBytes(parsed.LimitAmount.Currency); got != keylet.NoCurrency() {
 		t.Fatalf("LimitAmount currency bytes = %X, want %X", got, keylet.NoCurrency())
 	}
@@ -96,7 +100,7 @@ func TestTrustSetNoCurrencyBinaryReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Flatten: %v", err)
 	}
-	flattenedBinary, err := binarycodec.EncodeBytes(flattened)
+	flattenedBinary, err := binarycodec.EncodeDecodedFields(flattened)
 	if err != nil {
 		t.Fatalf("encode flattened transaction: %v", err)
 	}

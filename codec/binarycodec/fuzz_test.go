@@ -1,6 +1,7 @@
 package binarycodec
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -211,10 +212,11 @@ func FuzzDecodeRoundTrip(f *testing.F) {
 			return
 		}
 
-		reEncoded, err := Encode(decoded)
+		reEncoded, err := EncodeDecodedFields(decoded)
 		if err != nil {
-			t.Fatalf("Decode succeeded but Encode failed: %v\ndecoded map: %v", err, decoded)
+			t.Fatalf("Decode succeeded but EncodeDecodedFields failed: %v\ndecoded map: %v", err, decoded)
 		}
+		reEncodedHex := hex.EncodeToString(reEncoded)
 
 		// Full consumption (the #603 class): canonical field-ID and length-prefix
 		// encodings are unique, so re-encoding the decoded field set is never
@@ -222,8 +224,8 @@ func FuzzDecodeRoundTrip(f *testing.F) {
 		// silently dropped a trailing field or a stray end marker instead of
 		// erroring. (A longer re-encoding is legitimate: a nested object that
 		// relied on end-of-data gets its omitted end marker restored.)
-		if len(reEncoded) < len(hexEncoded) {
-			t.Fatalf("decode dropped trailing bytes:\n  input:      %s\n  re-encoded: %s", hexEncoded, reEncoded)
+		if len(reEncodedHex) < len(hexEncoded) {
+			t.Fatalf("decode dropped trailing bytes:\n  input:      %s\n  re-encoded: %s", hexEncoded, reEncodedHex)
 		}
 
 		// Re-encode idempotency (the #594/#601 class): decoding the canonical
@@ -231,16 +233,17 @@ func FuzzDecodeRoundTrip(f *testing.F) {
 		// numeric-precision drift diverges here, and unlike an input==output
 		// check this does not false-positive on a valid but non-canonically
 		// ordered input (the decoder does not require canonical field order).
-		reDecoded, err := Decode(reEncoded)
+		reDecoded, err := Decode(reEncodedHex)
 		if err != nil {
-			t.Fatalf("Encode produced output that does not decode: %v\n  re-encoded: %s", err, reEncoded)
+			t.Fatalf("EncodeDecodedFields produced output that does not decode: %v\n  re-encoded: %s", err, reEncodedHex)
 		}
-		reEncoded2, err := Encode(reDecoded)
+		reEncoded2, err := EncodeDecodedFields(reDecoded)
 		if err != nil {
-			t.Fatalf("second Encode failed: %v\n  re-decoded map: %v", err, reDecoded)
+			t.Fatalf("second EncodeDecodedFields failed: %v\n  re-decoded map: %v", err, reDecoded)
 		}
-		if !strings.EqualFold(reEncoded, reEncoded2) {
-			t.Fatalf("re-encode not idempotent:\n  first:  %s\n  second: %s", reEncoded, reEncoded2)
+		reEncoded2Hex := hex.EncodeToString(reEncoded2)
+		if !strings.EqualFold(reEncodedHex, reEncoded2Hex) {
+			t.Fatalf("re-encode not idempotent:\n  first:  %s\n  second: %s", reEncodedHex, reEncoded2Hex)
 		}
 	})
 }

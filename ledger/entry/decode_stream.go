@@ -212,19 +212,33 @@ func (r *streamReader) readBlobHex() (string, error) {
 	return s, nil
 }
 
-// readAmount decodes an XRP-only Amount through the canonical codec.
-func (r *streamReader) readAmount() (any, error) {
-	sub := serdes.NewBinaryParser(r.data[r.pos:], definitions.Get())
+// AccountRoot exposes the decimal balance even when only its original wire
+// representation can encode a magnitude above the XRP supply cap.
+type overCapBalance struct {
+	decimal string
+	raw     types.RawXRPAmount
+}
+
+func (r *streamReader) readAccountBalance() (string, *overCapBalance, error) {
+	sub := serdes.NewBinaryParserAllowOverCap(r.data[r.pos:], definitions.Get())
 	start := sub.Remaining()
-	value, err := (&types.Amount{}).ToJSONAllowOverCap(sub)
+	value, err := (&types.Amount{}).ToJSON(sub)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	r.pos += start - sub.Remaining()
-	if _, ok := value.(string); !ok {
-		return nil, errUnsupportedAmount
+	switch v := value.(type) {
+	case string:
+		return v, nil, nil
+	case types.RawXRPAmount:
+		decimal := strconv.FormatUint(v.Drops, 10)
+		if v.Negative {
+			decimal = "-" + decimal
+		}
+		return decimal, &overCapBalance{decimal: decimal, raw: v}, nil
+	default:
+		return "", nil, errUnsupportedAmount
 	}
-	return value, nil
 }
 
 func (r *streamReader) readAmountAny() (any, error) {

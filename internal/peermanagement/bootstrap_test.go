@@ -40,14 +40,14 @@ func startBootstrapTestOverlay(t *testing.T, opts ...Option) *Overlay {
 	case <-overlay.ListenerReady():
 	case err := <-runDone:
 		t.Fatalf("overlay stopped before its listener became ready: %v", err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("overlay listener did not become ready")
 	}
 	t.Cleanup(func() {
 		require.NoError(t, overlay.Stop())
 		select {
 		case <-runDone:
-		case <-time.After(10 * time.Second):
+		case <-time.After(progressTimeout):
 			t.Error("overlay did not stop")
 		}
 	})
@@ -679,7 +679,7 @@ func TestOverlayConnectsOutboundTargetBeforeStartupFrameCompletes(t *testing.T) 
 			_, err := message.Decode(message.TypeManifests, inbound.Payload)
 			require.NoError(t, err)
 			client.AcknowledgePeerBootstrap(inbound.PeerID)
-		case <-time.After(5 * time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("startup manifests did not reach the protocol consumer")
 		}
 	}
@@ -689,7 +689,7 @@ func TestOverlayConnectsOutboundTargetBeforeStartupFrameCompletes(t *testing.T) 
 		select {
 		case peer := <-connections:
 			connected = append(connected, peer)
-		case <-time.After(10 * time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("outbound target did not connect before startup manifests completed")
 		}
 	}
@@ -697,5 +697,5 @@ func TestOverlayConnectsOutboundTargetBeforeStartupFrameCompletes(t *testing.T) 
 	assert.False(t, client.bootstrap.isReady())
 	acknowledge(connected[0])
 	acknowledge(connected[1])
-	require.Eventually(t, client.bootstrap.isReady, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, client.bootstrap.isReady, progressTimeout, 10*time.Millisecond)
 }

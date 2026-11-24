@@ -4,6 +4,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestPeerLifecycleCallbacksConcurrentAccess guards the providersMu
@@ -83,72 +85,46 @@ func TestPeerLifecycleCallbacksSetAndClear(t *testing.T) {
 	}
 }
 
-// TestProviderSettersConcurrentAccess extends the providersMu discipline to
-// the tx-reduce-relay provider hooks: SetTxProvider/SetOpenLedgerHashesProvider
-// must not race the inbound/outbound goroutines that read them via the
-// snapshot accessors. Run with -race to catch a regression.
-func TestProviderSettersConcurrentAccess(t *testing.T) {
-	o := &Overlay{}
+func TestNewInstallsConstructionHooks(t *testing.T) {
+	var ledgerHints, validLedger, txRecords, nodeObjects, clusterFee, localLoadFee bool
+	inbound := &testMemoryAccount{limit: 1}
+	outbound := &testMemoryAccount{limit: 2}
+	critical := &testMemoryAccount{limit: 3}
+	o, err := New(
+		WithListenAddr("127.0.0.1:0"),
+		WithLedgerHintProvider(func() (LedgerHints, bool) { ledgerHints = true; return LedgerHints{}, false }),
+		WithValidLedgerProvider(func() (uint32, time.Duration, bool) { validLedger = true; return 0, 0, false }),
+		WithTxRecordProvider(func([32]byte) (TxRecord, bool) { txRecords = true; return TxRecord{}, false }),
+		WithNodeObjectProvider(func([32]byte) ([]byte, bool) { nodeObjects = true; return nil, false }),
+		WithClusterFeeSink(func(uint32) { clusterFee = true }),
+		WithLocalLoadFeeProvider(func() (uint32, time.Duration) { localLoadFee = true; return 0, 0 }),
+		WithMemoryBudgets(inbound, outbound, critical),
+	)
+	require.NoError(t, err)
 
-	const iterations = 2000
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		for range iterations {
-			o.SetTxProvider(func([32]byte) ([]byte, bool) { return nil, false })
-			o.SetOpenLedgerHashesProvider(func() [][32]byte { return nil })
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		for range iterations {
-			if p := o.txProviderSnapshot(); p != nil {
-				p([32]byte{})
-			}
-			if p := o.openLedgerHashesProviderSnapshot(); p != nil {
-				p()
-			}
-		}
-	}()
-
-	wg.Wait()
+	o.ledgerHintProvider()
+	o.validLedgerProvider()
+	o.txRecordProvider([32]byte{})
+	o.nodeObjectProvider([32]byte{})
+	o.clusterFeeSink(0)
+	o.localLoadFeeProvider()
+	require.True(t, ledgerHints && validLedger && txRecords && nodeObjects && clusterFee && localLoadFee)
+	require.Same(t, inbound, o.inboundReadBudget.parent)
+	require.Same(t, outbound, o.outboundBudget.parent)
+	require.Same(t, critical, o.outboundBudget.criticalParent)
 }
 
-// TestClusterFeeProviderSettersConcurrentAccess pins the providersMu
-// guard on the cluster-fee hooks (finding 3). The server wires
-// SetClusterFeeSink/SetLocalLoadFeeProvider after Overlay.Run has already
-// launched, so a TMCluster frame on the event loop (clusterFeeSinkSnapshot)
-// or the maintenance loop's sendClusterUpdate (localLoadFeeProviderSnapshot)
-// reads them concurrently. Run with -race to catch a regression.
-func TestClusterFeeProviderSettersConcurrentAccess(t *testing.T) {
-	o := &Overlay{}
+func TestNewLeavesConstructionHooksUnsetByDefault(t *testing.T) {
+	o, err := New(WithListenAddr("127.0.0.1:0"))
+	require.NoError(t, err)
 
-	const iterations = 2000
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		for range iterations {
-			o.SetClusterFeeSink(func(uint32) {})
-			o.SetLocalLoadFeeProvider(func() (uint32, time.Duration) { return 0, 0 })
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		for range iterations {
-			if s := o.clusterFeeSinkSnapshot(); s != nil {
-				s(0)
-			}
-			if p := o.localLoadFeeProviderSnapshot(); p != nil {
-				p()
-			}
-		}
-	}()
-
-	wg.Wait()
+	require.Nil(t, o.ledgerHintProvider)
+	require.Nil(t, o.validLedgerProvider)
+	require.Nil(t, o.txRecordProvider)
+	require.Nil(t, o.nodeObjectProvider)
+	require.Nil(t, o.clusterFeeSink)
+	require.Nil(t, o.localLoadFeeProvider)
+	require.Nil(t, o.inboundReadBudget.parent)
+	require.Nil(t, o.outboundBudget.parent)
+	require.Nil(t, o.outboundBudget.criticalParent)
 }

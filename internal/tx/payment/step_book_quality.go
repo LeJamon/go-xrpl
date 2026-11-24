@@ -2,6 +2,7 @@ package payment
 
 import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 )
 
@@ -252,7 +253,7 @@ func (s *BookStep) assetTransferRate(sb *PaymentSandbox, issue Issue) uint32 {
 	if issue.Issuer == s.strandDst {
 		return QualityOne
 	}
-	return s.GetAccountTransferRate(sb, issue.Issuer)
+	return tx.GetTransferRateByID(sb, issue.Issuer)
 }
 
 // getOfrInRate returns the per-offer input transfer rate.
@@ -286,9 +287,4 @@ func (s *BookStep) getOfrOutRate(offerOwner [20]byte, trOut uint32) uint32 {
 		}
 	}
 	return trOut
-}
-
-// GetAccountTransferRate gets the transfer rate from an account
-func (s *BookStep) GetAccountTransferRate(sb *PaymentSandbox, issuer [20]byte) uint32 {
-	return GetTransferRate(sb, issuer)
 }

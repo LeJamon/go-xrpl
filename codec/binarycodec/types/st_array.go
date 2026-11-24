@@ -17,7 +17,7 @@ const (
 
 // STArray represents an array of STObject instances.
 type STArray struct {
-	skipJSONArrayLimit bool
+	source fieldSource
 }
 
 // ErrNotSTObjectInSTArray is returned when a non-STObject value is found in an STArray.
@@ -64,7 +64,7 @@ func (t *STArray) FromJSON(json any) ([]byte, error) {
 		}
 		object = map[string]any{fieldName: inner}
 		st := NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))
-		st.skipJSONArrayLimit = t.skipJSONArrayLimit
+		st.source = t.source
 		b, err := st.FromJSON(object)
 		if err != nil {
 			return nil, err

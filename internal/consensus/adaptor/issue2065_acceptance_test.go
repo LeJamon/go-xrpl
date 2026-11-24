@@ -260,7 +260,7 @@ func TestIssue2065AdaptorValidationDoesNotWaitForSpeculativeSuccessor(t *testing
 				}()
 				select {
 				case <-done:
-				case <-time.After(time.Second):
+				case <-time.After(progressTimeout):
 					t.Fatal("consensus timer blocked before acceptance started")
 				}
 			}
@@ -273,7 +273,7 @@ func TestIssue2065AdaptorValidationDoesNotWaitForSpeculativeSuccessor(t *testing
 
 			select {
 			case <-family.entered:
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("real acceptance did not enter speculative successor work")
 			}
 
@@ -282,7 +282,7 @@ func TestIssue2065AdaptorValidationDoesNotWaitForSpeculativeSuccessor(t *testing
 			case signedValidation = <-adaptor.signed:
 				require.NotNil(t, signedValidation)
 				require.Equal(t, tc.full, signedValidation.Full)
-			case <-time.After(time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("validation waited for the blocked speculative successor")
 			}
 
@@ -301,7 +301,7 @@ func TestIssue2065AdaptorValidationDoesNotWaitForSpeculativeSuccessor(t *testing
 			require.Eventually(t, func() bool {
 				exists, err := base.ledgerService.OpenLedgerHasTx(hash)
 				return err == nil && exists
-			}, 5*time.Second, time.Millisecond,
+			}, progressTimeout, time.Millisecond,
 				"speculative successor did not replay local input")
 			select {
 			case duplicate := <-adaptor.signed:

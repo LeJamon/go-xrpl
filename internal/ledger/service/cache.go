@@ -61,10 +61,36 @@ func (s *Service) ensureCompleteLedgerStateLocked() {
 	}
 }
 
+func (s *Service) pruneFailedValidatedLedgersLocked(latestValidatedSeq uint32) {
+	if len(s.failedValidatedLedgers) == 0 {
+		return
+	}
+	window := s.ledgerCacheSize()
+	cutoff := uint32(0)
+	if latestValidatedSeq > window {
+		cutoff = latestValidatedSeq - window
+	}
+	for seq := range s.failedValidatedLedgers {
+		if seq < cutoff || (s.completeLedgerFloor != 0 && seq < s.completeLedgerFloor) {
+			delete(s.failedValidatedLedgers, seq)
+		}
+	}
+	if len(s.failedValidatedLedgers) > int(window) {
+		oldest := ^uint32(0)
+		for seq := range s.failedValidatedLedgers {
+			oldest = min(seq, oldest)
+		}
+		delete(s.failedValidatedLedgers, oldest)
+	}
+}
+
 func (s *Service) beginValidatedPersistence(seq uint32, hash [32]byte) uint64 {
 	s.completeMu.Lock()
 	defer s.completeMu.Unlock()
 	s.ensureCompleteLedgerStateLocked()
+	if failed := s.failedValidatedLedgers[seq]; failed != nil && failed.Hash() != hash {
+		delete(s.failedValidatedLedgers, seq)
+	}
 	s.nextCompleteLedgerToken++
 	token := s.nextCompleteLedgerToken
 	s.completeLedgerTokens[seq] = token
@@ -75,7 +101,22 @@ func (s *Service) beginValidatedPersistence(seq uint32, hash [32]byte) uint64 {
 	return token
 }
 
+func (s *Service) recordPersistOutcome(seq uint32, success bool) {
+	s.completeMu.Lock()
+	defer s.completeMu.Unlock()
+	if success {
+		s.persistFailures = 0
+	} else {
+		s.persistFailures++
+		s.lastFailedPersist = seq
+	}
+}
+
 func (s *Service) recordValidatedPersistence(seq uint32, token uint64, success bool) {
+	s.recordValidatedPersistenceForLedger(seq, token, success, nil)
+}
+
+func (s *Service) recordValidatedPersistenceForLedger(seq uint32, token uint64, success bool, l *ledger.Ledger) {
 	s.completeMu.Lock()
 	defer s.completeMu.Unlock()
 	s.ensureCompleteLedgerStateLocked()
@@ -86,8 +127,18 @@ func (s *Service) recordValidatedPersistence(seq uint32, token uint64, success b
 	if !success || seq < s.completeLedgerFloor {
 		delete(s.completeLedgerHashes, seq)
 		s.completedLedgers.remove(seq)
+		if seq < s.completeLedgerFloor {
+			delete(s.failedValidatedLedgers, seq)
+		} else if l != nil {
+			if s.failedValidatedLedgers == nil {
+				s.failedValidatedLedgers = make(map[uint32]*ledger.Ledger)
+			}
+			s.failedValidatedLedgers[seq] = l
+			s.pruneFailedValidatedLedgersLocked(seq)
+		}
 		return
 	}
+	delete(s.failedValidatedLedgers, seq)
 	s.completedLedgers.add(seq)
 }
 
@@ -104,6 +155,7 @@ func (s *Service) invalidateCompleteLedger(seq uint32) {
 	delete(s.completeLedgerTokens, seq)
 	delete(s.completeLedgerHashes, seq)
 	s.completedLedgers.remove(seq)
+	delete(s.failedValidatedLedgers, seq)
 	s.completeMu.Unlock()
 	s.persistMu.Unlock()
 	s.invalidatePersistedValidatedTip(seq, seq)
@@ -123,6 +175,9 @@ func (s *Service) invalidateEvictedLedger(seq uint32, hash [32]byte) {
 		delete(s.completeLedgerTokens, seq)
 		delete(s.completeLedgerHashes, seq)
 		s.completedLedgers.remove(seq)
+	}
+	if failed := s.failedValidatedLedgers[seq]; failed != nil && failed.Hash() == hash {
+		delete(s.failedValidatedLedgers, seq)
 	}
 	s.completeMu.Unlock()
 	if s.nodeStore != nil {
@@ -144,6 +199,9 @@ func (s *Service) invalidateCompleteLedgerHash(seq uint32, hash [32]byte) {
 	}
 	s.completeMu.Lock()
 	s.ensureCompleteLedgerStateLocked()
+	if failed := s.failedValidatedLedgers[seq]; failed != nil && failed.Hash() == hash {
+		delete(s.failedValidatedLedgers, seq)
+	}
 	if s.completeLedgerHashes[seq] == hash {
 		delete(s.completeLedgerTokens, seq)
 		delete(s.completeLedgerHashes, seq)
@@ -177,10 +235,21 @@ func (s *Service) invalidateCompleteLedgerRange(start, end uint32) {
 			delete(s.completeLedgerHashes, seq)
 		}
 	}
+	for seq := range s.failedValidatedLedgers {
+		if seq >= start && seq <= end {
+			delete(s.failedValidatedLedgers, seq)
+		}
+	}
 	s.completedLedgers.removeRange(start, end)
 	s.completeMu.Unlock()
 	s.persistMu.Unlock()
 	s.invalidatePersistedValidatedTip(start, end)
+}
+
+func (s *Service) belowRetentionFloor(seq uint32) bool {
+	s.completeMu.RLock()
+	defer s.completeMu.RUnlock()
+	return seq < s.completeLedgerFloor
 }
 
 func (s *Service) clampCompleteLedgers(floor uint32) {
@@ -210,6 +279,11 @@ func (s *Service) clampCompleteLedgers(floor uint32) {
 	for seq := range s.completeLedgerHashes {
 		if seq < floor {
 			delete(s.completeLedgerHashes, seq)
+		}
+	}
+	for seq := range s.failedValidatedLedgers {
+		if seq < floor {
+			delete(s.failedValidatedLedgers, seq)
 		}
 	}
 	s.completedLedgers.removeRange(0, floor-1)
@@ -262,6 +336,34 @@ func (s *Service) HasCompleteLedgerHash(seq uint32, hash [32]byte) bool {
 	return ok && completeHash == hash && s.completedLedgers != nil && s.completedLedgers.contains(seq)
 }
 
+// NewestMissingLedger returns the newest ledger below `below` that is absent
+// from the completed-ledger set, mirroring rippled's prevMissing.
+func (s *Service) NewestMissingLedger(below uint32) (uint32, bool) {
+	s.completeMu.RLock()
+	defer s.completeMu.RUnlock()
+	if s.completedLedgers == nil {
+		return 0, false
+	}
+	return s.completedLedgers.prevMissing(below, 1)
+}
+
+func (s *Service) CompleteLedgerBelow(seq uint32) (uint32, bool) {
+	s.completeMu.RLock()
+	defer s.completeMu.RUnlock()
+	if s.completedLedgers == nil {
+		return 0, false
+	}
+	return s.completedLedgers.prevPresent(seq)
+}
+
+// ValidatedPersistFailures reports how many validated-ledger persists have
+// failed since the last success, and the most recent failed sequence.
+func (s *Service) ValidatedPersistFailures() (consecutive, lastFailed uint32) {
+	s.completeMu.RLock()
+	defer s.completeMu.RUnlock()
+	return s.persistFailures, s.lastFailedPersist
+}
+
 func (s *Service) completeLedgersString() string {
 	s.completeMu.RLock()
 	defer s.completeMu.RUnlock()
@@ -294,12 +396,23 @@ func (s *Service) evictOldHistoryLocked(latestValidatedSeq uint32) {
 		return
 	}
 	cutoff := latestValidatedSeq - window
+	s.completeMu.Lock()
+	s.pruneFailedValidatedLedgersLocked(latestValidatedSeq)
+	s.completeMu.Unlock()
 	for seq := range s.ledgerHistory {
 		if seq > cutoff {
 			continue
 		}
-		if tracked, durable := s.completeLedgerEvictionStatus(seq); tracked && !durable {
-			if l := s.ledgerHistory[seq]; l != nil {
+		l := s.ledgerHistory[seq]
+		failed := false
+		if l != nil {
+			s.completeMu.RLock()
+			retained := s.failedValidatedLedgers[seq]
+			failed = retained != nil && retained.Hash() == l.Hash()
+			s.completeMu.RUnlock()
+		}
+		if !failed {
+			if tracked, durable := s.completeLedgerEvictionStatus(seq); tracked && !durable && l != nil {
 				s.invalidateEvictedLedger(seq, l.Hash())
 			}
 		}
@@ -308,12 +421,32 @@ func (s *Service) evictOldHistoryLocked(latestValidatedSeq uint32) {
 	// The transaction indexes are authoritative for the in-memory lookup
 	// window. Sweeping them by sequence avoids reopening an evicted ledger's
 	// transaction SHAMap, which may be backed by cold storage.
-	for txHash, txSeq := range s.txIndex {
-		if txSeq <= cutoff {
+	for seq := range s.txHashesBySeq {
+		if seq <= cutoff {
+			s.unindexLedgerTxsLocked(seq)
+		}
+	}
+}
+
+// txHashesBySeq may hold stale hashes. txIndex is authoritative.
+// Caller holds historyComponent.mu.
+func (s *historyComponent) indexTxLocked(txHash [32]byte, seq uint32) {
+	if indexed, ok := s.txIndex[txHash]; ok && indexed == seq {
+		return
+	}
+	s.txIndex[txHash] = seq
+	s.txHashesBySeq[seq] = append(s.txHashesBySeq[seq], txHash)
+}
+
+// Caller holds historyComponent.mu.
+func (s *historyComponent) unindexLedgerTxsLocked(seq uint32) {
+	for _, txHash := range s.txHashesBySeq[seq] {
+		if indexed, ok := s.txIndex[txHash]; ok && indexed == seq {
 			delete(s.txIndex, txHash)
 			delete(s.txPositionIndex, txHash)
 		}
 	}
+	delete(s.txHashesBySeq, seq)
 }
 
 // putHistoryLocked installs l into ledgerHistory, keeping the by-hash index in

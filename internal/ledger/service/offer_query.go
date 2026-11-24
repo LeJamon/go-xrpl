@@ -580,7 +580,7 @@ func amountTransferRate(view tx.LedgerView, amount tx.Amount) uint32 {
 func accountBookFunds(view tx.LedgerView, closeTime time.Time, account [20]byte, amount tx.Amount, reserveBase, reserveIncrement uint64) (tx.Amount, error) {
 	id, ok := amountMPTID(amount)
 	if !ok {
-		return tx.AccountFunds(view, account, amount, true, reserveBase, reserveIncrement), nil
+		return mptutil.AccountFunds(view, account, amount, true, reserveBase, reserveIncrement), nil
 	}
 	value, result := mptutil.Funds(view, id, account, true)
 	if result == ter.TefINTERNAL {

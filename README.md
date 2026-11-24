@@ -23,7 +23,7 @@ go-xrpl has its own architecture and software version policy.
 
 ## Building from source
 
-Building `goxrpl` requires Go 1.24 or later, a C compiler, OpenSSL 3,
+Building `goxrpl` requires Go 1.26 or later, a C compiler, OpenSSL 3,
 libsecp256k1, and `pkg-config`. The examples use
 [`just`](https://just.systems/) as the task runner, with a raw Go command shown
 for environments where it is not installed.
@@ -126,7 +126,9 @@ go-xrpl also exposes reusable Go packages for applications and tooling:
 Internal node services include transaction execution, the transaction queue,
 ledger acquisition and lifecycle, consensus, peer networking, JSON-RPC,
 WebSocket subscriptions, and gRPC. API documentation for public packages is
-available on [pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/go-xrpl).
+available on [pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/go-xrpl). The
+compatibility promise for these packages is in
+[docs/api-stability.md](docs/api-stability.md).
 
 ## Testing
 
@@ -161,6 +163,8 @@ before interpreting a pass as a release claim.
 | [Architecture](docs/architecture.md) | Client design, transaction flow, ledger lifecycle, consensus, and storage |
 | [Operating a node](docs/operating.md) | Build, configuration, startup, networking, validation, and security |
 | [Conformance](docs/conformance.md) | Protocol compatibility methodology and test suite |
+| [Upgrading rippled](docs/upgrading-rippled.md) | Runbook for moving to the next rippled release |
+| [API stability](docs/api-stability.md) | Public Go packages, versioning, and what may change |
 | [RPC methods](docs/rpc-methods.md) | Implemented RPC API catalog |
 | [Transactions](docs/supported-transactions.md) | Supported transaction types |
 | [Amendments](docs/amendments.md) | Amendment support and voting defaults |

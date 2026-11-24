@@ -11,7 +11,6 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/encoding/protowire"
 )
 
 func readBudgetUsed(budget *readBudget) int64 {
@@ -39,8 +38,7 @@ func TestInboundPingBudgetFollowsWireSize(t *testing.T) {
 }
 
 func TestInboundBulkBudgetFollowsMessageThroughConsumer(t *testing.T) {
-	payload := protowire.AppendTag(nil, 100, protowire.BytesType)
-	payload = protowire.AppendBytes(payload, bytes.Repeat([]byte{0x4c}, 32*1024))
+	payload := testLedgerDataPayload(t, bytes.Repeat([]byte{0x4c}, 32*1024))
 	frame, err := message.BuildWireMessage(message.TypeLedgerData, payload)
 	require.NoError(t, err)
 
@@ -64,7 +62,7 @@ func TestInboundBulkBudgetFollowsMessageThroughConsumer(t *testing.T) {
 	secondDone := make(chan error, 1)
 	go func() { secondDone <- second.readLoop(context.Background()) }()
 
-	require.Eventually(t, func() bool { return secondReader.read.Load() > 0 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return secondReader.read.Load() > 0 }, progressTimeout, time.Millisecond)
 	time.Sleep(25 * time.Millisecond)
 	require.Less(t, secondReader.read.Load(), int64(len(frame)))
 
@@ -78,7 +76,7 @@ func TestInboundBulkBudgetFollowsMessageThroughConsumer(t *testing.T) {
 	firstMessage := <-overlay.ledgerData
 	require.NoError(t, firstMessage.Close())
 
-	require.Eventually(t, func() bool { return secondReader.read.Load() == int64(len(frame)) }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return secondReader.read.Load() == int64(len(frame)) }, progressTimeout, time.Millisecond)
 	secondEvent := <-events
 	secondEvent.release()
 	require.ErrorIs(t, <-firstDone, io.EOF)
@@ -87,7 +85,7 @@ func TestInboundBulkBudgetFollowsMessageThroughConsumer(t *testing.T) {
 }
 
 func TestCompressedManifestSpoolSharesInboundBudget(t *testing.T) {
-	payload := bytes.Repeat([]byte("manifest"), manifestSpoolThreshold/len("manifest")+1)
+	payload := opaqueTestPayload(bytes.Repeat([]byte("manifest"), manifestSpoolThreshold/len("manifest")+1))
 	frame, err := message.BuildWireMessage(message.TypeManifests, payload)
 	require.NoError(t, err)
 	wire, compressed := message.CompressFrameIfWorthwhile(frame)
@@ -452,7 +450,7 @@ func TestTransactionsBatchRetainsBudgetUntilAllChildrenClose(t *testing.T) {
 }
 
 func TestOverlayShutdownReleasesQueuedManifestSpool(t *testing.T) {
-	payload := bytes.Repeat([]byte{0x4d}, manifestSpoolThreshold+1)
+	payload := opaqueTestPayload(bytes.Repeat([]byte{0x4d}, manifestSpoolThreshold+1))
 	wire, err := message.BuildWireMessage(message.TypeManifests, payload)
 	require.NoError(t, err)
 

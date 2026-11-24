@@ -249,10 +249,13 @@ func flattenAmount(a Amount) any {
 		return a.Value()
 	}
 	if a.IsMPT() {
-		return map[string]any{
-			"value":           a.Value(),
-			"mpt_issuance_id": a.MPTIssuanceID(),
+		var value any
+		if raw, ok := a.RawMPTValue(); ok {
+			value = raw
+		} else {
+			value = a.Value()
 		}
+		return map[string]any{"value": value, "mpt_issuance_id": a.MPTIssuanceID()}
 	}
 	return map[string]any{
 		"value":    a.Value(),
@@ -274,7 +277,7 @@ func flattenAsset(a Asset) map[string]any {
 		}
 	}
 	// XRP is represented by currency "XRP" with no issuer
-	if a.Currency == "" || a.Currency == "XRP" {
+	if a.IsNative() {
 		return map[string]any{
 			"currency": "XRP",
 		}

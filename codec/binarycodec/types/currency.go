@@ -2,6 +2,8 @@
 package types
 
 import (
+	"bytes"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
@@ -10,18 +12,25 @@ type Currency struct{}
 
 // FromJSON parses a JSON value into its binary currency representation.
 func (c *Currency) FromJSON(json any) ([]byte, error) {
+	return c.fromFields(json, jsonFields)
+}
+
+func (c *Currency) fromFields(json any, source fieldSource) ([]byte, error) {
 	str, ok := json.(string)
 	if !ok {
 		return nil, ErrInvalidCurrency
 	}
-	// rippled's currencyFromJson parses with to_currency, which maps an empty
-	// code to the XRP (all-zero) currency (UintTypes.cpp:86-89). The shared
-	// encodeCurrencyCode rejects "" so the amount path keeps rejecting an empty
-	// IOU currency; the bare Currency field (BaseAsset/QuoteAsset) accepts it.
-	if str == "" {
-		return make([]byte, 20), nil
+	if source == jsonFields && str == "1" {
+		return nil, ErrInvalidCurrency
 	}
-	return encodeCurrencyCode(str)
+	code, err := encodeCurrencyCode(source.currencyText(str))
+	if err != nil {
+		return nil, err
+	}
+	if source == jsonFields && (bytes.Equal(code, noCurrencyBytes) || bytes.Equal(code, badCurrencyBytes)) {
+		return nil, ErrInvalidCurrency
+	}
+	return code, nil
 }
 
 // ToJSON serializes a binary currency value into a JSON-compatible format.

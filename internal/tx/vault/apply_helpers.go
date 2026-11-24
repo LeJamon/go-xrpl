@@ -99,20 +99,6 @@ func canTransfer(view tx.ReadOnlyLedgerView, asset tx.Asset, from, to [20]byte, 
 	return mptutil.CanTransferAsset(view, asset, from, to, waiveMPTCanTransfer)
 }
 
-func requireAuth(view tx.ReadOnlyLedgerView, asset tx.Asset, account [20]byte, authType mptutil.AuthType, parentCloseTime uint32) ter.Result {
-	return mptutil.RequireAssetAuthAt(view, asset, account, authType, parentCloseTime)
-}
-
-func checkFrozen(view tx.ReadOnlyLedgerView, asset tx.Asset, account [20]byte) ter.Result {
-	if !mptutil.IsAssetFrozen(view, asset, account) {
-		return ter.TesSUCCESS
-	}
-	if asset.IsMPT() {
-		return ter.TecLOCKED
-	}
-	return ter.TecFROZEN
-}
-
 // addEmptyMPTHolding creates a zero-balance MPToken for accountID under the MPT
 // asset (nothing when the account is the issuer). Returns the owner-count delta.
 func addEmptyMPTHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset, priorBalance uint64) (int32, ter.Result) {
@@ -145,8 +131,18 @@ func addEmptyMPTHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset
 			return 0, ter.TefINTERNAL
 		}
 	}
-	if priorBalance < ctx.AccountReserveFor(holder, tx.ConfineOwnerCount(holder.OwnerCount, 1)) {
-		return 0, ter.TecINSUFFICIENT_RESERVE
+	usesSponsor, result := ctx.UsesReserveSponsorFor(accountID, holder)
+	if result != ter.TesSUCCESS {
+		return 0, result
+	}
+	effectiveOwners, ok := tx.EffectiveOwnerCount(holder, 0)
+	if !ok {
+		return 0, ter.TefINTERNAL
+	}
+	if usesSponsor || effectiveOwners >= 2 {
+		if result := ctx.CheckReserveFor(accountID, holder, priorBalance, 1, 0, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
+			return 0, result
+		}
 	}
 	token := &state.MPTokenData{Account: accountID, MPTokenIssuanceID: id}
 	dir, err := state.DirInsert(ctx.View, keylet.OwnerDir(accountID), tokenKey.Key, false, func(d *state.DirectoryNode) {

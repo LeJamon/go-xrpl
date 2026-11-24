@@ -39,14 +39,14 @@ func TestStateBaseRecertificationCancelsObsoleteWalkAndReleasesSnapshot(t *testi
 					target:                     nodestore.Hash256(f.childHash), started: make(chan struct{}), release: make(chan struct{}),
 				},
 			}
-			f.svc.nodeStore = db
+			f.svc.nodeStore = bindNodeStore(db)
 			ctx, cancel := context.WithCancel(t.Context())
 			done := make(chan error, 1)
 			t.Cleanup(func() {
 				cancel()
 				select {
 				case <-done:
-				case <-time.After(2 * time.Second):
+				case <-time.After(progressTimeout):
 					t.Error("verification did not join after cancellation")
 				}
 			})
@@ -56,7 +56,7 @@ func TestStateBaseRecertificationCancelsObsoleteWalkAndReleasesSnapshot(t *testi
 			}()
 			select {
 			case <-db.started:
-			case <-time.After(2 * time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("verification did not reach blocked durable read")
 			}
 			require.EqualValues(t, 1, db.pins.Load())
@@ -83,7 +83,7 @@ func TestStateBaseRecertificationCancelsObsoleteWalkAndReleasesSnapshot(t *testi
 			select {
 			case err := <-done:
 				require.ErrorIs(t, err, errStateBaseRecertificationSuperseded)
-			case <-time.After(2 * time.Second):
+			case <-time.After(progressTimeout):
 				t.Fatal("obsolete walk kept reading instead of canceling")
 			}
 			require.Zero(t, db.pins.Load())

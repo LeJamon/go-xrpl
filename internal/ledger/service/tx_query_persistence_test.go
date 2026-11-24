@@ -16,6 +16,7 @@ type gatedValidatedRepository struct {
 	relationaldb.RepositoryManager
 
 	enabled     atomic.Bool
+	sequence    atomic.Uint32
 	enteredOnce sync.Once
 	releaseOnce sync.Once
 	entered     chan struct{}
@@ -31,7 +32,7 @@ func newGatedValidatedRepository(manager relationaldb.RepositoryManager) *gatedV
 }
 
 func (m *gatedValidatedRepository) PersistValidatedLedger(ctx context.Context, value relationaldb.ValidatedLedger) error {
-	if m.enabled.Load() {
+	if seq := m.sequence.Load(); m.enabled.Load() && (seq == 0 || seq == uint32(value.Ledger.Sequence)) {
 		m.enteredOnce.Do(func() { close(m.entered) })
 		select {
 		case <-m.release:
@@ -89,7 +90,7 @@ func acceptAndValidatePersistenceTestPayment(t *testing.T, svc *Service, gated *
 	svc.SetValidatedLedger(seq, closed.Hash())
 	select {
 	case <-gated.entered:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("validated-ledger persistence did not reach the SQLite gate")
 	}
 	return seq, txHash
@@ -126,7 +127,7 @@ func TestGetTransactionWaitsForValidatedPersistence(t *testing.T) {
 		value, searched, err := svc.GetTransactionWithRange(t.Context(), txHash, 1, seq)
 		ranged <- result{value: value, searched: searched, err: err}
 	}()
-	require.Eventually(t, func() bool { return persistenceBarrierCount(svc) >= 2 }, 5*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return persistenceBarrierCount(svc) >= 2 }, progressTimeout, time.Millisecond)
 
 	select {
 	case <-plain:
@@ -143,7 +144,7 @@ func TestGetTransactionWaitsForValidatedPersistence(t *testing.T) {
 		require.NotNil(t, got.value)
 		require.True(t, got.value.Validated)
 		require.Equal(t, seq, got.value.LedgerIndex)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("plain lookup did not complete after validated persistence")
 	}
 	select {
@@ -153,7 +154,7 @@ func TestGetTransactionWaitsForValidatedPersistence(t *testing.T) {
 		require.True(t, got.value.Validated)
 		require.Equal(t, seq, got.value.LedgerIndex)
 		require.Equal(t, relationaldb.TxSearchAll, got.searched)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("ranged lookup did not complete after validated persistence")
 	}
 }
@@ -174,14 +175,14 @@ func TestGetTransactionWithRangeCancellationDuringValidatedPersistence(t *testin
 		value, searched, err := svc.GetTransactionWithRange(ctx, txHash, 1, seq)
 		resultCh <- result{value: value, searched: searched, err: err}
 	}()
-	require.Eventually(t, func() bool { return persistenceBarrierCount(svc) >= 1 }, 5*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return persistenceBarrierCount(svc) >= 1 }, progressTimeout, time.Millisecond)
 	cancel()
 
 	select {
 	case got := <-resultCh:
 		require.Nil(t, got.value)
 		require.ErrorIs(t, got.err, context.Canceled)
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("ranged lookup did not honor cancellation while waiting for persistence")
 	}
 	gated.releaseGate()

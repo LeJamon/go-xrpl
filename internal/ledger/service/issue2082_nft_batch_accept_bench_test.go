@@ -127,7 +127,7 @@ func benchmarkIssue2082NFTBatchAcceptance(b *testing.B, withRefresh bool) {
 			case err := <-done:
 				svc.Stop()
 				b.Fatalf("refresh ended before first promotion: %v", err)
-			case <-time.After(5 * time.Second):
+			case <-time.After(progressTimeout):
 				svc.Stop()
 				b.Fatal("refresh did not reach first promotion")
 			}
@@ -321,7 +321,7 @@ func newIssue2082NFTBatchFixture(b *testing.B) (*benchmarkRefreshFixture, issue2
 	require.NoError(b, err)
 	db := &countingGenerationDatabase{Database: base, generation: base}
 	parent := env.LastClosedLedger()
-	writer := &Service{nodeStore: base}
+	writer := &Service{nodeStore: bindNodeStore(base)}
 	require.NoError(b, writer.persistToNodeStore(b.Context(), parent, parent.Sequence()))
 	fixture.root, err = parent.StateMapHash()
 	require.NoError(b, err)

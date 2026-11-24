@@ -44,7 +44,7 @@ func TestLedgerNodeDepth_Interop_RippledDocker(t *testing.T) {
 				_ = peer.Close()
 				select {
 				case <-done:
-				case <-time.After(5 * time.Second):
+				case <-time.After(progressTimeout):
 					t.Error("peer did not stop")
 				}
 			})

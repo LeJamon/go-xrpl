@@ -118,7 +118,7 @@ func TestValidationWorkLaneKeepsTrustedVerificationIndependent(t *testing.T) {
 	select {
 	case result := <-lane.trustedResultCh:
 		require.Equal(t, byte(3), result.validation.LedgerID[0])
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("trusted verification was blocked by untrusted verification")
 	}
 	release()
@@ -126,7 +126,7 @@ func TestValidationWorkLaneKeepsTrustedVerificationIndependent(t *testing.T) {
 	case result := <-lane.untrustedResultCh:
 		require.Equal(t, byte(1), result.validation.LedgerID[0])
 		result.permit.release()
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("untrusted verification did not complete")
 	}
 }
@@ -381,7 +381,7 @@ func TestValidationResultBackpressureBoundsUntrustedVerification(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return verifyCalls.Load() == int64(cap(lane.untrustedPermits)) &&
 			len(lane.untrustedResultCh) == cap(lane.untrustedResultCh)
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	require.Equal(t, validationQueueSaturated, lane.submit(validationWork{
 		validation: &consensus.Validation{},
 	}))
@@ -451,7 +451,7 @@ func TestUntrustedResultSaturationDoesNotBlockTrustedWorker(t *testing.T) {
 	select {
 	case result := <-lane.trustedResultCh:
 		require.Equal(t, byte(2), result.validation.LedgerID[0])
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("trusted worker result blocked behind saturated untrusted results")
 	}
 }
@@ -499,7 +499,7 @@ func TestValidationWorkLanePromotesQueuedResultAfterTrustChange(t *testing.T) {
 	case result := <-lane.trustedResultCh:
 		require.Same(t, validation, result.validation)
 		result.permit.release()
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("newly trusted verified result was not routed to the trusted result lane")
 	}
 	require.Equal(t, cap(lane.untrustedResultCh), len(lane.untrustedResultCh),

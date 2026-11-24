@@ -14,10 +14,11 @@
 //     transaction metadata construction depends on this typed path.
 //
 //   - Typed serialization: every struct also exposes ToMap, Encode, and Hash.
-//     Encode round-trips Decode byte-for-byte through binarycodec; Hash
-//     returns the canonical SHAMap account-state leaf hash
-//     (sha512Half(HashPrefixLeafNode || data || index)). These methods are
-//     a typed alternative to hand-built map[string]any serializers.
+//     Encode writes canonical ledger bytes and preserves a decoded
+//     AccountRoot balance above the XRP supply cap. ToMap exposes that
+//     balance as a decimal string. Hash returns the SHAMap account-state leaf
+//     hash (sha512Half(HashPrefixLeafNode || data || index)). These methods
+//     are a typed alternative to hand-built map[string]any serializers.
 package entry
 
 import "github.com/LeJamon/go-xrpl/protocol"
@@ -80,78 +81,6 @@ type Entry interface {
 // template.
 func DecodeLegacy(entry Entry, data []byte) error {
 	return entry.decodeLegacy(data)
-}
-
-// New returns a fresh typed entry for typ.
-func New(typ Type) Entry {
-	switch typ {
-	case TypeAccountRoot:
-		return new(AccountRoot)
-	case TypeAmendments:
-		return new(Amendments)
-	case TypeAMM:
-		return new(AMM)
-	case TypeBridge:
-		return new(Bridge)
-	case TypeCheck:
-		return new(Check)
-	case TypeCredential:
-		return new(Credential)
-	case TypeDelegate:
-		return new(Delegate)
-	case TypeDepositPreauth:
-		return new(DepositPreauth)
-	case TypeDID:
-		return new(DID)
-	case TypeDirectoryNode:
-		return new(DirectoryNode)
-	case TypeEscrow:
-		return new(Escrow)
-	case TypeFeeSettings:
-		return new(FeeSettings)
-	case TypeLedgerHashes:
-		return new(LedgerHashes)
-	case TypeLoan:
-		return new(Loan)
-	case TypeLoanBroker:
-		return new(LoanBroker)
-	case TypeMPToken:
-		return new(MPToken)
-	case TypeMPTokenIssuance:
-		return new(MPTokenIssuance)
-	case TypeNegativeUNL:
-		return new(NegativeUNL)
-	case TypeNFTokenOffer:
-		return new(NFTokenOffer)
-	case TypeNFTokenPage:
-		return new(NFTokenPage)
-	case TypeOffer:
-		return new(Offer)
-	case TypeOracle:
-		return new(Oracle)
-	case TypePayChannel:
-		return new(PayChannel)
-	case TypePermissionedDomain:
-		return new(PermissionedDomain)
-	case TypeRippleState:
-		return new(RippleState)
-	case TypeSignerList:
-		return new(SignerList)
-	case TypeSponsorship:
-		return new(Sponsorship)
-	case TypeTicket:
-		return new(Ticket)
-	case TypeTransactionProposal:
-		return new(TransactionProposal)
-	case TypeVault:
-		return new(Vault)
-	case TypeXChainOwnedClaimID:
-		return new(XChainOwnedClaimID)
-	case TypeXChainOwnedCreateAccountClaimID:
-		return new(XChainOwnedCreateAccountClaimID)
-	default:
-		return nil
-	}
 }
 
 // NewByName resolves a canonical entry name and returns its typed model.

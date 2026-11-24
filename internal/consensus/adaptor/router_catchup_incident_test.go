@@ -164,7 +164,7 @@ func TestRouter_Issue1663CatchupCascadeRecoversToFull(t *testing.T) {
 		require.True(t, escalated.timerEscalate)
 		require.False(t, escalated.yielded)
 		close(escalated.ack)
-		require.Eventually(t, func() bool { return !lane.has(stale1) }, time.Second, time.Millisecond)
+		require.Eventually(t, func() bool { return !lane.has(stale1) }, progressTimeout, time.Millisecond)
 	}
 	now = now.Add(3900 * time.Millisecond)
 	require.Equal(t, inbound.TimerEscalate, stale1.OnTimer(now))
@@ -223,7 +223,7 @@ func TestRouter_Issue1663CatchupCascadeRecoversToFull(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return svc.GetClosedLedgerIndex() == targetSeq && svc.GetValidatedLedgerIndex() == targetSeq
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	r.catchupReplay.checkBehind(targetSeq, targetHash, 8)
 	assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode())
 	assert.Equal(t, "proposing", consensusServerState(a.GetOperatingMode(), consensus.ModeProposing, true))
@@ -271,7 +271,7 @@ func TestRouter_Issue1668FrozenPivotCollectsAndReplaysMovingHead(t *testing.T) {
 	pivotHeader := pivot.Header()
 	require.True(t, r.completeFrozenPivotAcquisition(&pivotHeader, true))
 	require.True(t, r.catchupReplay.standardReplay.initialCandidate)
-	require.True(t, r.catchupReplay.standardReplay.applying)
+	require.True(t, r.catchupReplay.standardReplay.isApplying())
 	// A busy runner may exhaust the time budget before the full window is stored.
 	drainStandardReplayTestPipeline(t, r)
 	for i := range standardReplayPipelineWindow {
@@ -344,8 +344,7 @@ func TestRouter_Issue1677ConsensusRecoveryCallbackDoesNotReenterEngineLock(t *te
 		r.catchupReplay.catchupMu.Unlock()
 		r.catchupReplay.acquisitionMu.Lock()
 		r.catchupReplay.standardReplay = standardReplayPipeline{
-			active:     true,
-			pivotReady: true,
+			phase:      standardReplayPivotReady,
 			pivotSeq:   seq,
 			pivotHash:  hash,
 			anchorSeq:  seq,
@@ -383,26 +382,26 @@ func TestRouter_Issue1677ConsensusRecoveryCallbackDoesNotReenterEngineLock(t *te
 	var target builtTarget
 	select {
 	case target = <-built:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("accepted ledger did not reach the router callback")
 	}
 	select {
 	case entered := <-probe.entered:
 		require.Equal(t, consensus.LedgerID(target.hash), entered)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("recovery did not check the completed ledger")
 	}
 	select {
 	case result := <-probe.result:
 		require.NoError(t, result.err)
 		require.True(t, result.acceptable)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("completed-ledger acceptance check re-entered Engine.mu")
 	}
 	select {
 	case err := <-done:
 		require.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("accepted-ledger recovery callback did not complete")
 	}
 
@@ -410,7 +409,7 @@ func TestRouter_Issue1677ConsensusRecoveryCallbackDoesNotReenterEngineLock(t *te
 	require.Equal(t, consensus.ModeProposing, engine.Mode())
 	r.catchupReplay.acquisitionMu.Lock()
 	retryTarget := r.catchupReplay.consensusRecovery.targetHash
-	replayActive := r.catchupReplay.standardReplay.active
+	replayActive := r.catchupReplay.standardReplay.isActive()
 	r.catchupReplay.acquisitionMu.Unlock()
 	assert.Equal(t, target.hash, retryTarget)
 	assert.False(t, replayActive)

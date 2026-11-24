@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -23,23 +24,25 @@ func (m *ChannelAuthorizeMethod) Handle(ctx *types.RpcContext, params json.RawMe
 		return nil, rpcErr
 	}
 
-	fields, rpcErr := rawJSONFields(params)
-	if rpcErr != nil {
-		return nil, rpcErr
+	var fields map[string]json.RawMessage
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &fields); err != nil {
+			return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+		}
 	}
 
-	// Validate required fields: channel_id and amount
-	// rippled: for (auto const& p : {jss::channel_id, jss::amount}) if (!params.isMember(p)) return RPC::missing_field_error(p);
-	if _, ok := fields["channel_id"]; !ok {
-		return nil, rpcerrors.RpcErrorMissingField("channel_id")
+	for _, name := range []string{"channel_id", "amount"} {
+		if _, ok := fields[name]; !ok {
+			return nil, rpcerrors.RpcErrorMissingField(name)
+		}
 	}
-	if _, ok := fields["amount"]; !ok {
-		return nil, rpcerrors.RpcErrorMissingField("amount")
+	_, hasKeyType := fields["key_type"]
+	_, hasSecret := fields["secret"]
+	if !hasKeyType && !hasSecret {
+		return nil, rpcerrors.RpcErrorMissingField("secret")
 	}
 
-	// Parse credentials and derive keypair
-	// rippled: if (!params.isMember(jss::key_type) && !params.isMember(jss::secret)) return RPC::missing_field_error(jss::secret);
-	privateKeyHex, _, keyType, rpcErr := signCredentials{}.deriveKeypair(ctx.ApiVersion, params)
+	privateKeyHex, _, keyType, rpcErr := parseCredentialsAndDeriveKeypair(ctx.ApiVersion, params)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -48,9 +51,9 @@ func (m *ChannelAuthorizeMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
-	drops, rpcErr := parseChannelAmount(fields["amount"])
-	if rpcErr != nil {
-		return nil, rpcErr
+	drops, ok := parseChannelDrops(fields["amount"])
+	if !ok {
+		return nil, rpcerrors.RpcErrorChannelAmountMalformed()
 	}
 
 	// Serialize the payment channel claim message using EncodeForSigningClaim
@@ -84,35 +87,6 @@ func (m *ChannelAuthorizeMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	return response, nil
 }
 
-// parseChannelID reads a channel_id that must be a string holding a hash256
-// (64 hex digits, or "0"), returned as 64 upper-case hex digits.
-func parseChannelID(raw json.RawMessage) (string, *rpcerrors.RpcError) {
-	channelID, ok := rawJSONString(raw)
-	if !ok {
-		return "", rpcerrors.RpcErrorInvalidParams("Invalid parameters.")
-	}
-	if !validHash256Hex(channelID) {
-		return "", rpcerrors.RpcErrorChannelMalformed()
-	}
-	if channelID == "0" {
-		return strings.Repeat("0", 64), nil
-	}
-	return strings.ToUpper(channelID), nil
-}
-
-// parseChannelAmount reads an amount that must be a string of drops.
-func parseChannelAmount(raw json.RawMessage) (uint64, *rpcerrors.RpcError) {
-	amount, ok := rawJSONString(raw)
-	if !ok {
-		return 0, rpcerrors.RpcErrorChannelAmountMalformed()
-	}
-	drops, err := strconv.ParseUint(amount, 10, 64)
-	if err != nil {
-		return 0, rpcerrors.RpcErrorChannelAmountMalformed()
-	}
-	return drops, nil
-}
-
 // signMessage signs a message using the appropriate algorithm
 func signMessage(message []byte, privateKeyHex string, keyType string) (string, error) {
 	// Convert message bytes to string for the Sign functions
@@ -133,4 +107,38 @@ func signMessage(message []byte, privateKeyHex string, keyType string) (string, 
 
 func (m *ChannelAuthorizeMethod) RequiredRole() types.Role {
 	return types.RoleUser
+}
+
+// parseChannelID requires a JSON string holding a 256-bit hex channel ID, or
+// "0" for the zero hash. rippled 3.5.0-rc1 rejects a non-string channel_id
+// with invalidParams.
+func parseChannelID(raw json.RawMessage) (string, *rpcerrors.RpcError) {
+	value, ok := rawString(raw)
+	if !ok {
+		return "", rpcerrors.RpcErrorInvalidParams("")
+	}
+	value, _, _ = strings.Cut(value, "\x00")
+	if value == "0" {
+		return strings.Repeat("0", 64), nil
+	}
+	channelID := strings.ToUpper(value)
+	if len(channelID) != 64 {
+		return "", rpcerrors.RpcErrorChannelMalformed()
+	}
+	if _, err := hex.DecodeString(channelID); err != nil {
+		return "", rpcerrors.RpcErrorChannelMalformed()
+	}
+	return channelID, nil
+}
+
+// parseChannelDrops requires a JSON string holding an unsigned 64-bit drop
+// count, optionally prefixed with a single '+'.
+func parseChannelDrops(raw json.RawMessage) (uint64, bool) {
+	value, ok := rawString(raw)
+	if !ok {
+		return 0, false
+	}
+	value, _, _ = strings.Cut(value, "\x00")
+	drops, err := strconv.ParseUint(strings.TrimPrefix(value, "+"), 10, 64)
+	return drops, err == nil
 }

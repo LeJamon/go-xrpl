@@ -17,6 +17,9 @@ type ApplyContext struct {
 	// View provides read/write access to ledger state (the ApplyStateTable)
 	View LedgerView
 
+	// PreclaimView observes the ledger before fee, sequence, and ticket changes.
+	PreclaimView ReadOnlyLedgerView
+
 	// Account is the source account (mutable, will be written back by the engine)
 	Account *state.AccountRoot
 
@@ -185,6 +188,25 @@ func (ctx *ApplyContext) LookupDestination(account string) (*state.AccountRoot, 
 // SourceFeeCharged is 0 and the prior balance is the untouched source balance.
 func (ctx *ApplyContext) PriorBalance() uint64 {
 	return ctx.Account.Balance + ctx.SourceFeeCharged
+}
+
+// PreclaimAccount returns the source account before transaction application.
+// Direct callers without PreclaimView must supply the original ownership state
+// in Account; only the source fee is restored in that case.
+func (ctx *ApplyContext) PreclaimAccount() (*state.AccountRoot, ter.Result) {
+	if ctx.PreclaimView == nil {
+		if ctx.Account == nil {
+			return nil, ter.TefINTERNAL
+		}
+		account := *ctx.Account
+		account.Balance = ctx.PriorBalance()
+		return &account, ter.TesSUCCESS
+	}
+	account, err := ReadAccountRoot(ctx.PreclaimView, ctx.AccountID)
+	if err != nil || account == nil {
+		return nil, ter.TefINTERNAL
+	}
+	return account, ter.TesSUCCESS
 }
 
 // CheckReserveWithFee validates that the source can afford the reserve for the

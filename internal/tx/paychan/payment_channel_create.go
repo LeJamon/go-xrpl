@@ -52,6 +52,14 @@ func (p *PaymentChannelCreate) TxType() tx.Type {
 	return tx.TypePaymentChannelCreate
 }
 
+// Consequences reports the XRP Amount moved into the channel.
+func (p *PaymentChannelCreate) Consequences() tx.Consequences {
+	if !p.Amount.IsNative() {
+		return tx.Consequences{}
+	}
+	return tx.Consequences{PotentialSpend: uint64(p.Amount.Drops())}
+}
+
 // Reference: rippled PayChan.cpp PayChanCreate::preflight()
 func (p *PaymentChannelCreate) Validate() error {
 	if err := p.BaseTx.Validate(); err != nil {
@@ -106,10 +114,6 @@ func (p *PaymentChannelCreate) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(p)
 }
 
-func (p *PaymentChannelCreate) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeaturePayChan}
-}
-
 // GetFlagsMask returns the invalid-flags mask enforced at preflight0: any
 // non-universal flag is rejected.
 // Reference: rippled PayChan.cpp PayChanCreate::getFlagsMask.
@@ -128,12 +132,12 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	amount := uint64(p.Amount.Drops())
 	priorBalance := ctx.PriorBalance()
-	checkFunding := func() ter.Result {
-		if result := ctx.CheckReserveFor(ctx.AccountID, ctx.Account, priorBalance, 1, 0, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
+	checkFunding := func(account *state.AccountRoot, priorBalance uint64) ter.Result {
+		if result := ctx.CheckReserveFor(ctx.AccountID, account, priorBalance, 1, 0, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
 			ctx.Log.Warn("payment channel create: insufficient reserve", "balance", priorBalance)
 			return result
 		}
-		usesSponsor, result := ctx.UsesReserveSponsorFor(ctx.AccountID, ctx.Account)
+		usesSponsor, result := ctx.UsesReserveSponsorFor(ctx.AccountID, account)
 		if result != ter.TesSUCCESS {
 			return result
 		}
@@ -141,7 +145,7 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		if usesSponsor {
 			ownerDelta = 0
 		}
-		sourceReserve, ok := tx.RequiredAccountReserve(ctx.Config, ctx.Account, ownerDelta, 0)
+		sourceReserve, ok := tx.RequiredAccountReserve(ctx.Config, account, ownerDelta, 0)
 		if !ok {
 			return ter.TefINTERNAL
 		}
@@ -178,7 +182,11 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	sponsorEnabled := ctx.Rules().Enabled(amendment.FeatureSponsor)
 	if !sponsorEnabled {
-		if result := checkFunding(); result != ter.TesSUCCESS {
+		account, result := ctx.PreclaimAccount()
+		if result != ter.TesSUCCESS {
+			return result
+		}
+		if result := checkFunding(account, account.Balance); result != ter.TesSUCCESS {
 			return result
 		}
 	}
@@ -197,7 +205,7 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 	if sponsorEnabled {
-		if result := checkFunding(); result != ter.TesSUCCESS {
+		if result := checkFunding(ctx.Account, priorBalance); result != ter.TesSUCCESS {
 			return result
 		}
 	}

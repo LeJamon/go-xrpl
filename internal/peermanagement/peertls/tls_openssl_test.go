@@ -102,7 +102,7 @@ func newTestConnPair(t testing.TB) (PeerConn, PeerConn) {
 		_ = serverConn.Close()
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), progressTimeout)
 	defer cancel()
 	serverErr := make(chan error, 1)
 	go func() {
@@ -143,7 +143,7 @@ func TestHandshake_SessionSigRoundTrip(t *testing.T) {
 	serverConfig.KeyPEM = []byte("mutated")
 	serverConfig.CipherList = "not-a-real-cipher"
 
-	dialer := &net.Dialer{Timeout: 2 * time.Second}
+	dialer := &net.Dialer{Timeout: progressTimeout}
 	tcpClient, err := dialer.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
@@ -156,7 +156,7 @@ func TestHandshake_SessionSigRoundTrip(t *testing.T) {
 	}
 	defer clientConn.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), progressTimeout)
 	defer cancel()
 
 	type result struct {
@@ -225,7 +225,7 @@ func TestHandshake_ConcurrentReadWrite(t *testing.T) {
 	}
 	defer wrapped.Close()
 
-	tcpClient, err := (&net.Dialer{Timeout: 2 * time.Second}).Dial("tcp", ln.Addr().String())
+	tcpClient, err := (&net.Dialer{Timeout: progressTimeout}).Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestHandshake_ConcurrentReadWrite(t *testing.T) {
 		t.Fatalf("Client: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), progressTimeout)
 	defer cancel()
 
 	srvCh := make(chan PeerConn, 1)
@@ -324,7 +324,7 @@ func TestHandshake_ConcurrentReadWrite(t *testing.T) {
 	}()
 
 	// Reasonable upper bound — the actual exchange should finish in ms.
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(progressTimeout)
 	select {
 	case err := <-writeErr:
 		if err != nil {
@@ -355,14 +355,14 @@ func TestHandshake_ConcurrentReadWrite(t *testing.T) {
 	}()
 	select {
 	case <-closeReturned:
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatalf("Close blocked — likely Read holding the SSL mutex")
 	}
 
 	// Server's Read should now return an error promptly too.
 	select {
 	case <-echoDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatalf("server echo goroutine did not unblock after client Close")
 	}
 	_ = serverConn.Close()
@@ -371,7 +371,7 @@ func TestHandshake_ConcurrentReadWrite(t *testing.T) {
 
 func TestHandshake_LargeConcurrentRoundTrip(t *testing.T) {
 	clientConn, serverConn := newTestConnPair(t)
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	if err := clientConn.SetDeadline(deadline); err != nil {
 		t.Fatalf("client SetDeadline: %v", err)
 	}
@@ -884,7 +884,7 @@ func TestCrossDirectionIOHonorsOperationDeadline(t *testing.T) {
 			writes: []engineResult{{err: shim.ErrWantRead}},
 		})
 		defer c.Close()
-		requireDeadline(t, c.SetWriteDeadline(time.Now().Add(time.Second)))
+		requireDeadline(t, c.SetWriteDeadline(time.Now().Add(progressTimeout)))
 
 		writeDone := make(chan error, 1)
 		go func() {
@@ -893,7 +893,7 @@ func TestCrossDirectionIOHonorsOperationDeadline(t *testing.T) {
 		}()
 		select {
 		case <-raw.started:
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("Write did not start cross-direction input")
 		}
 		requireDeadline(t, c.SetReadDeadline(time.Now().Add(25*time.Millisecond)))
@@ -905,7 +905,7 @@ func TestCrossDirectionIOHonorsOperationDeadline(t *testing.T) {
 		_ = c.Close()
 		select {
 		case <-writeDone:
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("Write did not unblock after Close")
 		}
 	})
@@ -919,7 +919,7 @@ func TestCrossDirectionIOHonorsOperationDeadline(t *testing.T) {
 			writes: []engineResult{{n: 1}},
 		})
 		defer c.Close()
-		requireDeadline(t, c.SetReadDeadline(time.Now().Add(time.Second)))
+		requireDeadline(t, c.SetReadDeadline(time.Now().Add(progressTimeout)))
 
 		readDone := make(chan error, 1)
 		go func() {
@@ -928,7 +928,7 @@ func TestCrossDirectionIOHonorsOperationDeadline(t *testing.T) {
 		}()
 		select {
 		case <-raw.started:
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("Read did not start cross-direction output")
 		}
 		requireDeadline(t, c.SetWriteDeadline(time.Now().Add(25*time.Millisecond)))
@@ -940,7 +940,7 @@ func TestCrossDirectionIOHonorsOperationDeadline(t *testing.T) {
 		_ = c.Close()
 		select {
 		case <-readDone:
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("Read did not unblock after Close")
 		}
 	})
@@ -959,7 +959,7 @@ func TestWriteWantReadProgressesWithBlockedApplicationRead(t *testing.T) {
 	}
 	c := readyScriptedConn(raw, engine)
 	defer c.Close()
-	requireDeadline(t, c.SetWriteDeadline(time.Now().Add(time.Second)))
+	requireDeadline(t, c.SetWriteDeadline(time.Now().Add(progressTimeout)))
 
 	readDone := make(chan error, 1)
 	go func() {
@@ -968,7 +968,7 @@ func TestWriteWantReadProgressesWithBlockedApplicationRead(t *testing.T) {
 	}()
 	select {
 	case <-raw.started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Read did not start raw input")
 	}
 
@@ -979,7 +979,7 @@ func TestWriteWantReadProgressesWithBlockedApplicationRead(t *testing.T) {
 	}()
 	select {
 	case <-engine.started:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Write did not request TLS input")
 	}
 	if _, err := peer.Write([]byte("control")); err != nil {
@@ -990,13 +990,13 @@ func TestWriteWantReadProgressesWithBlockedApplicationRead(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Write error = %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Write remained blocked after control-only input")
 	}
 	_ = c.Close()
 	select {
 	case <-readDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Read did not unblock after Close")
 	}
 }
@@ -1026,7 +1026,7 @@ func TestReadControlOutputPrecedesConcurrentWriteOutput(t *testing.T) {
 	}()
 	select {
 	case <-engine.readStarted:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Read did not enter the TLS engine")
 	}
 	writeDone := make(chan error, 1)
@@ -1034,7 +1034,7 @@ func TestReadControlOutputPrecedesConcurrentWriteOutput(t *testing.T) {
 		_, err := c.Write([]byte("x"))
 		writeDone <- err
 	}()
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	for c.outMu.TryLock() {
 		c.outMu.Unlock()
 		if time.Now().After(deadline) {
@@ -1048,7 +1048,7 @@ func TestReadControlOutputPrecedesConcurrentWriteOutput(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Read error = %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Read did not finish")
 	}
 	select {
@@ -1056,7 +1056,7 @@ func TestReadControlOutputPrecedesConcurrentWriteOutput(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Write error = %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Write did not finish")
 	}
 	if !bytes.Equal(raw.written, []byte("controlapplication")) {
@@ -1317,7 +1317,7 @@ func TestShutdownContextWaitsForActiveWrite(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("shutdown did not proceed after Write completed")
 	}
 }
@@ -1325,7 +1325,7 @@ func TestShutdownContextWaitsForActiveWrite(t *testing.T) {
 func TestShutdownContextSendsCloseNotify(t *testing.T) {
 	t.Run("clean", func(t *testing.T) {
 		client, server := newTestConnPair(t)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), progressTimeout)
 		defer cancel()
 		done := make(chan error, 1)
 		go func() { done <- client.(GracefulConn).ShutdownContext(ctx) }()

@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -764,7 +765,7 @@ func (b *Bridge) PreviousTxn() (string, uint32) {
 }
 
 // ToMap returns the canonical JSON-map representation of the receiver,
-// suitable for binarycodec.EncodeBytes. Includes every present field —
+// suitable for binarycodec.EncodeDecodedFields. Includes every present field —
 // metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
 // header that every SLE blob carries.
 func (b *Bridge) ToMap() map[string]any {
@@ -813,7 +814,24 @@ func (b *Bridge) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (b *Bridge) Encode() ([]byte, error) {
-	if err := b.validateRequired(); err != nil {
+	if err := b.validateEncode(); err != nil {
+		return nil, err
+	}
+	if b.hasXAddress() {
+		return b.encodeViaMap()
+	}
+	data, err := b.appendBinary(make([]byte, 0, b.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(b, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeDecodedFields. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (b *Bridge) encodeViaMap() ([]byte, error) {
+	if err := b.validateEncode(); err != nil {
 		return nil, err
 	}
 	out := b.ToMap()
@@ -823,7 +841,159 @@ func (b *Bridge) Encode() ([]byte, error) {
 	if b.present&bridgeBitPreviousTxnLgrSeq == 0 {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
-	return binarycodec.EncodeBytes(out)
+	return binarycodec.EncodeDecodedFields(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (b *Bridge) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x69)
+	if b.present&bridgeBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), b.Flags)
+	}
+	if b.present&bridgeBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), b.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if b.present&bridgeBitOwnerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x34), b.OwnerNode); err != nil {
+			return nil, err
+		}
+	}
+	if b.present&bridgeBitXChainClaimID != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x30, 0x14), b.XChainClaimID); err != nil {
+			return nil, err
+		}
+	}
+	if b.present&bridgeBitXChainAccountCreateCount != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x30, 0x15), b.XChainAccountCreateCount); err != nil {
+			return nil, err
+		}
+	}
+	if b.present&bridgeBitXChainAccountClaimCount != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x30, 0x16), b.XChainAccountClaimCount); err != nil {
+			return nil, err
+		}
+	}
+	if b.present&bridgeBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), b.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if b.present&bridgeBitSignatureReward != 0 {
+		if dst, err = appendAmount(append(dst, 0x60, 0x1D), b.SignatureReward); err != nil {
+			return nil, err
+		}
+	}
+	if b.present&bridgeBitMinAccountCreateAmount != 0 {
+		if dst, err = appendAmount(append(dst, 0x60, 0x1E), b.MinAccountCreateAmount); err != nil {
+			return nil, err
+		}
+	}
+	if b.present&bridgeBitAccount != 0 {
+		if dst, err = appendAccountID(append(dst, 0x81), b.Account); err != nil {
+			return nil, err
+		}
+	}
+	if b.present&bridgeBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), b.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if b.present&bridgeBitXChainBridge != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x01, 0x19), "XChainBridge", b.XChainBridge); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (b *Bridge) encodedSizeHint() int {
+	size := 41
+	if b.present&bridgeBitFlags != 0 {
+		size += 5
+	}
+	if b.present&bridgeBitOwnerNode != 0 {
+		size += 9
+	}
+	if b.present&bridgeBitXChainClaimID != 0 {
+		size += 10
+	}
+	if b.present&bridgeBitXChainAccountCreateCount != 0 {
+		size += 10
+	}
+	if b.present&bridgeBitXChainAccountClaimCount != 0 {
+		size += 10
+	}
+	if b.present&bridgeBitSignatureReward != 0 {
+		size += 2 + amountEncodedLen(b.SignatureReward)
+	}
+	if b.present&bridgeBitMinAccountCreateAmount != 0 {
+		size += 2 + amountEncodedLen(b.MinAccountCreateAmount)
+	}
+	if b.present&bridgeBitAccount != 0 {
+		size += 1 + accountIDEncodedLen(b.Account)
+	}
+	if b.present&bridgeBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(b.Sponsor)
+	}
+	if b.present&bridgeBitXChainBridge != 0 {
+		size += 124
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (b *Bridge) hasXAddress() bool {
+	if b.present&bridgeBitOwnerNode != 0 && isXAddress(b.OwnerNode) {
+		return true
+	}
+	if b.present&bridgeBitXChainClaimID != 0 && isXAddress(b.XChainClaimID) {
+		return true
+	}
+	if b.present&bridgeBitXChainAccountCreateCount != 0 && isXAddress(b.XChainAccountCreateCount) {
+		return true
+	}
+	if b.present&bridgeBitXChainAccountClaimCount != 0 && isXAddress(b.XChainAccountClaimCount) {
+		return true
+	}
+	if b.present&bridgeBitPreviousTxnID != 0 && isXAddress(b.PreviousTxnID) {
+		return true
+	}
+	if b.present&bridgeBitSignatureReward != 0 && isXAddressValue(b.SignatureReward) {
+		return true
+	}
+	if b.present&bridgeBitMinAccountCreateAmount != 0 && isXAddressValue(b.MinAccountCreateAmount) {
+		return true
+	}
+	if b.present&bridgeBitAccount != 0 && isXAddress(b.Account) {
+		return true
+	}
+	if b.present&bridgeBitSponsor != 0 && isXAddress(b.Sponsor) {
+		return true
+	}
+	if b.present&bridgeBitXChainBridge != 0 && isXAddressValue(b.XChainBridge) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (b *Bridge) validateEncode() error {
+	if err := b.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

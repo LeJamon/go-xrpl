@@ -75,7 +75,7 @@ func TestNodeRuntimeShutdownStopsStateBaseRecertificationBeforeRotator(t *testin
 	runtime.rotator.Notify(validatedSeq)
 	require.Eventually(t, func() bool {
 		return runtime.services.AdvisoryDeleteState.GetLastRotated() == validatedSeq
-	}, 10*time.Second, 10*time.Millisecond)
+	}, progressTimeout, 10*time.Millisecond)
 
 	blockHash := nodestore.Hash256(runtime.ledger.GetValidatedLedger().Header().AccountHash)
 	store.blockHash.Store(&blockHash)
@@ -83,7 +83,7 @@ func TestNodeRuntimeShutdownStopsStateBaseRecertificationBeforeRotator(t *testin
 	runtime.ledger.RequestStateBaseRecertification()
 	select {
 	case <-store.readStarted:
-	case <-time.After(10 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("state-base recertification did not reach an uncached read")
 	}
 
@@ -96,22 +96,22 @@ func TestNodeRuntimeShutdownStopsStateBaseRecertificationBeforeRotator(t *testin
 	runtime.rotator.Notify(latestSeq)
 	select {
 	case <-store.rotateEntered:
-	case <-time.After(10 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("production rotator did not enter RotateGenerationWithRetention")
 	}
 
 	runtime.stopRuntime()
-	require.NoError(t, runtime.shutdownWithin(10*time.Second))
+	require.NoError(t, runtime.shutdownWithin(progressTimeout))
 	cleanup = false
 
 	select {
 	case <-store.readFinished:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("state-base recertification read remained blocked after shutdown")
 	}
 	select {
 	case <-store.rotateFinished:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("queued online-delete rotation did not drain after verifier cancellation")
 	}
 	require.True(t, checkpointPrepared.Load(), "shutdown did not prepare a verified checkpoint")

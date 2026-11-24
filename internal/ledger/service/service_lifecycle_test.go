@@ -23,7 +23,7 @@ func TestServiceLifecycle_StopBeforeStartRejectsRestart(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("second Stop blocked")
 	}
 }
@@ -51,7 +51,7 @@ func TestServiceLifecycle_StartAndStopAreIdempotent(t *testing.T) {
 	for i, done := range stopped {
 		select {
 		case <-done:
-		case <-time.After(5 * time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatalf("Stop %d blocked", i)
 		}
 	}
@@ -103,7 +103,7 @@ func TestServiceLifecycle_EventSinkStartDuringStopReturns(t *testing.T) {
 	svc.dispatchLedgerEvent(&LedgerAcceptedEvent{LedgerInfo: &LedgerInfo{Sequence: 1}})
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("event sink was not invoked")
 	}
 
@@ -112,7 +112,7 @@ func TestServiceLifecycle_EventSinkStartDuringStopReturns(t *testing.T) {
 		svc.Stop()
 		close(stopped)
 	}()
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	for {
 		svc.lifecycleMu.Lock()
 		stopping := svc.lifecycleState == serviceStopping
@@ -132,12 +132,12 @@ func TestServiceLifecycle_EventSinkStartDuringStopReturns(t *testing.T) {
 		if err == nil {
 			t.Fatal("Start succeeded while Stop was in progress")
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Start from event sink blocked during Stop")
 	}
 	select {
 	case <-stopped:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Stop did not complete after event sink returned")
 	}
 }

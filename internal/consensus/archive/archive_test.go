@@ -127,7 +127,7 @@ func TestArchive_BatchesOnSize(t *testing.T) {
 	}
 
 	// Size-triggered commit must land without waiting for the tick.
-	deadline := time.Now().Add(500 * time.Millisecond)
+	deadline := time.Now().Add(progressTimeout)
 	for time.Now().Before(deadline) {
 		if repo.rowCount() == 3 {
 			return
@@ -146,7 +146,7 @@ func TestArchive_BatchesOnTick(t *testing.T) {
 		a.OnStale(mkVal(i, 1))
 	}
 
-	deadline := time.Now().Add(500 * time.Millisecond)
+	deadline := time.Now().Add(progressTimeout)
 	for time.Now().Before(deadline) {
 		if repo.rowCount() == 5 {
 			return
@@ -392,7 +392,7 @@ func TestArchive_OnStale_AfterClose_IsNoop(t *testing.T) {
 	go func() { wg.Wait(); close(doneCh) }()
 	select {
 	case <-doneCh:
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(progressTimeout):
 		t.Fatalf("OnStale blocked after Close; completed %d/50", dropped.Load())
 	}
 	if got := a.Health().ClosedDropped; got != 50 {
@@ -494,7 +494,7 @@ func TestArchive_CloseTimeoutRemainsWaitable(t *testing.T) {
 		t.Fatalf("first Close returned %v, want deadline exceeded", err)
 	}
 
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), progressTimeout)
 	defer waitCancel()
 	err := a.Close(waitCtx)
 	if !errors.Is(err, ErrDurability) {
@@ -696,7 +696,7 @@ func TestArchive_RetentionDeadlineAfterProgressContinuesPromptly(t *testing.T) {
 	for range 4 {
 		select {
 		case <-deleteCh:
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatal("retention did not continue promptly after its time budget expired")
 		}
 	}

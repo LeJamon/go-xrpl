@@ -59,7 +59,7 @@ func TestPrepareSuccessorAccountsForRetryTransactionBytes(t *testing.T) {
 	require.NoError(t, svc.Start())
 	t.Cleanup(svc.Stop)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), progressTimeout)
 	defer cancel()
 	prepared, err := svc.prepareSuccessor(ctx, svc.GetClosedLedger(), successorOptions{
 		admitted: true,

@@ -26,6 +26,14 @@ evidence_dir="${EVIDENCE_DIR:-}"
 [[ -n "$evidence_dir" ]] || die 'EVIDENCE_DIR is required'
 mkdir -p "$evidence_dir"
 
+pin_file="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/internal/testutil/rippled/pin.env"
+pin() {
+  local value
+  value="$(sed -n "s/^$1=//p" "$pin_file")"
+  [[ -n "$value" ]] || die "$1 is missing from $pin_file"
+  printf '%s' "$value"
+}
+
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -n "$repo_root" ]] || die 'must run inside the Go repository'
 cd "$repo_root"
@@ -34,9 +42,9 @@ expected_sha="${EXPECTED_SHA:-${GITHUB_SHA:-}}"
 go_sha="$(git rev-parse HEAD 2>/dev/null || true)"
 [[ -n "$go_sha" ]] || die 'could not determine the tested Go SHA'
 
-expected_oracle_repository='XRPLF/xrpld-private'
-expected_oracle_tag='3.4.1'
-expected_oracle_commit='d147fccf54a500fce586522f28d6044c37fd8d29'
+expected_oracle_repository="$(pin ORACLE_REPOSITORY)"
+expected_oracle_tag="$(pin ORACLE_TAG)"
+expected_oracle_commit="$(pin ORACLE_COMMIT)"
 
 validate_oracle_identity() {
   local repository="$1"
@@ -54,10 +62,7 @@ worktree_status() {
   # Reference checkouts are separate from the Go source. Final-oracle
   # provenance is recorded independently by the consensus producer.
   git status --porcelain=v1 --untracked-files=all -- . \
-    ':(exclude)rippled-worktrees/v3.2.0-oracle' \
-    ':(exclude)rippled-worktrees/v3.3.0-oracle' \
-    ':(exclude)rippled-worktrees/v3.4.0-oracle' \
-    ':(exclude)rippled-worktrees/v3.4.1-oracle' || die 'could not inspect Go worktree'
+    ':(exclude,glob)rippled-worktrees/v*-oracle/**' || die 'could not inspect Go worktree'
 }
 
 write_common_metadata() {

@@ -105,8 +105,8 @@ func TestRouter_ManifestMalformedDoesNotConsumeUntrustedBudget(t *testing.T) {
 	require.NoError(t, err)
 	_, ok := cache.GetManifest(parsedThird.MasterKey())
 	require.False(t, ok, "the third valid unlisted entry must be beyond the budget")
-	require.ElementsMatch(t,
-		[]badDataCall{{peerID: 8, reason: "manifest-invalid"}, {peerID: 8, reason: "manifests-untrusted-limit"}},
+	require.Equal(t,
+		[]badDataCall{{peerID: 8, reason: "manifests-untrusted-limit"}},
 		badData.getBadDataCalls())
 }
 
@@ -134,11 +134,9 @@ func TestRouter_ManifestStaleAndInvalidConsumeUntrustedBudget(t *testing.T) {
 	_, ok := cache.GetManifest(parsedNewer.MasterKey())
 	require.False(t, ok, "stale and invalid entries must consume both untrusted slots")
 	require.Equal(t, 1, cache.UntrustedCount())
-	calls := sender.getBadDataCalls()
-	require.Len(t, calls, 2)
-	require.ElementsMatch(t,
-		[]badDataCall{{peerID: 9, reason: "manifests-untrusted-limit"}, {peerID: 9, reason: "manifest-invalid"}},
-		calls)
+	require.Equal(t,
+		[]badDataCall{{peerID: 9, reason: "manifests-untrusted-limit"}},
+		sender.getBadDataCalls())
 }
 
 func TestRouter_ManifestCapacityRejectionIsNonMalformed(t *testing.T) {

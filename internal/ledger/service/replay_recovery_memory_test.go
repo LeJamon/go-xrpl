@@ -40,11 +40,11 @@ func TestReplayDiagnosticRetainsMemoryUntilShutdown(t *testing.T) {
 	id, err := svc.replayFaults.BeginReplay(replayfault.Fault{ParentHash: parent.Hash(), TargetHash: target.Hash(), Sequence: target.Sequence()})
 	require.NoError(t, err)
 	blocked := &blockedDiagnosticAdmission{entered: make(chan struct{})}
-	svc.nodeStore = blocked
+	svc.nodeStore = bindNodeStore(blocked)
 	svc.recordReplayFailure(t.Context(), id, replay, cfg, evidence, errors.New("diagnostic test failure"), false)
 	select {
 	case <-blocked.entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("diagnostic worker did not start")
 	}
 	replay.ReleaseMemory()

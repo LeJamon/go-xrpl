@@ -338,7 +338,7 @@ func IsLowAccount(account1, account2 [20]byte) bool {
 
 // CurrencyBytes converts a currency code to its 20-byte representation,
 // matching rippled's to_currency (UintTypes.cpp:84-107):
-//   - "" or "XRP" → xrpCurrency() (all-zeros).
+//   - "", "0", or "XRP" → xrpCurrency() (all-zeros).
 //   - 3-char ISO code whose chars all lie in isoCharSet → zero-padded ASCII
 //     at offset 12-14.
 //   - 3-char code with any char outside isoCharSet → noCurrency().
@@ -352,7 +352,7 @@ func IsLowAccount(account1, account2 [20]byte) bool {
 func CurrencyBytes(currency string) [20]byte {
 	var result [20]byte
 
-	if currency == "" || currency == "XRP" {
+	if currency == "" || currency == "0" || currency == "XRP" {
 		return result
 	}
 
@@ -378,12 +378,12 @@ func CurrencyBytes(currency string) [20]byte {
 }
 
 // IsValidCurrencyCode reports whether code is a well-formed currency code per
-// rippled's to_currency (UintTypes.cpp:83-107): empty or "XRP" (native), a
-// 3-character code drawn entirely from isoCharSet, or 40 hex digits. It checks
+// rippled's to_currency (UintTypes.cpp:83-107): empty, "0", or "XRP" (native),
+// a 3-character code drawn entirely from isoCharSet, or 40 hex digits. It checks
 // form only — the reserved-value codes NoCurrency and BadCurrency are
 // well-formed and report true here; use ParseCurrency to reject those.
 func IsValidCurrencyCode(code string) bool {
-	if code == "" || code == "XRP" {
+	if code == "" || code == "0" || code == "XRP" {
 		return true
 	}
 	switch len(code) {

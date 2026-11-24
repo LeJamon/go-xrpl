@@ -110,7 +110,7 @@ func checkNoDeepFreezeTrustLinesWithoutFreeze(entries []InvariantEntry) *Invaria
 			continue
 		}
 
-		rs, err := state.ParseRippleState(e.After)
+		rs, err := e.rippleState(e.After)
 		if err != nil {
 			return &InvariantViolation{
 				Name:    "NoDeepFreezeTrustLinesWithoutFreeze",

@@ -258,7 +258,7 @@ func TestStartedManagerExpiresIdleEntriesWithoutTraffic(t *testing.T) {
 	consumer.Release()
 	clock.Advance(SecondsUntilExpiration + time.Second)
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(progressTimeout)
 	for m.Stats().Entries != 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}

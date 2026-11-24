@@ -37,10 +37,7 @@ func NewBinaryParser(d []byte, definitions *definitions.Definitions) *BinaryPars
 	}
 }
 
-// NewBinaryParserAllowOverCap returns a parser for transaction wire data. The
-// native amount deserializer preserves an over-cap magnitude as a raw amount so
-// transaction preflight can return temBAD_AMOUNT. Generic object decoding stays
-// strict through NewBinaryParser.
+// NewBinaryParserAllowOverCap retains wire-only XRP and MPT values when decoding transactions.
 func NewBinaryParserAllowOverCap(d []byte, definitions *definitions.Definitions) *BinaryParser {
 	return &BinaryParser{
 		data:         d,
@@ -49,8 +46,7 @@ func NewBinaryParserAllowOverCap(d []byte, definitions *definitions.Definitions)
 	}
 }
 
-// AllowsOverCap reports whether native amounts above the JSON supply cap should
-// be retained as raw wire values by this parser.
+// AllowsOverCap reports whether transaction amounts retain over-cap magnitudes and MPT negative zero.
 func (p *BinaryParser) AllowsOverCap() bool {
 	return p.allowOverCap
 }

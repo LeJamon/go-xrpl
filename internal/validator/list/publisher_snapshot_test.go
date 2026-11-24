@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func TestRPCReaderPublisherProjectionStates(t *testing.T) {
+func TestPublisherSnapshotStates(t *testing.T) {
 	key := PublisherKey{0xed, 1}
 	agg, err := New(Config{PublisherKeys: []PublisherKey{key}})
 	if err != nil {
@@ -15,11 +15,10 @@ func TestRPCReaderPublisherProjectionStates(t *testing.T) {
 		name       string
 		status     PublisherStatus
 		pending    bool
-		available  bool
 		remainingN int
 	}{
 		{name: "unavailable", status: StatusUnavailable},
-		{name: "available", status: StatusAvailable, available: true},
+		{name: "available", status: StatusAvailable},
 		{name: "expired", status: StatusExpired},
 		{name: "revoked", status: StatusRevoked},
 		{name: "pending", status: StatusUnavailable, pending: true, remainingN: 1},
@@ -36,23 +35,13 @@ func TestRPCReaderPublisherProjectionStates(t *testing.T) {
 			}
 			agg.mu.Unlock()
 
-			got := NewRPCReader(agg).Publishers()
-			if len(got) != 1 || got[0].Available != tc.available || got[0].Status != tc.status.String() {
-				t.Fatalf("projection: got %+v", got)
+			got := agg.PublisherSnapshot()
+			if len(got) != 1 || got[0].MasterKey != key || got[0].Status != tc.status {
+				t.Fatalf("snapshot: got %+v", got)
 			}
 			if len(got[0].Remaining) != tc.remainingN {
 				t.Fatalf("remaining: got %d want %d", len(got[0].Remaining), tc.remainingN)
 			}
 		})
-	}
-}
-
-func TestRPCReaderNilIsSafe(t *testing.T) {
-	var reader *RPCReader
-	if reader.HasConfiguredPublishers() || reader.PublisherCount() != 0 || reader.Threshold() != 0 || reader.IsUNLBlocked() {
-		t.Fatal("nil reader returned configured state")
-	}
-	if reader.Publishers() != nil || reader.Sites() != nil || reader.TrustedMasterKeys() != nil || reader.ListedValidators() != nil {
-		t.Fatal("nil reader returned non-empty projection")
 	}
 }

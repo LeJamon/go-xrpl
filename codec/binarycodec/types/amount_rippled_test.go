@@ -604,7 +604,7 @@ func TestXRPDropsValidation(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := verifyXrpValue(tc.drops)
+			_, _, err := parseXrpValue(tc.drops)
 			if tc.expectError {
 				assert.Error(t, err)
 			} else {
@@ -629,6 +629,10 @@ func TestCurrencyCodeValidation(t *testing.T) {
 		{"JPY", "JPY", false},
 		// Valid custom characters
 		{"special chars A*B", "A*B", false},
+		{"three-character 0xA", "0xA", false},
+		{"three-character 0x1", "0x1", false},
+		{"0x-prefixed ISO text", "0xUSD", true},
+		{"0x-prefixed hex", "0x0000000000000000000000005553440000000000", true},
 		// Invalid - XRP is reserved
 		{"XRP reserved", "XRP", true},
 		// Invalid - wrong length

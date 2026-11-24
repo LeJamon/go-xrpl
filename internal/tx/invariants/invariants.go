@@ -33,6 +33,8 @@ type InvariantEntry struct {
 	After       []byte // serialized SLE after the transaction (nil for deletes)
 	DeleteFinal []byte // serialized SLE immediately before deletion (nil for non-deletes)
 	IsDelete    bool   // true if the entry was deleted
+
+	images *imageCache
 }
 
 // InvariantViolation holds the name and description of a detected invariant violation.
@@ -197,6 +199,7 @@ const maxPermissionedDomainCredentials = 10
 // Reference: rippled InvariantCheck.h — finalize(STTx const&, TER, XRPAmount, ReadView const&, ...)
 func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee uint64, entries []InvariantEntry, view ReadView, rules *amendment.Rules, numberContext ...state.NumberContext) *InvariantViolation {
 	txType := tx.TxType().String()
+	entries = withImageCaches(entries)
 	checks := []func() *InvariantViolation{
 		func() *InvariantViolation { return checkTransactionFee(fee, txDeclaredFee) },
 		func() *InvariantViolation { return checkXRPBalances(entries) },

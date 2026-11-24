@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -1702,7 +1703,7 @@ func (l *Loan) PreviousTxn() (string, uint32) {
 }
 
 // ToMap returns the canonical JSON-map representation of the receiver,
-// suitable for binarycodec.EncodeBytes. Includes every present field —
+// suitable for binarycodec.EncodeDecodedFields. Includes every present field —
 // metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
 // header that every SLE blob carries.
 func (l *Loan) ToMap() map[string]any {
@@ -1802,7 +1803,24 @@ func (l *Loan) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (l *Loan) Encode() ([]byte, error) {
-	if err := l.validateRequired(); err != nil {
+	if err := l.validateEncode(); err != nil {
+		return nil, err
+	}
+	if l.hasXAddress() {
+		return l.encodeViaMap()
+	}
+	data, err := l.appendBinary(make([]byte, 0, l.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(l, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeDecodedFields. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (l *Loan) encodeViaMap() ([]byte, error) {
+	if err := l.validateEncode(); err != nil {
 		return nil, err
 	}
 	out := l.ToMap()
@@ -1812,7 +1830,283 @@ func (l *Loan) Encode() ([]byte, error) {
 	if l.present&loanBitPreviousTxnLgrSeq == 0 {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
-	return binarycodec.EncodeBytes(out)
+	return binarycodec.EncodeDecodedFields(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (l *Loan) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x89)
+	if l.present&loanBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), l.Flags)
+	}
+	if l.present&loanBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), l.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if l.present&loanBitStartDate != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x36), l.StartDate)
+	}
+	if l.present&loanBitPaymentInterval != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x37), l.PaymentInterval)
+	}
+	if l.present&loanBitGracePeriod != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x38), l.GracePeriod)
+	}
+	if l.present&loanBitPreviousPaymentDueDate != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x39), l.PreviousPaymentDueDate)
+	}
+	if l.present&loanBitNextPaymentDueDate != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x3A), l.NextPaymentDueDate)
+	}
+	if l.present&loanBitPaymentRemaining != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x3B), l.PaymentRemaining)
+	}
+	if l.present&loanBitLoanSequence != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x3D), l.LoanSequence)
+	}
+	if l.present&loanBitOverpaymentFee != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x40), l.OverpaymentFee)
+	}
+	if l.present&loanBitInterestRate != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x41), l.InterestRate)
+	}
+	if l.present&loanBitLateInterestRate != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x42), l.LateInterestRate)
+	}
+	if l.present&loanBitCloseInterestRate != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x43), l.CloseInterestRate)
+	}
+	if l.present&loanBitOverpaymentInterestRate != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x44), l.OverpaymentInterestRate)
+	}
+	if l.present&loanBitOwnerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x34), l.OwnerNode); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanBitLoanBrokerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x30, 0x1F), l.LoanBrokerNode); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), l.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if l.present&loanBitLoanBrokerID != 0 {
+		if dst, err = appendHash(append(dst, 0x50, 0x25), l.LoanBrokerID, 32); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanBitBorrower != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x19), l.Borrower); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), l.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanBitLoanOriginationFee != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x99), "Number", l.LoanOriginationFee); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanBitLoanServiceFee != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x9A), "Number", l.LoanServiceFee); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanBitLatePaymentFee != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x9B), "Number", l.LatePaymentFee); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanBitClosePaymentFee != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x9C), "Number", l.ClosePaymentFee); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanBitPrincipalOutstanding != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x9D), "Number", l.PrincipalOutstanding); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanBitTotalValueOutstanding != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x9F), "Number", l.TotalValueOutstanding); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanBitPeriodicPayment != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x90, 0x10), "Number", l.PeriodicPayment); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanBitManagementFeeOutstanding != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x90, 0x11), "Number", l.ManagementFeeOutstanding); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanBitLoanScale != 0 {
+		if dst, err = appendInt32(append(dst, 0xA1), l.LoanScale); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (l *Loan) encodedSizeHint() int {
+	size := 41
+	if l.present&loanBitFlags != 0 {
+		size += 5
+	}
+	if l.present&loanBitStartDate != 0 {
+		size += 6
+	}
+	if l.present&loanBitPaymentInterval != 0 {
+		size += 6
+	}
+	if l.present&loanBitGracePeriod != 0 {
+		size += 6
+	}
+	if l.present&loanBitPreviousPaymentDueDate != 0 {
+		size += 6
+	}
+	if l.present&loanBitNextPaymentDueDate != 0 {
+		size += 6
+	}
+	if l.present&loanBitPaymentRemaining != 0 {
+		size += 6
+	}
+	if l.present&loanBitLoanSequence != 0 {
+		size += 6
+	}
+	if l.present&loanBitOverpaymentFee != 0 {
+		size += 6
+	}
+	if l.present&loanBitInterestRate != 0 {
+		size += 6
+	}
+	if l.present&loanBitLateInterestRate != 0 {
+		size += 6
+	}
+	if l.present&loanBitCloseInterestRate != 0 {
+		size += 6
+	}
+	if l.present&loanBitOverpaymentInterestRate != 0 {
+		size += 6
+	}
+	if l.present&loanBitOwnerNode != 0 {
+		size += 9
+	}
+	if l.present&loanBitLoanBrokerNode != 0 {
+		size += 10
+	}
+	if l.present&loanBitLoanBrokerID != 0 {
+		size += 34
+	}
+	if l.present&loanBitBorrower != 0 {
+		size += 2 + accountIDEncodedLen(l.Borrower)
+	}
+	if l.present&loanBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(l.Sponsor)
+	}
+	if l.present&loanBitLoanOriginationFee != 0 {
+		size += 13
+	}
+	if l.present&loanBitLoanServiceFee != 0 {
+		size += 13
+	}
+	if l.present&loanBitLatePaymentFee != 0 {
+		size += 13
+	}
+	if l.present&loanBitClosePaymentFee != 0 {
+		size += 13
+	}
+	if l.present&loanBitPrincipalOutstanding != 0 {
+		size += 13
+	}
+	if l.present&loanBitTotalValueOutstanding != 0 {
+		size += 13
+	}
+	if l.present&loanBitPeriodicPayment != 0 {
+		size += 14
+	}
+	if l.present&loanBitManagementFeeOutstanding != 0 {
+		size += 14
+	}
+	if l.present&loanBitLoanScale != 0 {
+		size += 5
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (l *Loan) hasXAddress() bool {
+	if l.present&loanBitOwnerNode != 0 && isXAddress(l.OwnerNode) {
+		return true
+	}
+	if l.present&loanBitLoanBrokerNode != 0 && isXAddress(l.LoanBrokerNode) {
+		return true
+	}
+	if l.present&loanBitPreviousTxnID != 0 && isXAddress(l.PreviousTxnID) {
+		return true
+	}
+	if l.present&loanBitLoanBrokerID != 0 && isXAddress(l.LoanBrokerID) {
+		return true
+	}
+	if l.present&loanBitBorrower != 0 && isXAddress(l.Borrower) {
+		return true
+	}
+	if l.present&loanBitSponsor != 0 && isXAddress(l.Sponsor) {
+		return true
+	}
+	if l.present&loanBitLoanOriginationFee != 0 && isXAddressValue(l.LoanOriginationFee) {
+		return true
+	}
+	if l.present&loanBitLoanServiceFee != 0 && isXAddressValue(l.LoanServiceFee) {
+		return true
+	}
+	if l.present&loanBitLatePaymentFee != 0 && isXAddressValue(l.LatePaymentFee) {
+		return true
+	}
+	if l.present&loanBitClosePaymentFee != 0 && isXAddressValue(l.ClosePaymentFee) {
+		return true
+	}
+	if l.present&loanBitPrincipalOutstanding != 0 && isXAddressValue(l.PrincipalOutstanding) {
+		return true
+	}
+	if l.present&loanBitTotalValueOutstanding != 0 && isXAddressValue(l.TotalValueOutstanding) {
+		return true
+	}
+	if l.present&loanBitPeriodicPayment != 0 && isXAddressValue(l.PeriodicPayment) {
+		return true
+	}
+	if l.present&loanBitManagementFeeOutstanding != 0 && isXAddressValue(l.ManagementFeeOutstanding) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (l *Loan) validateEncode() error {
+	if err := l.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

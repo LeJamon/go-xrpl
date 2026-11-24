@@ -202,9 +202,9 @@ func TestSwitchToPreferredLedger_FixMismatchPurgesTxIndex(t *testing.T) {
 	svc.ledgerHistory[ledB.Sequence()] = ledB
 	svc.ledgerHistory[ledC.Sequence()] = ledC
 	svc.closedLedger = ledC
-	svc.txIndex[txInB] = ledB.Sequence()
+	svc.indexTxLocked(txInB, ledB.Sequence())
 	svc.txPositionIndex[txInB] = 0
-	svc.txIndex[txInC] = ledC.Sequence()
+	svc.indexTxLocked(txInC, ledC.Sequence())
 	svc.txPositionIndex[txInC] = 0
 	svc.mu.Unlock()
 

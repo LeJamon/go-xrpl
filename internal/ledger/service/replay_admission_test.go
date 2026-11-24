@@ -628,7 +628,7 @@ func TestReplayAdmissionPreparationKeepsStopBehindColdWalk(t *testing.T) {
 	proof.Release()
 	select {
 	case <-stopped:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Stop did not drain replay preparation")
 	}
 }
@@ -812,7 +812,7 @@ func TestReplayAdmissionStopWaitsForPublishedProofRelease(t *testing.T) {
 	prepared.Release()
 	select {
 	case <-stopped:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("Stop did not drain the published proof lifetime")
 	}
 	svc.replayProofMu.Lock()

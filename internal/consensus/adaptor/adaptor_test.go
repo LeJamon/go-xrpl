@@ -199,7 +199,7 @@ func TestOperatingModeChangeCallbackRunsAfterEffectiveTransition(t *testing.T) {
 		if mode != consensus.OpModeConnected {
 			t.Fatalf("callback mode = %v", mode)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("mode callback deadlocked on adaptor re-entry")
 	}
 }
@@ -224,7 +224,7 @@ func TestOperatingModeChangeCallbacksPreserveConcurrentTransitionOrder(t *testin
 	}()
 	select {
 	case <-callbackEntered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("first mode callback did not start")
 	}
 
@@ -235,7 +235,7 @@ func TestOperatingModeChangeCallbacksPreserveConcurrentTransitionOrder(t *testin
 	}()
 	select {
 	case <-secondDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("second mode transition blocked behind callback")
 	}
 	select {
@@ -247,7 +247,7 @@ func TestOperatingModeChangeCallbacksPreserveConcurrentTransitionOrder(t *testin
 	close(releaseCallback)
 	select {
 	case <-firstDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("mode callback drain did not complete")
 	}
 	for _, want := range []consensus.OperatingMode{consensus.OpModeConnected, consensus.OpModeSyncing} {
@@ -256,7 +256,7 @@ func TestOperatingModeChangeCallbacksPreserveConcurrentTransitionOrder(t *testin
 			if got != want {
 				t.Fatalf("callback mode = %v, want %v", got, want)
 			}
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatalf("missing callback for mode %v", want)
 		}
 	}
@@ -279,7 +279,7 @@ func TestOperatingModeChangeCallbackMaySetOperatingMode(t *testing.T) {
 	}()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("recursive mode transition deadlocked")
 	}
 	for _, want := range []consensus.OperatingMode{consensus.OpModeConnected, consensus.OpModeSyncing} {
@@ -288,7 +288,7 @@ func TestOperatingModeChangeCallbackMaySetOperatingMode(t *testing.T) {
 			if got != want {
 				t.Fatalf("callback mode = %v, want %v", got, want)
 			}
-		case <-time.After(time.Second):
+		case <-time.After(progressTimeout):
 			t.Fatalf("missing callback for mode %v", want)
 		}
 	}
@@ -338,15 +338,18 @@ func TestAdaptorQuorumCalculation(t *testing.T) {
 }
 
 func TestAdaptorQuorumUnavailableValidatorList(t *testing.T) {
-	a := New(Config{Validators: []consensus.NodeID{{1}, {2}, {3}}})
-	a.SetUNLBlockedFunc(func() bool { return true })
-	a.SetQuorumUnavailableFunc(func() bool { return false })
+	quorumUnavailable := false
+	a := New(Config{
+		Validators:        []consensus.NodeID{{1}, {2}, {3}},
+		UNLBlocked:        func() bool { return true },
+		QuorumUnavailable: func() bool { return quorumUnavailable },
+	})
 	assert.Equal(t, 3, a.GetQuorum(), "UNL lock-down alone does not disable quorum")
 
-	a.SetQuorumUnavailableFunc(func() bool { return true })
+	quorumUnavailable = true
 	assert.Equal(t, math.MaxInt, a.GetQuorum())
 
-	a.SetQuorumUnavailableFunc(func() bool { return false })
+	quorumUnavailable = false
 	assert.Equal(t, 3, a.GetQuorum())
 }
 

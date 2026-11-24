@@ -42,6 +42,9 @@ func orcDivHalfEven(a, b *big.Int) *big.Int {
 }
 
 func orcExp(e int32, lo, hi int) int32 {
+	if int(e) >= lo && int(e) <= hi {
+		return e
+	}
 	span := int32(hi - lo + 1)
 	return ((e%span)+span)%span + int32(lo)
 }
@@ -91,6 +94,12 @@ func orcNormalize(mantissa *big.Int, exponent int32) (mant *big.Int, exp int32, 
 	}
 
 	e := orcNormalizedExponent(num, den)
+	switch {
+	case e > int(maxExponent):
+		return nil, 0, true
+	case e < int(minExponent):
+		return big.NewInt(0), defaultZeroExp, false
+	}
 	roundAt := func(exponent int) *big.Int {
 		if exponent >= 0 {
 			return orcDivHalfEven(num, new(big.Int).Mul(den, orcPow10(exponent)))
@@ -98,23 +107,25 @@ func orcNormalize(mantissa *big.Int, exponent int32) (mant *big.Int, exp int32, 
 		return orcDivHalfEven(new(big.Int).Mul(num, orcPow10(-exponent)), den)
 	}
 	m := roundAt(e)
-	if m.Cmp(maxMantissa) > 0 { // rounding carried into the next decade
-		m.Div(m, orcTen)
-		e++
-	}
-	if m.Cmp(maxWireMantissa) > 0 {
-		if int64(e) >= int64(maxExponent) {
+	upper := new(big.Int).SetUint64(9_223_372_036_854_775_810)
+	switch {
+	case orcValueCmp(num, den, new(big.Int).Add(upper, big.NewInt(1)), e) >= 0:
+		if e == int(maxExponent) {
 			return nil, 0, true
 		}
 		m = roundAt(e + 1)
-		m.Mul(m, orcTen)
-	}
-
-	switch {
-	case int64(e) > int64(maxExponent):
-		return nil, 0, true
-	case int64(e) < int64(minExponent):
-		return big.NewInt(0), defaultZeroExp, false
+		if m.Cmp(minMantissa) < 0 {
+			m.Mul(m, orcTen)
+		} else {
+			e++
+		}
+	case m.Cmp(maxWireMantissa) > 0:
+		endpointSum := new(big.Int).Add(maxWireMantissa, upper)
+		if orcValueCmp(new(big.Int).Lsh(num, 1), den, endpointSum, e) >= 0 {
+			m.Set(upper)
+		} else {
+			m.Set(maxWireMantissa)
+		}
 	}
 	if sign < 0 {
 		m.Neg(m)
@@ -140,6 +151,9 @@ func FuzzNumberNormalize(f *testing.F) {
 		{"-12345678901234567895", 0},  // sign preserved through rounding
 		{"9999999999999999999", 0},    // already canonical
 		{"1000000000000000000", 0},
+		{"92233720368547758084", 0},
+		{"92233720368547758085", 0},
+		{"9223372036854775810", 32768},
 		{"1", -32768},                // underflow at the exponent floor
 		{"5000000000000000", -40000}, // exponent below minimum
 		{"5", 40000},                 // scales up past the exponent ceiling

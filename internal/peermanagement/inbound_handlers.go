@@ -7,6 +7,7 @@ package peermanagement
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"net"
@@ -149,7 +150,7 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 
 	// Recompute the cluster-fee median and forward it through the
 	// LoadFeeTrack sink. An empty fresh set publishes zero.
-	if sink := o.clusterFeeSinkSnapshot(); sink != nil {
+	if sink := o.clusterFeeSink; sink != nil {
 		now := time.Now()
 		if o.clock != nil {
 			now = o.clock()
@@ -482,15 +483,9 @@ func (o *Overlay) serveFetchPackContext(ctx context.Context, peerID PeerID, req 
 // Semantics: the peer announces a list of tx hashes it holds; we reply
 // with a TMGetObjectByHash{otTRANSACTIONS, query=true} for the subset
 // we don't have. Both directions are part of the tx-reduce-relay
-// feature bundle — rippled charges feeMalformedRequest "disabled"
-// when the local node isn't running tx-reduce-relay.
+// feature bundle; the message descriptor's gate refuses the frame when
+// tx-reduce-relay is not negotiated.
 func (o *Overlay) handleHaveTransactionsMessage(evt Event) {
-	if !o.cfg.EnableTxReduceRelay || !o.PeerSupports(evt.PeerID, FeatureTxReduceRelay) {
-		slog.Debug("TMHaveTransactions without negotiated tx-reduce-relay; dropping",
-			"t", "Overlay", "peer", evt.PeerID)
-		o.IncPeerBadData(evt.PeerID, "have-transactions-unnegotiated")
-		return
-	}
 	decoded, err := message.Decode(message.TypeHaveTransactions, evt.Payload)
 	if err != nil {
 		o.IncPeerBadData(evt.PeerID, "have-transactions-decode")
@@ -506,7 +501,7 @@ func (o *Overlay) handleHaveTransactionsMessage(evt Event) {
 	// hash would amplify network load for a load-reduction feature.
 	// Drop the announcement silently in that case (the peer that
 	// negotiated tx-reduce-relay isn't malformed).
-	if o.txRecordProviderSnapshot() == nil && o.txProviderSnapshot() == nil {
+	if o.txRecordProvider == nil {
 		return
 	}
 
@@ -587,7 +582,7 @@ func isValidGossipAddress(host net.IP, port uint16) bool {
 // reject (with a charge) any frame advertising 1024+ entries.
 //
 // Per-entry, an unparseable address is skipped and charged as bad data
-// — rippled accumulates a feeInvalidData charge per malformed endpoint
+// — rippled aggregates a feeInvalidData charge for malformed endpoints
 // rather than dropping the whole frame, since the remaining entries may
 // still be valid. A hops==0 entry describes the sending peer itself; its
 // self-reported host is untrustworthy, so we overwrite it with the
@@ -597,9 +592,12 @@ func isValidGossipAddress(host net.IP, port uint16) bool {
 // The surviving set is then bounded like rippled's PeerFinder before it
 // reaches Discovery: sampled down to numberOfEndpointsMax (64), gated by
 // the per-peer secondsPerMessage rate-limit (one accepted frame per
-// window), and clipped to our discovery horizon (hops<=MaxHops). Without
-// these an announced address stream would grow d.peers without bound
-// (issue #1170).
+// window), and clipped to the wire endpoint horizon (incoming
+// hops<=maxGossipHops).
+// Before insertion, each surviving endpoint's hop count is incremented so
+// the stored value is the distance at which it can be advertised onward.
+// Without these an announced address stream would grow d.peers without
+// bound (issue #1170).
 func (o *Overlay) handleEndpointsMessage(evt Event) {
 	peer, exists := o.getPeer(evt.PeerID)
 	if !exists {
@@ -613,25 +611,23 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 		return
 	}
 
-	decoded, err := message.Decode(message.TypeEndpoints, evt.Payload)
-	if err != nil {
-		reason := "endpoints-decode"
-		if errors.Is(err, message.ErrWireLimit) {
-			reason = wirePreflightChargeReason(err)
+	eps := evt.decodedEndpoints
+	oversized := evt.endpointsOversized
+	if eps == nil {
+		decoded, decodedOversized, err := message.DecodeEndpointsForPeer(evt.Payload)
+		if err != nil {
+			o.selectMessageCharge(&evt, resource.FeeInvalidData(), "endpoints-decode")
+			return
 		}
-		o.IncPeerBadData(evt.PeerID, reason)
-		return
-	}
-	eps, ok := decoded.(*message.Endpoints)
-	if !ok {
-		return
+		eps = decoded
+		oversized = decodedOversized
 	}
 	if eps.Version != 2 {
 		return
 	}
 
-	if len(eps.EndpointsV2) >= endpointsIngestMaxEntries {
-		o.IncPeerBadData(evt.PeerID, "endpoints-too-large")
+	if oversized || len(eps.EndpointsV2) >= endpointsIngestMaxEntries {
+		o.selectMessageCharge(&evt, resource.FeeUselessData(), "endpoints too large")
 		return
 	}
 
@@ -641,14 +637,15 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 		hops     uint32
 	}
 	accepted := make([]ingestEndpoint, 0, len(eps.EndpointsV2))
+	malformed := 0
 	for _, tm := range eps.EndpointsV2 {
-		parsed, parseErr := ParseEndpoint(tm.Endpoint)
-		if parseErr != nil || net.ParseIP(parsed.Host) == nil {
+		parsed, parseErr := parseGossipEndpoint(tm.Endpoint)
+		if parseErr != nil {
 			// rippled's from_string_checked rejects anything that is not
-			// a literal IP:port, charging the peer (PeerImp.cpp:1218-1226).
-			// ParseEndpoint is laxer — it accepts hostnames for the
-			// outbound Connect path — so the IP check is applied here.
-			o.IncPeerBadData(evt.PeerID, "endpoints-malformed")
+			// a literal IP endpoint, charging the peer
+			// (PeerImp.cpp:1218-1226). ParseEndpoint remains laxer for
+			// the outbound Connect path.
+			malformed++
 			continue
 		}
 
@@ -661,6 +658,10 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 			parsed.Host = remoteIP
 		}
 		accepted = append(accepted, ingestEndpoint{endpoint: parsed, hops: tm.Hops})
+	}
+	if malformed > 0 {
+		fee := resource.FeeInvalidData().Times(malformed)
+		o.selectMessageCharge(&evt, fee, fmt.Sprintf("%d malformed endpoints", malformed))
 	}
 
 	// rippled hands the parsed set to PeerFinder only when at least one
@@ -688,11 +689,9 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 	}
 
 	neighborSeen := false
+	seen := make(map[string]struct{}, len(accepted))
 	for _, e := range accepted {
-		// Drop endpoints beyond our discovery horizon rather than storing
-		// addresses SelectPeersToConnect would never dial; mirrors
-		// rippled's hops>maxHops preprocess drop.
-		if e.hops > MaxHops {
+		if e.hops > maxGossipHops {
 			continue
 		}
 		if e.hops == 0 {
@@ -701,14 +700,22 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 			}
 			neighborSeen = true
 		}
+		if e.endpoint.Port == 0 {
+			continue
+		}
 		if o.cfg.VerifyEndpoints && !isValidGossipAddress(net.ParseIP(e.endpoint.Host), e.endpoint.Port) {
 			continue
 		}
 		address := e.endpoint.String()
+		// The first valid advertisement sets the distance, even if a later one claims fewer hops.
+		if _, duplicate := seen[address]; duplicate {
+			continue
+		}
+		seen[address] = struct{}{}
 		if e.hops == 0 && peer.Inbound() && !o.checkPeerListeningPort(peer, address) {
 			continue
 		}
-		o.discovery.AddPeer(address, e.hops, evt.PeerID)
+		o.discovery.AddPeer(address, e.hops+1, evt.PeerID)
 	}
 }
 
@@ -734,7 +741,7 @@ func (o *Overlay) serveDoTransactionsContext(ctx context.Context, peerID PeerID,
 		o.chargeMalformedTransactionRequest(peerID, "get-objects-txn-too-big")
 		return
 	}
-	if o.txRecordProviderSnapshot() == nil && o.txProviderSnapshot() == nil {
+	if o.txRecordProvider == nil {
 		// Negotiated tx-reduce-relay but no lookup wired — silently
 		// drop. An operator who flipped EnableTxReduceRelay but
 		// hasn't wired a transaction provider would otherwise spam this log.
@@ -794,25 +801,14 @@ func (o *Overlay) chargeMalformedTransactionRequest(peerID PeerID, reason string
 }
 
 func (o *Overlay) lookupTxRecord(hash [32]byte) (TxRecord, bool) {
-	if provider := o.txRecordProviderSnapshot(); provider != nil {
-		record, ok := provider(hash)
-		if ok {
-			record.RawTransaction = append([]byte(nil), record.RawTransaction...)
-		}
-		return record, ok
-	}
-	provider := o.txProviderSnapshot()
-	if provider == nil {
+	if o.txRecordProvider == nil {
 		return TxRecord{}, false
 	}
-	blob, ok := provider(hash)
-	if !ok {
-		return TxRecord{}, false
+	record, ok := o.txRecordProvider(hash)
+	if ok {
+		record.RawTransaction = append([]byte(nil), record.RawTransaction...)
 	}
-	return TxRecord{
-		RawTransaction: append([]byte(nil), blob...),
-		Status:         message.TxStatusCurrent,
-	}, true
+	return record, ok
 }
 
 // hardMaxReplyNodes bounds a single generic by-hash request. Mirrors
@@ -884,7 +880,7 @@ func getObjectByHashFee(requested, found int) resource.Charge {
 // PeerImp.cpp:2538 so a requester polling several peers can tell "I
 // don't have these" from a peer that never answered.
 func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
-	if o.nodeObjectProviderSnapshot() != nil &&
+	if o.nodeObjectProvider != nil &&
 		(len(req.LedgerHash) == 0 || len(req.LedgerHash) == 32) &&
 		len(req.Objects) <= hardMaxReplyNodes {
 		if peer, ok := o.getPeer(peerID); ok {
@@ -903,7 +899,7 @@ func (o *Overlay) serveGetObjectsContext(ctx context.Context, peerID PeerID, req
 		return
 	}
 
-	fetch := o.nodeObjectProviderSnapshot()
+	fetch := o.nodeObjectProvider
 	if fetch == nil {
 		// No node store wired (tests, or an overlay deployed without a
 		// backing store). Drop without charging — the peer issued a
@@ -1010,14 +1006,10 @@ func (o *Overlay) serveGetObjectsContext(ctx context.Context, peerID PeerID, req
 // re-serialize: the decode happened once when the batch was parsed.
 // The batched path shares the same per-peer deferred queue as the unbatched
 // path; HAVE_TRANSACTIONS acknowledgements remove queued hashes before this
-// handler forwards the batch to the transaction router.
+// handler forwards the batch to the transaction router. The message
+// descriptor's gate refuses the frame when tx-reduce-relay is not
+// negotiated.
 func (o *Overlay) handleTransactionsBatchMessage(evt Event) {
-	if !o.cfg.EnableTxReduceRelay || !o.PeerSupports(evt.PeerID, FeatureTxReduceRelay) {
-		slog.Debug("TMTransactions batch without negotiated tx-reduce-relay; dropping",
-			"t", "Overlay", "peer", evt.PeerID)
-		o.selectMessageCharge(&evt, resource.FeeMalformedRequest(), "transactions-batch-unnegotiated")
-		return
-	}
 	decoded, err := message.Decode(message.TypeTransactions, evt.Payload)
 	if err != nil {
 		var limitErr *message.WireLimitError

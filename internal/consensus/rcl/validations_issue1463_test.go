@@ -269,7 +269,7 @@ func TestValidationTrackerIssue1463_DemotionCancelsQueuedFinality(t *testing.T) 
 	}()
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		close(release)
 		t.Fatal("timed out waiting for first finality callback")
 	}
@@ -282,7 +282,7 @@ func TestValidationTrackerIssue1463_DemotionCancelsQueuedFinality(t *testing.T) 
 	close(release)
 	select {
 	case <-firstDone:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("timed out waiting for finality drainer")
 	}
 

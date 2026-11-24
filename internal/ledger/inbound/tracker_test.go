@@ -627,7 +627,7 @@ func TestTracker_InfoUsesCachedFrontierWithoutStoreReads(t *testing.T) {
 		if !ok || len(needed) == 0 {
 			t.Fatalf("cached state frontier missing: %#v", entry)
 		}
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(progressTimeout):
 		t.Fatal("fetch_info blocked on a backing-store traversal")
 	}
 	select {
@@ -703,12 +703,12 @@ func TestTracker_InfoDoesNotWaitForWorkerStoreRead(t *testing.T) {
 	}()
 	select {
 	case <-applied:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("state reply application performed a backing-store completeness walk")
 	}
 	select {
 	case <-family.entered:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("state worker did not block in the backing store")
 	}
 
@@ -720,7 +720,7 @@ func TestTracker_InfoDoesNotWaitForWorkerStoreRead(t *testing.T) {
 		if !ok || entry["have_header"] != true {
 			t.Fatalf("cached acquisition snapshot missing: %#v", info)
 		}
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(progressTimeout):
 		t.Fatal("fetch_info waited for the worker's backing-store read")
 	}
 
@@ -730,7 +730,7 @@ func TestTracker_InfoDoesNotWaitForWorkerStoreRead(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("state worker did not resume")
 	}
 }

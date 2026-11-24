@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -613,7 +614,7 @@ func (d *Delegate) PreviousTxn() (string, uint32) {
 }
 
 // ToMap returns the canonical JSON-map representation of the receiver,
-// suitable for binarycodec.EncodeBytes. Includes every present field —
+// suitable for binarycodec.EncodeDecodedFields. Includes every present field —
 // metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
 // header that every SLE blob carries.
 func (d *Delegate) ToMap() map[string]any {
@@ -653,13 +654,25 @@ func (d *Delegate) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (d *Delegate) Encode() ([]byte, error) {
-	if err := d.validateRequired(); err != nil {
+	if err := d.validateEncode(); err != nil {
 		return nil, err
 	}
-	if d.present&delegateBitPermissions != 0 {
-		if err := validateSTArrayForEncode("Permissions", d.Permissions); err != nil {
-			return nil, err
-		}
+	if d.hasXAddress() {
+		return d.encodeViaMap()
+	}
+	data, err := d.appendBinary(make([]byte, 0, d.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(d, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeDecodedFields. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (d *Delegate) encodeViaMap() ([]byte, error) {
+	if err := d.validateEncode(); err != nil {
+		return nil, err
 	}
 	out := d.ToMap()
 	if d.present&delegateBitPreviousTxnID == 0 {
@@ -668,7 +681,125 @@ func (d *Delegate) Encode() ([]byte, error) {
 	if d.present&delegateBitPreviousTxnLgrSeq == 0 {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
-	return binarycodec.EncodeBytes(out)
+	return binarycodec.EncodeDecodedFields(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (d *Delegate) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x83)
+	if d.present&delegateBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), d.Flags)
+	}
+	if d.present&delegateBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), d.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if d.present&delegateBitOwnerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x34), d.OwnerNode); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&delegateBitDestinationNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x39), d.DestinationNode); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&delegateBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), d.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if d.present&delegateBitAccount != 0 {
+		if dst, err = appendAccountID(append(dst, 0x81), d.Account); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&delegateBitAuthorize != 0 {
+		if dst, err = appendAccountID(append(dst, 0x85), d.Authorize); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&delegateBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), d.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&delegateBitPermissions != 0 {
+		if dst, err = appendSTArray(append(dst, 0xF0, 0x1D), "Permissions", d.Permissions); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (d *Delegate) encodedSizeHint() int {
+	size := 41
+	if d.present&delegateBitFlags != 0 {
+		size += 5
+	}
+	if d.present&delegateBitOwnerNode != 0 {
+		size += 9
+	}
+	if d.present&delegateBitDestinationNode != 0 {
+		size += 9
+	}
+	if d.present&delegateBitAccount != 0 {
+		size += 1 + accountIDEncodedLen(d.Account)
+	}
+	if d.present&delegateBitAuthorize != 0 {
+		size += 1 + accountIDEncodedLen(d.Authorize)
+	}
+	if d.present&delegateBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(d.Sponsor)
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (d *Delegate) hasXAddress() bool {
+	if d.present&delegateBitOwnerNode != 0 && isXAddress(d.OwnerNode) {
+		return true
+	}
+	if d.present&delegateBitDestinationNode != 0 && isXAddress(d.DestinationNode) {
+		return true
+	}
+	if d.present&delegateBitPreviousTxnID != 0 && isXAddress(d.PreviousTxnID) {
+		return true
+	}
+	if d.present&delegateBitAccount != 0 && isXAddress(d.Account) {
+		return true
+	}
+	if d.present&delegateBitAuthorize != 0 && isXAddress(d.Authorize) {
+		return true
+	}
+	if d.present&delegateBitSponsor != 0 && isXAddress(d.Sponsor) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (d *Delegate) validateEncode() error {
+	if err := d.validateRequired(); err != nil {
+		return err
+	}
+	if d.present&delegateBitPermissions != 0 {
+		if err := validateSTArrayForEncode("Permissions", d.Permissions); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

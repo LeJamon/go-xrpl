@@ -483,6 +483,21 @@ func (t *ApplyStateTable) ApplyUnthreaded() error {
 	return nil
 }
 
+// PreviewAndApplyUnthreaded returns Preview's metadata, then commits the
+// changes without threading as ApplyUnthreaded does, building metadata once.
+// Skipping the unthreaded build loses no failure: threading re-encodes only
+// entries that decode, so the preview decodes every image it would have.
+func (t *ApplyStateTable) PreviewAndApplyUnthreaded() (*tx.Metadata, error) {
+	metadata, err := t.Preview()
+	if err != nil {
+		return nil, err
+	}
+	if err := t.commit(t.base, sortedLedgerKeys(t.items), sortedLedgerKeys(t.threadOnlyOwners)); err != nil {
+		return nil, err
+	}
+	return metadata, nil
+}
+
 func (t *ApplyStateTable) applyOrdered(
 	atomicBase ledgercore.AtomicWriter,
 	itemKeys, ownerKeys [][32]byte,
@@ -570,6 +585,14 @@ func (t *ApplyStateTable) applyOrdered(
 	}
 
 	// Metadata builders may fail; keep the base unchanged until all succeed.
+	if err := t.commit(atomicBase, itemKeys, ownerKeys); err != nil {
+		return nil, err
+	}
+	return metadata, nil
+}
+
+// commit writes the tracked changes to atomicBase in one atomic step.
+func (t *ApplyStateTable) commit(atomicBase ledgercore.AtomicWriter, itemKeys, ownerKeys [][32]byte) error {
 	err := atomicBase.ApplyAtomically(func(base ledgercore.Writer) error {
 		for _, key := range itemKeys {
 			entry := t.items[key]
@@ -606,11 +629,7 @@ func (t *ApplyStateTable) applyOrdered(
 		}
 		return nil
 	})
-	if err != nil {
-		return nil, t.record(err)
-	}
-
-	return metadata, nil
+	return t.record(err)
 }
 
 // effectiveRules returns the amendment rules for this apply table.

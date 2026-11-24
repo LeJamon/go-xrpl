@@ -30,7 +30,7 @@ func TestReplaySuccessorPreparationCancellationPreservesFrontier(t *testing.T) {
 
 	select {
 	case <-family.started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("replay successor preparation did not reach the storage barrier")
 	}
 
@@ -44,7 +44,7 @@ func TestReplaySuccessorPreparationCancellationPreservesFrontier(t *testing.T) {
 	}()
 	select {
 	case <-reads:
-	case <-time.After(time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("replay successor preparation held service or history locks")
 	}
 	require.False(t, svc.openLedgerMu.Snapshot().Held, "replay preparation retained the service gate")

@@ -40,6 +40,14 @@ linters:
           deny:
             - pkg: github.com/LeJamon/go-xrpl/internal
               desc: "public packages must not import internal/ — keep the exported API self-contained"
+        consensus-engine-no-ledger:
+          list-mode: lax
+          files:
+            - "**/internal/consensus/rcl/**"
+            - "**/internal/consensus/csf/**"
+          deny:
+            - pkg: github.com/LeJamon/go-xrpl/internal/ledger
+              desc: "the consensus engine must not depend on the ledger service — wire it in internal/consensus/adaptor"
     staticcheck:
       checks:
         - -QF1*

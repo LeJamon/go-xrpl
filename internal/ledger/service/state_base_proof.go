@@ -130,9 +130,7 @@ func (s *Service) fetchDurableNodeData(ctx context.Context, hash nodestore.Hash2
 	if s.nodeStore == nil {
 		return nil, errors.New("NodeStore is unavailable")
 	}
-	if reader, ok := s.nodeStore.(interface {
-		FetchDataUncached(context.Context, nodestore.Hash256) ([]byte, error)
-	}); ok {
+	if reader := s.nodeStore.capabilities().uncached; reader != nil {
 		return reader.FetchDataUncached(ctx, hash)
 	}
 	if reader, ok := s.shamapFamily.(interface {
@@ -212,8 +210,8 @@ func (s *Service) validatedStateBaseCandidateComplete(ctx context.Context, h hea
 	if !bound {
 		return false
 	}
-	durable, ok := s.nodeStore.(nodestore.DurableSnapshotDatabase)
-	if !ok {
+	durable := s.nodeStore.capabilities().durableSnapshot
+	if durable == nil {
 		return false
 	}
 	currentFingerprint, err := durable.DurableFingerprint(ctx)
@@ -261,8 +259,8 @@ func (s *Service) advanceValidatedStateBaseProofWithReplay(ctx context.Context, 
 	if l == nil || !l.IsValidated() || s.nodeStore == nil || s.shamapFamily == nil {
 		return nil
 	}
-	durable, ok := s.nodeStore.(nodestore.DurableSnapshotDatabase)
-	if !ok {
+	durable := s.nodeStore.capabilities().durableSnapshot
+	if durable == nil {
 		return nil
 	}
 	if _, found := s.currentValidatedStateBaseProof(); !found && admitted == nil {

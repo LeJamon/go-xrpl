@@ -152,7 +152,7 @@ func TestValidatorIdentityCloseWaitsForSigningReaders(t *testing.T) {
 			return false
 		}
 		return true
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	select {
 	case err := <-closed:
 		t.Fatalf("Close returned while a signing reader was active: %v", err)

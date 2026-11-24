@@ -4,7 +4,13 @@ import "github.com/LeJamon/go-xrpl/internal/tx"
 
 // Register registers the Clawback transaction type with the tx registry.
 func Register() {
-	tx.Register(tx.TypeClawback, func() tx.Transaction {
-		return &Clawback{BaseTx: *tx.NewBaseTx(tx.TypeClawback, "")}
+	tx.Register(tx.Descriptor{
+		Type: tx.TypeClawback,
+		New: func() tx.Transaction {
+			return &Clawback{BaseTx: *tx.NewBaseTx(tx.TypeClawback, "")}
+		},
+		Delegation:         tx.Delegable,
+		Consequences:       tx.NormalConsequences,
+		ReserveSponsorable: true,
 	})
 }

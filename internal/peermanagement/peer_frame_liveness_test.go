@@ -118,7 +118,7 @@ func TestPeerWriteLoopPreservesReliableAdmissionOrder(t *testing.T) {
 		conn.mu.Lock()
 		defer conn.mu.Unlock()
 		return len(conn.writes) == 2
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
 	conn.mu.Lock()
@@ -143,7 +143,7 @@ func TestPeerWriteLoopBoundsReliableBurstBeforeBulk(t *testing.T) {
 		conn.mu.Lock()
 		defer conn.mu.Unlock()
 		return len(conn.writes) == reliableFramesPerBulkFrame+3
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
 	conn.mu.Lock()
@@ -222,7 +222,7 @@ func TestPeerManifestReadBudgetBoundsPayloadAllocation(t *testing.T) {
 		budget.mu.Lock()
 		defer budget.mu.Unlock()
 		return budget.used == int64(len(wirePayload))
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 
 	secondReader := &countingReader{reader: bytes.NewReader(frame)}
 	secondQueue := make(chan *InboundMessage, 1)
@@ -233,7 +233,7 @@ func TestPeerManifestReadBudgetBoundsPayloadAllocation(t *testing.T) {
 	secondDone := make(chan error, 1)
 	go func() { secondDone <- second.readLoop(context.Background()) }()
 
-	require.Eventually(t, func() bool { return secondReader.read.Load() > 0 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return secondReader.read.Load() > 0 }, progressTimeout, time.Millisecond)
 	time.Sleep(25 * time.Millisecond)
 	require.Less(t, secondReader.read.Load(), int64(len(frame)))
 
@@ -241,7 +241,7 @@ func TestPeerManifestReadBudgetBoundsPayloadAllocation(t *testing.T) {
 	require.NoError(t, queued.Close())
 	firstInbound := <-firstQueue
 	require.NoError(t, firstInbound.Close())
-	require.Eventually(t, func() bool { return secondReader.read.Load() == int64(len(frame)) }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return secondReader.read.Load() == int64(len(frame)) }, progressTimeout, time.Millisecond)
 	secondInbound := <-secondQueue
 	require.Equal(t, wirePayload, secondInbound.Payload)
 	require.NoError(t, secondInbound.Close())
@@ -616,7 +616,7 @@ func TestPeerWriteLoopUsesSizeAwarePerFrameDeadline(t *testing.T) {
 		conn.mu.Lock()
 		defer conn.mu.Unlock()
 		return conn.writeCalls == 1
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
 
@@ -654,7 +654,7 @@ func TestPeerWriteLoopCompletesPartialWritesAndReleasesInFlight(t *testing.T) {
 		conn.mu.Lock()
 		defer conn.mu.Unlock()
 		return len(conn.wire) == len(frame)
-	}, time.Second, time.Millisecond)
+	}, progressTimeout, time.Millisecond)
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
 

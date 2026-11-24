@@ -14,14 +14,15 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/testutil/rippled"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // These fixtures are generated independently from the pinned rippled source
-// macros; see testdata/server_definitions_final_oracle.py. The final 3.4.1
-// fixture stays pinned for the release oracle checks, and go-xrpl's document
-// matches the staged 3.5.0-rc1 one.
+// macros; see testdata/server_definitions_final_oracle.py. The final fixture
+// stays tied to the pinned release for the oracle checks, and go-xrpl's
+// document matches the staged 3.5.0-rc1 one.
 var (
 	//go:embed testdata/server_definitions_final_hashes.json
 	serverDefinitionsFinalHashFixture []byte
@@ -433,15 +434,15 @@ func TestServerDefinitionsMatchesSourceFixture(t *testing.T) {
 	}
 }
 
-// The final 3.4.1 fixture stays pinned to the private release oracle, and
-// only the sections that rc1 extends differ from the staged fixture.
+// The final fixture stays pinned to the private release oracle, and only the
+// sections that rc1 extends differ from the staged fixture.
 func TestServerDefinitionsFinalFixtureStaysPinned(t *testing.T) {
 	final := loadServerDefinitionsHashFixture(t, serverDefinitionsFinalHashFixture)
-	assert.Equal(t, "XRPLF/xrpld-private", final.Oracle.Repository)
-	assert.Equal(t, "3.4.1", final.Oracle.Tag)
-	assert.Equal(t, "d147fccf54a500fce586522f28d6044c37fd8d29", final.Oracle.Commit)
-	assert.Equal(t, "1EA05B0FC11101F7C500BD0DAC794A8BC746A7FBA6250B75489603EB820E0FF5", final.FullDocumentSHA512Half)
-	assert.Equal(t, 79944, final.FullDocumentBytes)
+	assert.Equal(t, rippled.Pin.Repository, final.Oracle.Repository)
+	assert.Equal(t, rippled.Pin.Tag, final.Oracle.Tag)
+	assert.Equal(t, rippled.Pin.Commit, final.Oracle.Commit)
+	assert.Equal(t, rippled.Pin.DefinitionsHash, final.FullDocumentSHA512Half)
+	assert.Equal(t, rippled.Pin.DefinitionsBytes, final.FullDocumentBytes)
 
 	staged := loadServerDefinitionsHashFixture(t, serverDefinitionsRC1HashFixture)
 	require.Len(t, staged.Sections, len(final.Sections))

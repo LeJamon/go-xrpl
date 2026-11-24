@@ -358,7 +358,7 @@ func TestRegistry_ForEachAllowsReentrantAccess(t *testing.T) {
 		if !updated {
 			t.Fatal("concurrent writer did not update the registry")
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		close(releaseCallback)
 		t.Fatal("concurrent writer blocked while ForEach callback was running")
 	}
@@ -367,7 +367,7 @@ func TestRegistry_ForEachAllowsReentrantAccess(t *testing.T) {
 	var result walkResult
 	select {
 	case result = <-walkDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(progressTimeout):
 		t.Fatal("ForEach callback deadlocked on nested registry access")
 	}
 	if !result.reentrant {

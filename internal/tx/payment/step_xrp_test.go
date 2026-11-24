@@ -1,15 +1,34 @@
 package payment
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
+
+type xrpPreimageReadErrorView struct {
+	*paymentMockLedgerView
+	key   [32]byte
+	reads int
+	err   error
+}
+
+func (v *xrpPreimageReadErrorView) Read(key keylet.Keylet) ([]byte, error) {
+	if key.Key == v.key {
+		v.reads++
+		if v.reads == 2 {
+			return nil, v.err
+		}
+	}
+	return v.paymentMockLedgerView.Read(key)
+}
 
 func TestXRPEndpointStep_CheckGlobalFreeze(t *testing.T) {
 	view := newPaymentMockLedgerView()
@@ -116,42 +135,135 @@ func TestXRPEndpointStep_xrpLiquid_DeferredCredit(t *testing.T) {
 	// The 40 XRP received earlier must not be re-spendable: 90 - 40 = 50 XRP.
 	require.Equal(t, int64(50_000_000), step.xrpLiquid(sbCredited),
 		"deferred-credit hook must subtract the 40 XRP received earlier in the payment")
+	funds, result := AccountFundsInSandbox(sbCredited, acct, tx.NewXRPAmount(1), true, 10_000_000, 2_000_000, 0)
+	require.Equal(t, ter.TesSUCCESS, result)
+	require.Equal(t, int64(50_000_000), funds.Drops())
 }
 
-// TestXRPEndpointStep_xrpLiquid_AMMReserveExemption proves that an AMM
-// pseudo-account (sfAMMID present) has no reserve requirement, so its entire
-// balance is liquid. Reference: rippled View.cpp xrpLiquid() lines 631-633.
-func TestXRPEndpointStep_xrpLiquid_AMMReserveExemption(t *testing.T) {
+func TestXRPEndpointStep_xrpLiquid_PseudoAccountReserveExemption(t *testing.T) {
 	view := newPaymentMockLedgerView()
-	var amm [20]byte
-	copy(amm[:], []byte("ammacct123456789012"))
-
-	// Build an AMM pseudo-account: non-zero AMMID, a non-trivial owner count to
-	// prove the reserve is waived regardless of owners.
-	acct := &state.AccountRoot{
-		Account:    state.EncodeAccountIDSafe(amm),
-		Balance:    100_000_000, // 100 XRP
-		OwnerCount: 5,
-		Sequence:   1,
+	pseudoAccounts := []struct {
+		name string
+		set  func(*state.AccountRoot)
+	}{
+		{name: "AMM", set: func(account *state.AccountRoot) { account.AMMID[0] = 1 }},
+		{name: "vault", set: func(account *state.AccountRoot) { account.VaultID[0] = 1 }},
+		{name: "loan broker", set: func(account *state.AccountRoot) { account.LoanBrokerID[0] = 1 }},
 	}
-	acct.AMMID[0] = 0x01 // mark sfAMMID present
-	data, err := state.SerializeAccountRoot(acct)
-	require.NoError(t, err)
-	view.data[keylet.Account(amm).Key] = data
 
-	step := NewXRPEndpointStep(amm, false)
-	sb := NewPaymentSandbox(view)
+	for index, pseudo := range pseudoAccounts {
+		t.Run(pseudo.name, func(t *testing.T) {
+			var accountID [20]byte
+			accountID[0] = byte(index + 1)
+			account := &state.AccountRoot{
+				Account:    state.EncodeAccountIDSafe(accountID),
+				Balance:    100_000_000,
+				OwnerCount: 5,
+				Sequence:   1,
+			}
+			pseudo.set(account)
+			data, err := state.SerializeAccountRoot(account)
+			require.NoError(t, err)
+			view.data[keylet.Account(accountID).Key] = data
 
-	// No reserve: full 100 XRP is liquid (base 10 + 5*owner reserve would be
-	// withheld for a normal account, but an AMM has zero reserve).
-	require.Equal(t, int64(100_000_000), step.xrpLiquid(sb),
-		"AMM pseudo-account must have zero reserve -> full balance liquid")
+			step := NewXRPEndpointStep(accountID, false)
+			sb := NewPaymentSandbox(view)
+			require.Equal(t, int64(100_000_000), step.xrpLiquid(sb),
+				"pseudo-account must have zero reserve -> full balance liquid")
+		})
+	}
 
-	// Sanity: a non-AMM account with the same owner count withholds reserve.
 	var normal [20]byte
 	copy(normal[:], []byte("normalacct123456789"))
 	view.createAccount(normal, 100_000_000, 5) // base 10 + 5*2 = 20 XRP reserve
 	normalStep := NewXRPEndpointStep(normal, false)
-	require.Equal(t, int64(80_000_000), normalStep.xrpLiquid(sb),
-		"non-AMM account withholds base + owner*inc reserve")
+	require.Equal(t, int64(80_000_000), normalStep.xrpLiquid(NewPaymentSandbox(view)))
+}
+
+func TestXRPEndpointStep_UpdateFailureDoesNotCacheOrRecordCredit(t *testing.T) {
+	tests := []struct {
+		name    string
+		isLast  bool
+		forward bool
+	}{
+		{name: "reverse source", isLast: false},
+		{name: "reverse destination", isLast: true},
+		{name: "forward source", isLast: false, forward: true},
+		{name: "forward destination", isLast: true, forward: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var accountID [20]byte
+			accountID[0] = 1
+			base := newPaymentMockLedgerView()
+			base.createAccount(accountID, 100_000_000, 0)
+			accountKey := keylet.Account(accountID)
+			before := append([]byte(nil), base.data[accountKey.Key]...)
+			view := &xrpPreimageReadErrorView{
+				paymentMockLedgerView: base,
+				key:                   accountKey.Key,
+				err:                   errors.New("pre-image read failed"),
+			}
+			sb := NewPaymentSandbox(view)
+			step := NewXRPEndpointStep(accountID, test.isLast)
+			amount := NewXRPEitherAmount(1_000_000)
+			if test.forward {
+				cached := int64(123)
+				step.cache = &cached
+			}
+
+			var in, out EitherAmount
+			if test.forward {
+				in, out = step.Fwd(sb, NewChildSandbox(sb), nil, amount)
+			} else {
+				in, out = step.Rev(sb, NewChildSandbox(sb), nil, amount)
+			}
+
+			require.True(t, in.IsZero())
+			require.True(t, out.IsZero())
+			if test.forward {
+				require.NotNil(t, step.cache)
+				require.Equal(t, int64(123), *step.cache)
+			} else {
+				require.Nil(t, step.cache)
+			}
+			require.Equal(t, 2, view.reads)
+			require.Equal(t, before, base.data[accountKey.Key])
+			require.Empty(t, sb.Modifications())
+			require.Empty(t, sb.Insertions())
+			require.Empty(t, sb.tab.credits)
+		})
+	}
+}
+
+func TestXRPEndpointStep_OverrangeCredit(t *testing.T) {
+	var accountID [20]byte
+	accountID[0] = 1
+	view := newPaymentMockLedgerView()
+	account := &state.AccountRoot{
+		Account:  state.EncodeAccountIDSafe(accountID),
+		Balance:  uint64(drops.MaxDrops),
+		Sequence: 1,
+	}
+	data, err := state.SerializeAccountRoot(account)
+	require.NoError(t, err)
+	view.data[keylet.Account(accountID).Key] = data
+
+	sb := NewPaymentSandbox(view)
+	step := NewXRPEndpointStep(accountID, true)
+	in, out := step.Rev(sb, NewChildSandbox(sb), nil, NewXRPEitherAmount(1))
+
+	require.Equal(t, NewXRPEitherAmount(1), in)
+	require.Equal(t, NewXRPEitherAmount(1), out)
+	require.NotNil(t, step.cache)
+	require.NotEmpty(t, sb.tab.credits)
+	require.Empty(t, sb.Modifications())
+
+	forward := NewPaymentSandbox(view)
+	in, out = step.Fwd(forward, NewChildSandbox(forward), nil, NewXRPEitherAmount(1))
+	require.True(t, in.IsZero())
+	require.True(t, out.IsZero())
+	require.Empty(t, forward.tab.credits)
+	require.Empty(t, forward.Modifications())
 }

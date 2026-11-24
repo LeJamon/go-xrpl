@@ -5,11 +5,11 @@ It parses the C++ protocol macros and combines them with construction rules
 transcribed from the pinned sources, independently of go-xrpl. The input must
 be a clean checkout of one of the pinned releases below.
 
-An authorized release job can regenerate and verify the final 3.4.1 fixture
+An authorized release job can regenerate and verify the pinned final fixture
 from the clean private source checkout with:
 
     python3 server_definitions_final_oracle.py \
-        /path/to/rippled-worktrees/v3.4.1-oracle --output server_definitions_final_hashes.json
+        /path/to/<ORACLE_CHECKOUT from pin.env> --output server_definitions_final_hashes.json
 
 The staged 3.5.0-rc1 fixture, which go-xrpl's own document matches, comes from
 a clean public checkout:
@@ -34,11 +34,20 @@ import subprocess
 from pathlib import Path
 
 
+PIN = dict(
+    line.split("=", 1)
+    for line in (Path(__file__).resolve().parents[3] / "internal/testutil/rippled/pin.env").read_text().splitlines()
+    if line and not line.startswith("#")
+)
+ORACLE_REPOSITORY = PIN["ORACLE_REPOSITORY"]
+ORACLE_TAG = PIN["ORACLE_TAG"]
+ORACLE_COMMIT = PIN["ORACLE_COMMIT"]
+
 RELEASES = {
-    "3.4.1": (
-        "XRPLF/xrpld-private",
-        "d147fccf54a500fce586522f28d6044c37fd8d29",
-        "python3 server_definitions_final_oracle.py <rippled-worktrees/v3.4.1-oracle> --output server_definitions_final_hashes.json",
+    ORACLE_TAG: (
+        ORACLE_REPOSITORY,
+        ORACLE_COMMIT,
+        f"python3 server_definitions_final_oracle.py <{PIN['ORACLE_CHECKOUT']}> --output server_definitions_final_hashes.json",
     ),
     "3.5.0-rc1": (
         "XRPLF/rippled",
@@ -375,7 +384,7 @@ def section_stats(value):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("oracle_root", type=Path)
-    parser.add_argument("--release", choices=sorted(RELEASES), default="3.4.1")
+    parser.add_argument("--release", choices=sorted(RELEASES), default=ORACLE_TAG)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     root = args.oracle_root.resolve()

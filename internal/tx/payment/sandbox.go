@@ -47,6 +47,11 @@ type PaymentSandbox struct {
 	// This is needed for correct metadata generation (PreviousFields/FinalFields in DeletedNode)
 	deletedFinalStates map[[32]byte][]byte
 
+	// replaced holds keys erased and then re-inserted while the entry still
+	// exists below this sandbox. The re-inserted entry is a fresh object, so it
+	// must reach the view as erase+insert rather than as an in-place update.
+	replaced map[[32]byte]bool
+
 	// tab holds deferred credits for balance adjustments
 	tab *DeferredCredits
 
@@ -340,6 +345,7 @@ func (s *PaymentSandbox) Insert(k keylet.Keylet, data []byte) error {
 		if origData != nil {
 			// Entry exists in base → treat as modification
 			s.modifications[key] = dataCopy
+			s.markReplaced(key)
 			return nil
 		}
 		// Entry was inserted+deleted within this sandbox → re-insert
@@ -420,8 +426,16 @@ func (s *PaymentSandbox) Erase(k keylet.Keylet) error {
 	}
 	delete(s.modifications, key)
 	delete(s.insertions, key)
+	delete(s.replaced, key)
 	s.deletions[key] = true
 	return nil
+}
+
+func (s *PaymentSandbox) markReplaced(key [32]byte) {
+	if s.replaced == nil {
+		s.replaced = make(map[[32]byte]bool)
+	}
+	s.replaced[key] = true
 }
 
 // getDeletedFinalState retrieves the final state of a deleted entry
@@ -1019,6 +1033,7 @@ func (s *PaymentSandbox) Apply(to *PaymentSandbox) error {
 		to.deletions[key] = true
 		delete(to.modifications, key)
 		delete(to.insertions, key)
+		delete(to.replaced, key)
 	}
 
 	for key, data := range s.insertions {
@@ -1027,6 +1042,7 @@ func (s *PaymentSandbox) Apply(to *PaymentSandbox) error {
 			delete(to.deletions, key)
 			if existed {
 				to.modifications[key] = data
+				to.markReplaced(key)
 			} else {
 				to.insertions[key] = data
 			}
@@ -1049,6 +1065,9 @@ func (s *PaymentSandbox) Apply(to *PaymentSandbox) error {
 			to.insertions[key] = data
 		} else {
 			to.modifications[key] = data
+			if s.replaced[key] {
+				to.markReplaced(key)
+			}
 		}
 	}
 
@@ -1109,7 +1128,17 @@ func (s *PaymentSandbox) ApplyToView(view tx.LedgerView) error {
 
 	// Apply modifications
 	for key, data := range s.modifications {
-		if err := view.Update(keylet.Keylet{Key: key}, data); err != nil {
+		k := keylet.Keylet{Key: key}
+		if s.replaced[key] {
+			if err := view.Erase(k); err != nil {
+				return err
+			}
+			if err := view.Insert(k, data); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := view.Update(k, data); err != nil {
 			return err
 		}
 	}
@@ -1132,6 +1161,7 @@ func (s *PaymentSandbox) Reset() {
 	s.insertions = make(map[[32]byte][]byte)
 	s.deletions = make(map[[32]byte]bool)
 	s.deletedFinalStates = make(map[[32]byte][]byte)
+	s.replaced = nil
 	s.tab = newDeferredCredits()
 	s.dropsDestroyed = drops.XRPAmount(0)
 }

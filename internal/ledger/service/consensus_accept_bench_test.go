@@ -83,7 +83,7 @@ func benchmarkConsensusAcceptanceContention(b *testing.B, tc consensusAcceptance
 			case <-fixture.db.promotionStart:
 			case err := <-done:
 				b.Fatalf("refresh ended before its first promotion: %v", err)
-			case <-time.After(5 * time.Second):
+			case <-time.After(progressTimeout):
 				b.Fatal("refresh did not reach its first promotion")
 			}
 		}

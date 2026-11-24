@@ -2,7 +2,6 @@ package engine
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -118,7 +117,7 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 	// preflightUniversal — after preflight1 and before T::preflight, reject a
 	// transaction carrying a non-canonical native or MPT amount in any field
 	// (rippled Transactor::preflightUniversal, gated on fixCleanup3_2_0).
-	if rules.FixCleanup3_2_0Enabled() && hasInvalidAmount(tx) {
+	if hasInvalidAmount(tx, rules) {
 		return ter.TemBAD_AMOUNT
 	}
 
@@ -299,6 +298,9 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if result := checkFlagsMask(innerTx, common, rules); result != ter.TesSUCCESS {
 		return result
 	}
+	if common.HasRawNonnativeFee() {
+		return ter.TemBAD_FEE
+	}
 	if result := checkSigningKeyShape(common); result != ter.TesSUCCESS {
 		return result
 	}
@@ -312,7 +314,7 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if result := checkSponsorFields(innerTx, common, rules); result != ter.TesSUCCESS {
 		return result
 	}
-	if rules.FixCleanup3_2_0Enabled() && hasInvalidAmount(innerTx) {
+	if hasInvalidAmount(innerTx, rules) {
 		return ter.TemBAD_AMOUNT
 	}
 	if result := runTypePreflight(innerTx, rules); result != ter.TesSUCCESS {
@@ -403,36 +405,8 @@ func checkSponsorFields(transaction txcore.Transaction, common *txcore.Common, r
 }
 
 func reserveSponsorAllowed(txType txcore.Type) bool {
-	switch txType {
-	case txcore.TypeDelegateSet,
-		txcore.TypeDepositPreauth,
-		txcore.TypePayment,
-		txcore.TypeSignerListSet,
-		txcore.TypeCheckCancel,
-		txcore.TypeCheckCash,
-		txcore.TypeCheckCreate,
-		txcore.TypeEscrowCancel,
-		txcore.TypeEscrowCreate,
-		txcore.TypeEscrowFinish,
-		txcore.TypePaymentChannelClaim,
-		txcore.TypePaymentChannelCreate,
-		txcore.TypePaymentChannelFund,
-		txcore.TypeClawback,
-		txcore.TypeMPTokenAuthorize,
-		txcore.TypeMPTokenIssuanceCreate,
-		txcore.TypeMPTokenIssuanceDestroy,
-		txcore.TypeMPTokenIssuanceSet,
-		txcore.TypeTrustSet,
-		txcore.TypeCredentialAccept,
-		txcore.TypeCredentialCreate,
-		txcore.TypeCredentialDelete,
-		txcore.TypeAccountSet,
-		txcore.TypeRegularKeySet,
-		txcore.TypeSponsorshipTransfer:
-		return true
-	default:
-		return false
-	}
+	d, _ := txcore.Lookup(txType)
+	return d.ReserveSponsorable
 }
 
 // checkAccountPresent rejects a zero/empty source account.
@@ -579,28 +553,17 @@ func PrewarmSignatureWithRules(txn txcore.Transaction, rules *amendment.Rules) e
 	return nil
 }
 
-// hasInvalidAmount reports whether the transaction carries a non-canonical
-// native or MPT amount in any field, mirroring rippled's hasInvalidAmount scan
-// of the serialized STTx. The transaction is normalised to its canonical JSON
-// map (each amount rendered as a drops string or {value, ...} object) so the
-// scan sees a value that go-xrpl's amount-capping binary codec would otherwise
-// refuse to round-trip. A flatten/marshal failure yields false: the universal
-// check never manufactures a rejection it cannot substantiate, leaving any real
-// malformation to the per-type preflight.
-func hasInvalidAmount(tx txcore.Transaction) bool {
-	flat, err := tx.Flatten()
+func hasInvalidAmount(tx txcore.Transaction, rules *amendment.Rules) bool {
+	fields, err := tx.Flatten()
 	if err != nil {
 		return false
 	}
-	b, err := json.Marshal(flat)
-	if err != nil {
-		return false
+	if rules.FixCleanup3_2_0Enabled() {
+		return invariants.HasInvalidAmount(fields)
 	}
-	var m map[string]any
-	if err := json.Unmarshal(b, &m); err != nil {
-		return false
-	}
-	return invariants.HasInvalidAmount(m)
+	// Legacy rules allow other non-canonical amounts, but the engine cannot
+	// execute an MPT magnitude wider than its signed representation.
+	return invariants.HasOverCapMPT(fields)
 }
 
 // parseValidationError maps a Validate() error to a TER result code.

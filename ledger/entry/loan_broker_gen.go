@@ -6,6 +6,7 @@
 package entry
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -1202,7 +1203,7 @@ func (l *LoanBroker) PreviousTxn() (string, uint32) {
 }
 
 // ToMap returns the canonical JSON-map representation of the receiver,
-// suitable for binarycodec.EncodeBytes. Includes every present field —
+// suitable for binarycodec.EncodeDecodedFields. Includes every present field —
 // metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
 // header that every SLE blob carries.
 func (l *LoanBroker) ToMap() map[string]any {
@@ -1275,7 +1276,24 @@ func (l *LoanBroker) ToMap() map[string]any {
 // Encode serializes the receiver to canonical XRPL binary. Legacy decode
 // aliases and non-canonical input ordering are emitted in canonical form.
 func (l *LoanBroker) Encode() ([]byte, error) {
-	if err := l.validateRequired(); err != nil {
+	if err := l.validateEncode(); err != nil {
+		return nil, err
+	}
+	if l.hasXAddress() {
+		return l.encodeViaMap()
+	}
+	data, err := l.appendBinary(make([]byte, 0, l.encodedSizeHint()))
+	if encodeParityCheck {
+		verifyEncodeParity(l, data, err)
+	}
+	return data, err
+}
+
+// encodeViaMap is the reference encoder: it serializes ToMap through
+// binarycodec.EncodeDecodedFields. It is kept as the differential-test oracle for the
+// direct binary writer.
+func (l *LoanBroker) encodeViaMap() ([]byte, error) {
+	if err := l.validateEncode(); err != nil {
 		return nil, err
 	}
 	out := l.ToMap()
@@ -1285,7 +1303,219 @@ func (l *LoanBroker) Encode() ([]byte, error) {
 	if l.present&loanbrokerBitPreviousTxnLgrSeq == 0 {
 		out["PreviousTxnLgrSeq"] = uint32(0)
 	}
-	return binarycodec.EncodeBytes(out)
+	return binarycodec.EncodeDecodedFields(out)
+}
+
+// appendBinary appends the canonical binary form of the receiver to dst:
+// every present field, plus defaults for absent threading fields, in
+// (type code, field code) order.
+func (l *LoanBroker) appendBinary(dst []byte) ([]byte, error) {
+	var err error
+	dst = append(dst, 0x11, 0x00, 0x88)
+	if l.present&loanbrokerBitManagementFeeRate != 0 {
+		if dst, err = appendUInt16(append(dst, 0x10, 0x16), l.ManagementFeeRate); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanbrokerBitFlags != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x22), l.Flags)
+	}
+	if l.present&loanbrokerBitSequence != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x24), l.Sequence)
+	}
+	if l.present&loanbrokerBitPreviousTxnLgrSeq != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x25), l.PreviousTxnLgrSeq)
+	} else {
+		dst = append(dst, 0x25, 0, 0, 0, 0)
+	}
+	if l.present&loanbrokerBitOwnerCount != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x2D), l.OwnerCount)
+	}
+	if l.present&loanbrokerBitLoanSequence != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x3D), l.LoanSequence)
+	}
+	if l.present&loanbrokerBitCoverRateMinimum != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x3E), l.CoverRateMinimum)
+	}
+	if l.present&loanbrokerBitCoverRateLiquidation != 0 {
+		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x3F), l.CoverRateLiquidation)
+	}
+	if l.present&loanbrokerBitOwnerNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x34), l.OwnerNode); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanbrokerBitVaultNode != 0 {
+		if dst, err = appendUInt64Hex(append(dst, 0x30, 0x1E), l.VaultNode); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanbrokerBitPreviousTxnID != 0 {
+		if dst, err = appendHash(append(dst, 0x55), l.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	} else {
+		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if l.present&loanbrokerBitDomainID != 0 {
+		if dst, err = appendHash(append(dst, 0x50, 0x22), l.DomainID, 32); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanbrokerBitVaultID != 0 {
+		if dst, err = appendHash(append(dst, 0x50, 0x23), l.VaultID, 32); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanbrokerBitData != 0 {
+		if dst, err = appendBlob(append(dst, 0x70, 0x1B), l.Data); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanbrokerBitAccount != 0 {
+		if dst, err = appendAccountID(append(dst, 0x81), l.Account); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanbrokerBitOwner != 0 {
+		if dst, err = appendAccountID(append(dst, 0x82), l.Owner); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanbrokerBitSponsor != 0 {
+		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), l.Sponsor); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanbrokerBitDebtTotal != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x96), "Number", l.DebtTotal); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanbrokerBitDebtMaximum != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x97), "Number", l.DebtMaximum); err != nil {
+			return nil, err
+		}
+	}
+	if l.present&loanbrokerBitCoverAvailable != 0 {
+		if dst, err = appendCodecValue(append(dst, 0x98), "Number", l.CoverAvailable); err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
+// encodedSizeHint is the encoded length of the receiver, short only by the
+// nested objects and arrays it does not estimate.
+func (l *LoanBroker) encodedSizeHint() int {
+	size := 41
+	if l.present&loanbrokerBitManagementFeeRate != 0 {
+		size += 4
+	}
+	if l.present&loanbrokerBitFlags != 0 {
+		size += 5
+	}
+	if l.present&loanbrokerBitSequence != 0 {
+		size += 5
+	}
+	if l.present&loanbrokerBitOwnerCount != 0 {
+		size += 5
+	}
+	if l.present&loanbrokerBitLoanSequence != 0 {
+		size += 6
+	}
+	if l.present&loanbrokerBitCoverRateMinimum != 0 {
+		size += 6
+	}
+	if l.present&loanbrokerBitCoverRateLiquidation != 0 {
+		size += 6
+	}
+	if l.present&loanbrokerBitOwnerNode != 0 {
+		size += 9
+	}
+	if l.present&loanbrokerBitVaultNode != 0 {
+		size += 10
+	}
+	if l.present&loanbrokerBitDomainID != 0 {
+		size += 34
+	}
+	if l.present&loanbrokerBitVaultID != 0 {
+		size += 34
+	}
+	if l.present&loanbrokerBitData != 0 {
+		size += 2 + blobEncodedLen(l.Data)
+	}
+	if l.present&loanbrokerBitAccount != 0 {
+		size += 1 + accountIDEncodedLen(l.Account)
+	}
+	if l.present&loanbrokerBitOwner != 0 {
+		size += 1 + accountIDEncodedLen(l.Owner)
+	}
+	if l.present&loanbrokerBitSponsor != 0 {
+		size += 2 + accountIDEncodedLen(l.Sponsor)
+	}
+	if l.present&loanbrokerBitDebtTotal != 0 {
+		size += 13
+	}
+	if l.present&loanbrokerBitDebtMaximum != 0 {
+		size += 13
+	}
+	if l.present&loanbrokerBitCoverAvailable != 0 {
+		size += 13
+	}
+	return size
+}
+
+// hasXAddress reports whether a present top-level string value is an
+// X-address. The map encoder rewrites those, and may add a tag field, so such
+// entries are encoded through it.
+func (l *LoanBroker) hasXAddress() bool {
+	if l.present&loanbrokerBitOwnerNode != 0 && isXAddress(l.OwnerNode) {
+		return true
+	}
+	if l.present&loanbrokerBitVaultNode != 0 && isXAddress(l.VaultNode) {
+		return true
+	}
+	if l.present&loanbrokerBitPreviousTxnID != 0 && isXAddress(l.PreviousTxnID) {
+		return true
+	}
+	if l.present&loanbrokerBitDomainID != 0 && isXAddress(l.DomainID) {
+		return true
+	}
+	if l.present&loanbrokerBitVaultID != 0 && isXAddress(l.VaultID) {
+		return true
+	}
+	if l.present&loanbrokerBitData != 0 && isXAddress(l.Data) {
+		return true
+	}
+	if l.present&loanbrokerBitAccount != 0 && isXAddress(l.Account) {
+		return true
+	}
+	if l.present&loanbrokerBitOwner != 0 && isXAddress(l.Owner) {
+		return true
+	}
+	if l.present&loanbrokerBitSponsor != 0 && isXAddress(l.Sponsor) {
+		return true
+	}
+	if l.present&loanbrokerBitDebtTotal != 0 && isXAddressValue(l.DebtTotal) {
+		return true
+	}
+	if l.present&loanbrokerBitDebtMaximum != 0 && isXAddressValue(l.DebtMaximum) {
+		return true
+	}
+	if l.present&loanbrokerBitCoverAvailable != 0 && isXAddressValue(l.CoverAvailable) {
+		return true
+	}
+	return false
+}
+
+// validateEncode runs the checks shared by every encoder before any field is
+// serialized.
+func (l *LoanBroker) validateEncode() error {
+	if err := l.validateRequired(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

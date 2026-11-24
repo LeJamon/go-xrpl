@@ -278,7 +278,6 @@ func TestPeerReadLoopSkipsUnknownMessage(t *testing.T) {
 	assert.Equal(t, message.TypePing, evt.MessageType)
 	assert.Equal(t, knownPayload, evt.Payload)
 	assert.Zero(t, peer.BadDataCount())
-	assert.Zero(t, peer.consecutiveDecompressFailures.Load())
 
 	unknownStats := peer.traffic.Stats(CategoryUnknown)
 	assert.Zero(t, unknownStats.MessagesIn)
@@ -289,6 +288,33 @@ func TestPeerReadLoopSkipsUnknownMessage(t *testing.T) {
 		len(legacyFrame) +
 		message.HeaderSizeUncompressed + len(knownPayload)
 	assert.Equal(t, uint64(wantWireBytes), peer.metrics.recv.totalBytesSnapshot())
+}
+
+func TestPeerReadLoopStopsOnKnownCompressedDecodeFailure(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	events := make(chan Event, 1)
+	peer := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 51235}, false, id, events)
+	peer.handshakeCfg.EnableCompression = true
+	peer.capabilities = NewPeerCapabilities()
+	peer.capabilities.Features.Enable(FeatureCompression)
+
+	malformed := rawTestWireMessage(
+		message.TypeManifests,
+		[]byte{0xff},
+		message.AlgorithmLZ4,
+		128,
+	)
+	following, err := message.BuildWireMessage(message.TypePing, []byte{0x08, 0x00})
+	require.NoError(t, err)
+	peer.bufReader = bufio.NewReader(bytes.NewReader(append(malformed, following...)))
+
+	err = peer.readLoop(context.Background())
+	require.ErrorIs(t, err, message.ErrDecompressFailed)
+	assert.Empty(t, events, "a following frame must not reach a handler")
+	assert.Zero(t, peer.BadDataCount(), "failed decompression must not add a resource fee")
+	assert.Equal(t, uint64(len(malformed)), peer.metrics.recv.totalBytesSnapshot())
 }
 
 // TestEndpoint tests Endpoint type

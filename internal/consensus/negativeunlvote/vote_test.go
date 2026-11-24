@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/assert"
@@ -488,19 +489,11 @@ func TestFindAllCandidatesFallbackPriority(t *testing.T) {
 }
 
 func TestBuildUNLModifyTxWireFormat(t *testing.T) {
-	validator := makeKey(0x42)
-	blob, err := buildUNLModifyTx(99999, validator, toDisable)
+	key, err := hex.DecodeString("027904E22C6238293A1B1AC00DB3F00E5F1F7C4BDC49645C3900EA3BCED3202379")
 	require.NoError(t, err)
-
-	hexBlob := hex.EncodeToString(blob)
-	assert.Contains(t, hexBlob, "73007013")
-	assert.NotContains(t, hexBlob, "2200000000")
-
-	decoded, err := binarycodec.Decode(hexBlob)
+	blob, err := buildUNLModifyTx(768, [33]byte(key), toDisable)
 	require.NoError(t, err)
-	assert.Equal(t, "", decoded["SigningPubKey"])
-	_, hasFlags := decoded["Flags"]
-	assert.False(t, hasFlags)
-	assert.EqualValues(t, 1, decoded["UNLModifyDisabling"])
-	assert.EqualValues(t, uint32(99999), decoded["LedgerSequence"])
+	assert.Equal(t, "120066240000000026000003006840000000000000007300701321027904E22C6238293A1B1AC00DB3F00E5F1F7C4BDC49645C3900EA3BCED3202379810000101101", fmt.Sprintf("%X", blob))
+	id := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), blob)
+	assert.Equal(t, "0CD16292747A33B42E729990FDE404CFAA6624853E1BFF684693B4FB8B4824F5", fmt.Sprintf("%X", id))
 }

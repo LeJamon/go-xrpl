@@ -3,8 +3,6 @@ package handlers
 import (
 	"encoding/base64"
 	"encoding/json"
-	"strconv"
-	"strings"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/crypto"
@@ -24,7 +22,7 @@ func (m *ManifestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	if !present {
 		return nil, rpcerrors.RpcErrorMissingField("public_key")
 	}
-	requested, rpcErr := manifestRequestedKey(raw)
+	requested, rpcErr := jsonCppStringValue(raw)
 	if rpcErr != nil {
 		if rpcErr.Code == rpcerrors.RpcINTERNAL {
 			ctx.LoadCost = uint32(resource.FeeExceptionRPC().Cost())
@@ -74,41 +72,6 @@ func (m *ManifestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	}
 	response["details"] = details
 	return response, nil
-}
-
-func manifestRequestedKey(raw json.RawMessage) (string, *rpcerrors.RpcError) {
-	value, err := decodeRawJSONValue(raw)
-	if err != nil {
-		return "", rpcerrors.RpcErrorInvalidParams("")
-	}
-	switch value := value.(type) {
-	case nil:
-		return "", nil
-	case string:
-		value, _, _ = strings.Cut(value, "\x00")
-		return value, nil
-	case bool:
-		return strconv.FormatBool(value), nil
-	case json.Number:
-		if strings.ContainsAny(value.String(), ".eE") {
-			number, err := value.Float64()
-			if err != nil {
-				return "", rpcerrors.RpcErrorInvalidParams("")
-			}
-			return strconv.FormatFloat(number, 'f', 6, 64), nil
-		}
-		if strings.HasPrefix(value.String(), "-") {
-			number, err := strconv.ParseInt(value.String(), 10, 32)
-			if err == nil {
-				return strconv.FormatInt(number, 10), nil
-			}
-		} else if number, err := strconv.ParseUint(value.String(), 10, 32); err == nil {
-			return strconv.FormatUint(number, 10), nil
-		}
-		return "", rpcerrors.RpcErrorInvalidParams("")
-	default:
-		return "", rpcerrors.RpcErrorInternal()
-	}
 }
 
 func (m *ManifestMethod) RequiredRole() types.Role {

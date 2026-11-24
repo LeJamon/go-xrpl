@@ -22,13 +22,16 @@ func TestCurrencySentinels(t *testing.T) {
 }
 
 func TestIsValidCurrencyCode(t *testing.T) {
+	const xrpCurrencyHex = "0000000000000000000000000000000000000000"
 	valid := []string{
 		"",    // native
+		"0",   // native base_uint shorthand
 		"XRP", // native
 		"USD", // ISO
 		"xrp", // lowercase ISO (not the native short-circuit)
 		"$%^", // ISO special chars
 		"0123456789012345678901234567890123456789", // 40 hex
+		xrpCurrencyHex, // 40-hex native alias
 		"5852500000000000000000000000000000000000", // 40 hex spelling a reserved value (still well-formed)
 	}
 	for _, c := range valid {
@@ -57,6 +60,7 @@ func TestParseCurrency(t *testing.T) {
 	// Reserved sentinels expressed as 40-hex are well-formed but rejected.
 	const noCurrencyHex = "0000000000000000000000000000000000000001"
 	const badCurrencyHex = "0000000000000000000000005852500000000000"
+	const xrpCurrencyHex = "0000000000000000000000000000000000000000"
 
 	rejected := []string{
 		noCurrencyHex,
@@ -73,7 +77,7 @@ func TestParseCurrency(t *testing.T) {
 
 	// For every accepted code ParseCurrency must agree byte-for-byte with the
 	// canonical encoder, since callers used to re-derive both halves.
-	accepted := []string{"", "XRP", "USD", "$%^", "0123456789012345678901234567890123456789"}
+	accepted := []string{"", "0", "XRP", xrpCurrencyHex, "USD", "$%^", "0123456789012345678901234567890123456789"}
 	for _, c := range accepted {
 		got, err := ParseCurrency(c)
 		if err != nil {
