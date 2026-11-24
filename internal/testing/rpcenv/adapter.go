@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -126,6 +127,14 @@ func (a *ledgerAdapter) GetValidatedLedgerIndex() uint32 {
 		return 0
 	}
 	return ledgerSeq(a.env.LastClosedLedger())
+}
+
+func (a *ledgerAdapter) GetValidatedLedgerAge() time.Duration {
+	if !a.haveValidated() {
+		return 14 * 24 * time.Hour
+	}
+	seconds := a.env.Now().Unix() - a.env.LastClosedLedger().CloseTime().Unix()
+	return time.Duration(max(seconds, 0)) * time.Second
 }
 
 func (a *ledgerAdapter) AcceptLedger(ctx context.Context) (uint32, error) {

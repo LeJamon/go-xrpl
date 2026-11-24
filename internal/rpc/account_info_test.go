@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
@@ -27,6 +28,7 @@ type mockLedgerService struct {
 	currentLedgerIndex   uint32
 	closedLedgerIndex    uint32
 	validatedLedgerIndex uint32
+	validatedLedgerAge   time.Duration
 	standalone           bool
 	serverInfo           types.LedgerServerInfo
 	amendmentBlocked     bool
@@ -48,9 +50,10 @@ func newMockLedgerService() *mockLedgerService {
 	}
 }
 
-func (m *mockLedgerService) GetCurrentLedgerIndex() uint32   { return m.currentLedgerIndex }
-func (m *mockLedgerService) GetClosedLedgerIndex() uint32    { return m.closedLedgerIndex }
-func (m *mockLedgerService) GetValidatedLedgerIndex() uint32 { return m.validatedLedgerIndex }
+func (m *mockLedgerService) GetCurrentLedgerIndex() uint32        { return m.currentLedgerIndex }
+func (m *mockLedgerService) GetClosedLedgerIndex() uint32         { return m.closedLedgerIndex }
+func (m *mockLedgerService) GetValidatedLedgerIndex() uint32      { return m.validatedLedgerIndex }
+func (m *mockLedgerService) GetValidatedLedgerAge() time.Duration { return m.validatedLedgerAge }
 func (m *mockLedgerService) AcceptLedger(context.Context) (uint32, error) {
 	return m.closedLedgerIndex + 1, nil
 }

@@ -120,7 +120,7 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		// resolve the sequence to a hash (rippled's getValidatedLedger gate).
 		ledger := ctx.Services.Ledger()
 		validatedSeq := ledger.GetValidatedLedgerIndex()
-		if types.ValidatedLedgerStale(ledger.GetServerInfo()) || validatedSeq == 0 {
+		if validatedSeq == 0 || ledger.GetValidatedLedgerAge() > types.MaxValidatedLedgerAge {
 			return nil, types.CurrentLedgerUnavailable(ctx.ApiVersion)
 		}
 

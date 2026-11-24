@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -246,7 +245,7 @@ func TestLedgerRequest_NotFoundWithoutSubsystem(t *testing.T) {
 }
 
 func TestLedgerRequest_ValidatedLedgerFreshness(t *testing.T) {
-	const staleAge = 121
+	const staleAge = 121 * time.Second
 	tests := []struct {
 		name       string
 		apiVersion int
@@ -259,7 +258,7 @@ func TestLedgerRequest_ValidatedLedgerFreshness(t *testing.T) {
 			name:       "stale API v1",
 			apiVersion: types.ApiVersion1,
 			setup: func(mock *ledgerRequestMock) {
-				mock.serverInfo.ValidatedLedgerCloseTime = time.Now().Unix() - protocol.RippleEpochUnix - staleAge
+				mock.validatedLedgerAge = staleAge
 				mock.bySeq = map[uint32]types.LedgerReader{1: &mockLedgerReader{seq: 1, closed: true, validated: true}}
 			},
 			wantCode:  rpcerrors.RpcNO_CURRENT,
@@ -270,7 +269,7 @@ func TestLedgerRequest_ValidatedLedgerFreshness(t *testing.T) {
 			name:       "stale API v2",
 			apiVersion: types.ApiVersion2,
 			setup: func(mock *ledgerRequestMock) {
-				mock.serverInfo.ValidatedLedgerCloseTime = time.Now().Unix() - protocol.RippleEpochUnix - staleAge
+				mock.validatedLedgerAge = staleAge
 				mock.bySeq = map[uint32]types.LedgerReader{1: &mockLedgerReader{seq: 1, closed: true, validated: true}}
 			},
 			wantCode:  rpcerrors.RpcNOT_SYNCED,
@@ -281,7 +280,7 @@ func TestLedgerRequest_ValidatedLedgerFreshness(t *testing.T) {
 			name:       "missing validated ledger",
 			apiVersion: types.ApiVersion2,
 			setup: func(mock *ledgerRequestMock) {
-				mock.serverInfo.HaveValidated = false
+				mock.validatedLedgerAge = 14 * 24 * time.Hour
 			},
 			wantCode:  rpcerrors.RpcNOT_SYNCED,
 			wantToken: "notSynced",
@@ -322,44 +321,42 @@ func TestLedgerRequest_ValidatedLedgerFreshness(t *testing.T) {
 }
 
 func TestLedgerRequest_ValidatedLedgerAgeBoundary(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		time.Sleep(time.Hour)
-		mock := newLedgerRequestMock()
-		mock.serverInfo.ValidatedLedgerCloseTime = time.Now().Unix() - protocol.RippleEpochUnix - 120
-		mock.bySeq = map[uint32]types.LedgerReader{1: &mockLedgerReader{seq: 1, closed: true, validated: true}}
-		ctx := &types.RpcContext{
-			Context:  context.Background(),
-			Role:     types.RoleAdmin,
-			Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
+	mock := newLedgerRequestMock()
+	mock.serverInfo.ValidatedLedgerCloseTime = time.Now().Unix() - protocol.RippleEpochUnix - 121
+	mock.validatedLedgerAge = 120 * time.Second
+	mock.bySeq = map[uint32]types.LedgerReader{1: &mockLedgerReader{seq: 1, closed: true, validated: true}}
+	ctx := &types.RpcContext{
+		Context:  context.Background(),
+		Role:     types.RoleAdmin,
+		Services: types.NewTestServiceGraph(&types.ServiceContainer{Ledger: mock}),
+	}
+	method := &handlers.LedgerRequestMethod{}
+	params := json.RawMessage(`{"ledger_index":1}`)
+	for _, version := range []int{types.ApiVersion1, types.ApiVersion2} {
+		ctx.ApiVersion = version
+		result, rpcErr := method.Handle(ctx, params)
+		require.Nil(t, rpcErr, "API v%d at 120 seconds", version)
+		require.NotNil(t, result)
+	}
+	mock.validatedLedgerAge += time.Second
+	for _, version := range []int{types.ApiVersion1, types.ApiVersion2} {
+		ctx.ApiVersion = version
+		result, rpcErr := method.Handle(ctx, params)
+		require.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		if version == types.ApiVersion1 {
+			assert.Equal(t, rpcerrors.RpcNO_CURRENT, rpcErr.Code)
+		} else {
+			assert.Equal(t, rpcerrors.RpcNOT_SYNCED, rpcErr.Code)
 		}
-		method := &handlers.LedgerRequestMethod{}
-		params := json.RawMessage(`{"ledger_index":1}`)
-		for _, version := range []int{types.ApiVersion1, types.ApiVersion2} {
-			ctx.ApiVersion = version
-			result, rpcErr := method.Handle(ctx, params)
-			require.Nil(t, rpcErr, "API v%d at 120 seconds", version)
-			require.NotNil(t, result)
-		}
-		time.Sleep(time.Second)
-		for _, version := range []int{types.ApiVersion1, types.ApiVersion2} {
-			ctx.ApiVersion = version
-			result, rpcErr := method.Handle(ctx, params)
-			require.Nil(t, result)
-			require.NotNil(t, rpcErr)
-			if version == types.ApiVersion1 {
-				assert.Equal(t, rpcerrors.RpcNO_CURRENT, rpcErr.Code)
-			} else {
-				assert.Equal(t, rpcerrors.RpcNOT_SYNCED, rpcErr.Code)
-			}
-		}
-	})
+	}
 }
 
 func TestLedgerRequest_HashDoesNotRequireFreshValidatedLedger(t *testing.T) {
 	var hash [32]byte
 	hash[0] = 0xAB
 	mock := newLedgerRequestMock()
-	mock.serverInfo.ValidatedLedgerCloseTime = time.Now().Unix() - protocol.RippleEpochUnix - 121
+	mock.validatedLedgerAge = 121 * time.Second
 	mock.byHash = map[[32]byte]types.LedgerReader{
 		hash: &mockLedgerReader{seq: 1, hash: hash, closed: true, validated: true},
 	}
@@ -378,7 +375,7 @@ func TestLedgerRequest_HashDoesNotRequireFreshValidatedLedger(t *testing.T) {
 
 func TestLedgerRequest_IndexTypePrecedesFreshness(t *testing.T) {
 	mock := newLedgerRequestMock()
-	mock.serverInfo.ValidatedLedgerCloseTime = time.Now().Unix() - protocol.RippleEpochUnix - 121
+	mock.validatedLedgerAge = 121 * time.Second
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
