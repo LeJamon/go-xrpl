@@ -3,9 +3,11 @@ package ledger
 import (
 	"bytes"
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -118,8 +120,16 @@ func TestReadFeeSettingsTypeValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("serialize valid AccountRoot: %v", err)
 	}
-	typeHeader := func(k keylet.Keylet) []byte {
-		return []byte{0x11, byte(k.Type >> 8), byte(k.Type)}
+	malformed := func(header byte, entryType uint16) []byte {
+		data := make([]byte, 12)
+		data[0], data[1], data[2] = header, byte(entryType>>8), byte(entryType)
+		return data
+	}
+	missingFlags, err := binarycodec.EncodeBytes(map[string]any{
+		"LedgerEntryType": "Amendments", "PreviousTxnID": strings.Repeat("1", 64),
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	tests := []struct {
 		name    string
@@ -128,11 +138,11 @@ func TestReadFeeSettingsTypeValidation(t *testing.T) {
 	}{
 		{name: "missing", data: nil},
 		{name: "wrong entry type valid SLE", data: validAccountRoot},
-		{name: "wrong entry type missing required fields", data: typeHeader(keylet.Amendments()), wantErr: true},
-		{name: "wrong entry type malformed SLE", data: append(typeHeader(keylet.Amendments()), 0), wantErr: true},
-		{name: "unknown entry type", data: []byte{0x11, 0xff, 0xff}, wantErr: true},
-		{name: "malformed type header", data: []byte{0x01, 0x00, 0x00}, wantErr: true},
-		{name: "malformed fee settings", data: append(typeHeader(feesKey), 0), wantErr: true},
+		{name: "wrong entry type missing required fields", data: missingFlags, wantErr: true},
+		{name: "wrong entry type malformed SLE", data: malformed(0x11, uint16(keylet.Amendments().Type)), wantErr: true},
+		{name: "unknown entry type", data: malformed(0x11, 0xffff), wantErr: true},
+		{name: "malformed type header", data: malformed(0x01, 0), wantErr: true},
+		{name: "malformed fee settings", data: malformed(0x11, uint16(feesKey.Type)), wantErr: true},
 	}
 
 	for _, test := range tests {

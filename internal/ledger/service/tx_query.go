@@ -364,6 +364,14 @@ func mayPublishProposedTransaction(flags uint32) bool {
 }
 
 func readFeesFromLedger(l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64) {
+	baseFee, reserveBase, reserveIncrement, err := readFeesFromLedgerContext(context.Background(), l)
+	if err == nil {
+		return baseFee, reserveBase, reserveIncrement
+	}
+	return effectiveFeesFromLedger(l)
+}
+
+func effectiveFeesFromLedger(l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64) {
 	fees := drops.DefaultFees()
 	if l != nil {
 		fees = l.Fees()
@@ -383,7 +391,7 @@ func readFeesFromLedgerContext(ctx context.Context, l *ledger.Ledger) (baseFee, 
 			}
 		}
 	}
-	baseFee, reserveBase, reserveIncrement = readFeesFromLedger(l)
+	baseFee, reserveBase, reserveIncrement = effectiveFeesFromLedger(l)
 	return baseFee, reserveBase, reserveIncrement, nil
 }
 
