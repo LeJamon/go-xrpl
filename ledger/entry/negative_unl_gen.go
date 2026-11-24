@@ -30,6 +30,7 @@ type NegativeUNL struct {
 	ValidatorToReEnable string // Blob (uppercase hex)
 	PreviousTxnID       string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq   uint32
+	LedgerIndex         string // Hash256 (uppercase hex)
 	Sponsor             string // AccountID (base58)
 }
 
@@ -45,6 +46,7 @@ const (
 	negativeunlBitValidatorToReEnable
 	negativeunlBitPreviousTxnID
 	negativeunlBitPreviousTxnLgrSeq
+	negativeunlBitLedgerIndex
 	negativeunlBitSponsor
 )
 
@@ -88,6 +90,13 @@ func (n *NegativeUNL) SetPreviousTxnLgrSeq(value uint32) {
 	n.PreviousTxnLgrSeq = value
 	n.dirty = true
 	n.present |= negativeunlBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (n *NegativeUNL) SetLedgerIndex(value string) {
+	n.LedgerIndex = value
+	n.dirty = true
+	n.present |= negativeunlBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -263,6 +272,37 @@ func (n *NegativeUNL) SetPreviousTxnLgrSeqValue(value uint32) {
 	n.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (n *NegativeUNL) HasLedgerIndex() bool {
+	return n != nil && n.present&negativeunlBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (n *NegativeUNL) ClearLedgerIndex() {
+	if n == nil {
+		return
+	}
+	n.LedgerIndex = ""
+	n.present &^= negativeunlBitLedgerIndex
+	n.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (n *NegativeUNL) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if n == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(n.LedgerIndex, "NegativeUNL.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (n *NegativeUNL) SetLedgerIndexValue(value [32]byte) {
+	n.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (n *NegativeUNL) HasSponsor() bool {
 	return n != nil && n.present&negativeunlBitSponsor != 0
@@ -378,6 +418,9 @@ func (n *NegativeUNL) decode(data []byte, legacy bool) error {
 			case 5:
 				n.PreviousTxnID = val
 				n.present |= negativeunlBitPreviousTxnID
+			case 6:
+				n.LedgerIndex = val
+				n.present |= negativeunlBitLedgerIndex
 			default:
 				return newErrUnknownField("NegativeUNL", typeCode, fieldCode)
 			}
@@ -450,6 +493,9 @@ func (n *NegativeUNL) emitAll(out map[string]any, skipDefault bool) {
 	if n.present&negativeunlBitValidatorToReEnable != 0 && !(skipDefault && n.ValidatorToReEnable == "") {
 		out["ValidatorToReEnable"] = n.ValidatorToReEnable
 	}
+	if n.present&negativeunlBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(n.LedgerIndex)) {
+		out["LedgerIndex"] = n.LedgerIndex
+	}
 	if n.present&negativeunlBitSponsor != 0 && !(skipDefault && n.Sponsor == "") {
 		out["Sponsor"] = n.Sponsor
 	}
@@ -478,6 +524,7 @@ func (n *NegativeUNL) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedDeep(out, "DisabledValidators", prv.DisabledValidators, n.DisabledValidators, prv.present&negativeunlBitDisabledValidators, n.present&negativeunlBitDisabledValidators)
 	emitIfChangedString(out, "ValidatorToDisable", prv.ValidatorToDisable, n.ValidatorToDisable, prv.present&negativeunlBitValidatorToDisable, n.present&negativeunlBitValidatorToDisable)
 	emitIfChangedString(out, "ValidatorToReEnable", prv.ValidatorToReEnable, n.ValidatorToReEnable, prv.present&negativeunlBitValidatorToReEnable, n.present&negativeunlBitValidatorToReEnable)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, n.LedgerIndex, prv.present&negativeunlBitLedgerIndex, n.present&negativeunlBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, n.Sponsor, prv.present&negativeunlBitSponsor, n.present&negativeunlBitSponsor)
 }
 
@@ -498,6 +545,9 @@ func (n *NegativeUNL) EmitChangeOrigFields(out map[string]any) {
 	}
 	if n.present&negativeunlBitValidatorToReEnable != 0 {
 		out["ValidatorToReEnable"] = n.ValidatorToReEnable
+	}
+	if n.present&negativeunlBitLedgerIndex != 0 {
+		out["LedgerIndex"] = n.LedgerIndex
 	}
 	if n.present&negativeunlBitSponsor != 0 {
 		out["Sponsor"] = n.Sponsor
@@ -561,6 +611,9 @@ func (n *NegativeUNL) ToMap() map[string]any {
 	if n.present&negativeunlBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = n.PreviousTxnLgrSeq
 	}
+	if n.present&negativeunlBitLedgerIndex != 0 {
+		out["LedgerIndex"] = n.LedgerIndex
+	}
 	if n.present&negativeunlBitSponsor != 0 {
 		out["Sponsor"] = n.Sponsor
 	}
@@ -611,6 +664,11 @@ func (n *NegativeUNL) appendBinary(dst []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if n.present&negativeunlBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), n.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if n.present&negativeunlBitValidatorToDisable != 0 {
 		if dst, err = appendBlob(append(dst, 0x70, 0x14), n.ValidatorToDisable); err != nil {
 			return nil, err
@@ -647,6 +705,9 @@ func (n *NegativeUNL) encodedSizeHint() int {
 	if n.present&negativeunlBitPreviousTxnID != 0 {
 		size += 33
 	}
+	if n.present&negativeunlBitLedgerIndex != 0 {
+		size += 33
+	}
 	if n.present&negativeunlBitValidatorToDisable != 0 {
 		size += 2 + blobEncodedLen(n.ValidatorToDisable)
 	}
@@ -664,6 +725,9 @@ func (n *NegativeUNL) encodedSizeHint() int {
 // entries are encoded through it.
 func (n *NegativeUNL) hasXAddress() bool {
 	if n.present&negativeunlBitPreviousTxnID != 0 && isXAddress(n.PreviousTxnID) {
+		return true
+	}
+	if n.present&negativeunlBitLedgerIndex != 0 && isXAddress(n.LedgerIndex) {
 		return true
 	}
 	if n.present&negativeunlBitValidatorToDisable != 0 && isXAddress(n.ValidatorToDisable) {

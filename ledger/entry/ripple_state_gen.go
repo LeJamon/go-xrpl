@@ -39,6 +39,7 @@ type RippleState struct {
 	LowSponsor        string // AccountID (base58)
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	LedgerIndex       string // Hash256 (uppercase hex)
 	Sponsor           string // AccountID (base58)
 }
 
@@ -62,6 +63,7 @@ const (
 	ripplestateBitLowSponsor
 	ripplestateBitPreviousTxnID
 	ripplestateBitPreviousTxnLgrSeq
+	ripplestateBitLedgerIndex
 	ripplestateBitSponsor
 )
 
@@ -161,6 +163,13 @@ func (r *RippleState) SetPreviousTxnLgrSeq(value uint32) {
 	r.PreviousTxnLgrSeq = value
 	r.dirty = true
 	r.present |= ripplestateBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (r *RippleState) SetLedgerIndex(value string) {
+	r.LedgerIndex = value
+	r.dirty = true
+	r.present |= ripplestateBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -530,6 +539,37 @@ func (r *RippleState) SetPreviousTxnLgrSeqValue(value uint32) {
 	r.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (r *RippleState) HasLedgerIndex() bool {
+	return r != nil && r.present&ripplestateBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (r *RippleState) ClearLedgerIndex() {
+	if r == nil {
+		return
+	}
+	r.LedgerIndex = ""
+	r.present &^= ripplestateBitLedgerIndex
+	r.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (r *RippleState) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if r == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(r.LedgerIndex, "RippleState.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (r *RippleState) SetLedgerIndexValue(value [32]byte) {
+	r.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (r *RippleState) HasSponsor() bool {
 	return r != nil && r.present&ripplestateBitSponsor != 0
@@ -701,6 +741,9 @@ func (r *RippleState) decode(data []byte, legacy bool) error {
 			case 5:
 				r.PreviousTxnID = val
 				r.present |= ripplestateBitPreviousTxnID
+			case 6:
+				r.LedgerIndex = val
+				r.present |= ripplestateBitLedgerIndex
 			default:
 				return newErrUnknownField("RippleState", typeCode, fieldCode)
 			}
@@ -798,6 +841,9 @@ func (r *RippleState) emitAll(out map[string]any, skipDefault bool) {
 	if r.present&ripplestateBitLowSponsor != 0 && !(skipDefault && r.LowSponsor == "") {
 		out["LowSponsor"] = r.LowSponsor
 	}
+	if r.present&ripplestateBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(r.LedgerIndex)) {
+		out["LedgerIndex"] = r.LedgerIndex
+	}
 	if r.present&ripplestateBitSponsor != 0 && !(skipDefault && r.Sponsor == "") {
 		out["Sponsor"] = r.Sponsor
 	}
@@ -834,6 +880,7 @@ func (r *RippleState) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "HighQualityOut", prv.HighQualityOut, r.HighQualityOut, prv.present&ripplestateBitHighQualityOut, r.present&ripplestateBitHighQualityOut)
 	emitIfChangedString(out, "HighSponsor", prv.HighSponsor, r.HighSponsor, prv.present&ripplestateBitHighSponsor, r.present&ripplestateBitHighSponsor)
 	emitIfChangedString(out, "LowSponsor", prv.LowSponsor, r.LowSponsor, prv.present&ripplestateBitLowSponsor, r.present&ripplestateBitLowSponsor)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, r.LedgerIndex, prv.present&ripplestateBitLedgerIndex, r.present&ripplestateBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, r.Sponsor, prv.present&ripplestateBitSponsor, r.present&ripplestateBitSponsor)
 }
 
@@ -878,6 +925,9 @@ func (r *RippleState) EmitChangeOrigFields(out map[string]any) {
 	}
 	if r.present&ripplestateBitLowSponsor != 0 {
 		out["LowSponsor"] = r.LowSponsor
+	}
+	if r.present&ripplestateBitLedgerIndex != 0 {
+		out["LedgerIndex"] = r.LedgerIndex
 	}
 	if r.present&ripplestateBitSponsor != 0 {
 		out["Sponsor"] = r.Sponsor
@@ -964,6 +1014,9 @@ func (r *RippleState) ToMap() map[string]any {
 	}
 	if r.present&ripplestateBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = r.PreviousTxnLgrSeq
+	}
+	if r.present&ripplestateBitLedgerIndex != 0 {
+		out["LedgerIndex"] = r.LedgerIndex
 	}
 	if r.present&ripplestateBitSponsor != 0 {
 		out["Sponsor"] = r.Sponsor
@@ -1053,6 +1106,11 @@ func (r *RippleState) appendBinary(dst []byte) ([]byte, error) {
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if r.present&ripplestateBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), r.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if r.present&ripplestateBitBalance != 0 {
 		if dst, err = appendAmount(append(dst, 0x62), r.Balance); err != nil {
 			return nil, err
@@ -1111,6 +1169,9 @@ func (r *RippleState) encodedSizeHint() int {
 	if r.present&ripplestateBitHighNode != 0 {
 		size += 9
 	}
+	if r.present&ripplestateBitLedgerIndex != 0 {
+		size += 33
+	}
 	if r.present&ripplestateBitBalance != 0 {
 		size += 1 + amountEncodedLen(r.Balance)
 	}
@@ -1143,6 +1204,9 @@ func (r *RippleState) hasXAddress() bool {
 		return true
 	}
 	if r.present&ripplestateBitPreviousTxnID != 0 && isXAddress(r.PreviousTxnID) {
+		return true
+	}
+	if r.present&ripplestateBitLedgerIndex != 0 && isXAddress(r.LedgerIndex) {
 		return true
 	}
 	if r.present&ripplestateBitBalance != 0 && isXAddressValue(r.Balance) {

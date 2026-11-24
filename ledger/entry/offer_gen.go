@@ -37,6 +37,7 @@ type Offer struct {
 	AdditionalBooks   []any
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	LedgerIndex       string // Hash256 (uppercase hex)
 	Sponsor           string // AccountID (base58)
 }
 
@@ -59,6 +60,7 @@ const (
 	offerBitAdditionalBooks
 	offerBitPreviousTxnID
 	offerBitPreviousTxnLgrSeq
+	offerBitLedgerIndex
 	offerBitSponsor
 )
 
@@ -151,6 +153,13 @@ func (o *Offer) SetPreviousTxnLgrSeq(value uint32) {
 	o.PreviousTxnLgrSeq = value
 	o.dirty = true
 	o.present |= offerBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (o *Offer) SetLedgerIndex(value string) {
+	o.LedgerIndex = value
+	o.dirty = true
+	o.present |= offerBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -453,6 +462,37 @@ func (o *Offer) SetPreviousTxnLgrSeqValue(value uint32) {
 	o.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (o *Offer) HasLedgerIndex() bool {
+	return o != nil && o.present&offerBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (o *Offer) ClearLedgerIndex() {
+	if o == nil {
+		return
+	}
+	o.LedgerIndex = ""
+	o.present &^= offerBitLedgerIndex
+	o.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (o *Offer) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if o == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(o.LedgerIndex, "Offer.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (o *Offer) SetLedgerIndexValue(value [32]byte) {
+	o.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (o *Offer) HasSponsor() bool {
 	return o != nil && o.present&offerBitSponsor != 0
@@ -641,6 +681,9 @@ func (o *Offer) decode(data []byte, legacy bool) error {
 			case 5:
 				o.PreviousTxnID = val
 				o.present |= offerBitPreviousTxnID
+			case 6:
+				o.LedgerIndex = val
+				o.present |= offerBitLedgerIndex
 			case 16:
 				o.BookDirectory = val
 				o.present |= offerBitBookDirectory
@@ -743,6 +786,9 @@ func (o *Offer) emitAll(out map[string]any, skipDefault bool) {
 	if o.present&offerBitAdditionalBooks != 0 && !(skipDefault && len(o.AdditionalBooks) == 0) {
 		out["AdditionalBooks"] = o.AdditionalBooks
 	}
+	if o.present&offerBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(o.LedgerIndex)) {
+		out["LedgerIndex"] = o.LedgerIndex
+	}
 	if o.present&offerBitSponsor != 0 && !(skipDefault && o.Sponsor == "") {
 		out["Sponsor"] = o.Sponsor
 	}
@@ -778,6 +824,7 @@ func (o *Offer) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "Flags", prv.Flags, o.Flags, prv.present&offerBitFlags, o.present&offerBitFlags)
 	emitIfChangedString(out, "DomainID", prv.DomainID, o.DomainID, prv.present&offerBitDomainID, o.present&offerBitDomainID)
 	emitIfChangedDeep(out, "AdditionalBooks", prv.AdditionalBooks, o.AdditionalBooks, prv.present&offerBitAdditionalBooks, o.present&offerBitAdditionalBooks)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, o.LedgerIndex, prv.present&offerBitLedgerIndex, o.present&offerBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, o.Sponsor, prv.present&offerBitSponsor, o.present&offerBitSponsor)
 }
 
@@ -819,6 +866,9 @@ func (o *Offer) EmitChangeOrigFields(out map[string]any) {
 	}
 	if o.present&offerBitAdditionalBooks != 0 {
 		out["AdditionalBooks"] = o.AdditionalBooks
+	}
+	if o.present&offerBitLedgerIndex != 0 {
+		out["LedgerIndex"] = o.LedgerIndex
 	}
 	if o.present&offerBitSponsor != 0 {
 		out["Sponsor"] = o.Sponsor
@@ -903,6 +953,9 @@ func (o *Offer) ToMap() map[string]any {
 	if o.present&offerBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = o.PreviousTxnLgrSeq
 	}
+	if o.present&offerBitLedgerIndex != 0 {
+		out["LedgerIndex"] = o.LedgerIndex
+	}
 	if o.present&offerBitSponsor != 0 {
 		out["Sponsor"] = o.Sponsor
 	}
@@ -979,6 +1032,11 @@ func (o *Offer) appendBinary(dst []byte) ([]byte, error) {
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if o.present&offerBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), o.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if o.present&offerBitBookDirectory != 0 {
 		if dst, err = appendHash(append(dst, 0x50, 0x10), o.BookDirectory, 32); err != nil {
 			return nil, err
@@ -1036,6 +1094,9 @@ func (o *Offer) encodedSizeHint() int {
 	if o.present&offerBitOwnerNode != 0 {
 		size += 9
 	}
+	if o.present&offerBitLedgerIndex != 0 {
+		size += 33
+	}
 	if o.present&offerBitBookDirectory != 0 {
 		size += 34
 	}
@@ -1068,6 +1129,9 @@ func (o *Offer) hasXAddress() bool {
 		return true
 	}
 	if o.present&offerBitPreviousTxnID != 0 && isXAddress(o.PreviousTxnID) {
+		return true
+	}
+	if o.present&offerBitLedgerIndex != 0 && isXAddress(o.LedgerIndex) {
 		return true
 	}
 	if o.present&offerBitBookDirectory != 0 && isXAddress(o.BookDirectory) {

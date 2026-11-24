@@ -34,6 +34,7 @@ type NFTokenOffer struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	LedgerIndex       string // Hash256 (uppercase hex)
 	Sponsor           string // AccountID (base58)
 }
 
@@ -53,6 +54,7 @@ const (
 	nftokenofferBitFlags
 	nftokenofferBitPreviousTxnID
 	nftokenofferBitPreviousTxnLgrSeq
+	nftokenofferBitLedgerIndex
 	nftokenofferBitSponsor
 )
 
@@ -124,6 +126,13 @@ func (n *NFTokenOffer) SetPreviousTxnLgrSeq(value uint32) {
 	n.PreviousTxnLgrSeq = value
 	n.dirty = true
 	n.present |= nftokenofferBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (n *NFTokenOffer) SetLedgerIndex(value string) {
+	n.LedgerIndex = value
+	n.dirty = true
+	n.present |= nftokenofferBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -354,6 +363,37 @@ func (n *NFTokenOffer) SetPreviousTxnLgrSeqValue(value uint32) {
 	n.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (n *NFTokenOffer) HasLedgerIndex() bool {
+	return n != nil && n.present&nftokenofferBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (n *NFTokenOffer) ClearLedgerIndex() {
+	if n == nil {
+		return
+	}
+	n.LedgerIndex = ""
+	n.present &^= nftokenofferBitLedgerIndex
+	n.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (n *NFTokenOffer) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if n == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(n.LedgerIndex, "NFTokenOffer.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (n *NFTokenOffer) SetLedgerIndexValue(value [32]byte) {
+	n.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (n *NFTokenOffer) HasSponsor() bool {
 	return n != nil && n.present&nftokenofferBitSponsor != 0
@@ -533,6 +573,9 @@ func (n *NFTokenOffer) decode(data []byte, legacy bool) error {
 			case 5:
 				n.PreviousTxnID = val
 				n.present |= nftokenofferBitPreviousTxnID
+			case 6:
+				n.LedgerIndex = val
+				n.present |= nftokenofferBitLedgerIndex
 			case 10:
 				n.NFTokenID = val
 				n.present |= nftokenofferBitNFTokenID
@@ -614,6 +657,9 @@ func (n *NFTokenOffer) emitAll(out map[string]any, skipDefault bool) {
 	if n.present&nftokenofferBitFlags != 0 && !(skipDefault && n.Flags == 0) {
 		out["Flags"] = n.Flags
 	}
+	if n.present&nftokenofferBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(n.LedgerIndex)) {
+		out["LedgerIndex"] = n.LedgerIndex
+	}
 	if n.present&nftokenofferBitSponsor != 0 && !(skipDefault && n.Sponsor == "") {
 		out["Sponsor"] = n.Sponsor
 	}
@@ -646,6 +692,7 @@ func (n *NFTokenOffer) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "Destination", prv.Destination, n.Destination, prv.present&nftokenofferBitDestination, n.present&nftokenofferBitDestination)
 	emitIfChangedUint32(out, "Expiration", prv.Expiration, n.Expiration, prv.present&nftokenofferBitExpiration, n.present&nftokenofferBitExpiration)
 	emitIfChangedUint32(out, "Flags", prv.Flags, n.Flags, prv.present&nftokenofferBitFlags, n.present&nftokenofferBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, n.LedgerIndex, prv.present&nftokenofferBitLedgerIndex, n.present&nftokenofferBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, n.Sponsor, prv.present&nftokenofferBitSponsor, n.present&nftokenofferBitSponsor)
 }
 
@@ -678,6 +725,9 @@ func (n *NFTokenOffer) EmitChangeOrigFields(out map[string]any) {
 	}
 	if n.present&nftokenofferBitFlags != 0 {
 		out["Flags"] = n.Flags
+	}
+	if n.present&nftokenofferBitLedgerIndex != 0 {
+		out["LedgerIndex"] = n.LedgerIndex
 	}
 	if n.present&nftokenofferBitSponsor != 0 {
 		out["Sponsor"] = n.Sponsor
@@ -753,6 +803,9 @@ func (n *NFTokenOffer) ToMap() map[string]any {
 	if n.present&nftokenofferBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = n.PreviousTxnLgrSeq
 	}
+	if n.present&nftokenofferBitLedgerIndex != 0 {
+		out["LedgerIndex"] = n.LedgerIndex
+	}
 	if n.present&nftokenofferBitSponsor != 0 {
 		out["Sponsor"] = n.Sponsor
 	}
@@ -826,6 +879,11 @@ func (n *NFTokenOffer) appendBinary(dst []byte) ([]byte, error) {
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if n.present&nftokenofferBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), n.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if n.present&nftokenofferBitNFTokenID != 0 {
 		if dst, err = appendHash(append(dst, 0x5A), n.NFTokenID, 32); err != nil {
 			return nil, err
@@ -870,6 +928,9 @@ func (n *NFTokenOffer) encodedSizeHint() int {
 	if n.present&nftokenofferBitNFTokenOfferNode != 0 {
 		size += 9
 	}
+	if n.present&nftokenofferBitLedgerIndex != 0 {
+		size += 33
+	}
 	if n.present&nftokenofferBitNFTokenID != 0 {
 		size += 33
 	}
@@ -899,6 +960,9 @@ func (n *NFTokenOffer) hasXAddress() bool {
 		return true
 	}
 	if n.present&nftokenofferBitPreviousTxnID != 0 && isXAddress(n.PreviousTxnID) {
+		return true
+	}
+	if n.present&nftokenofferBitLedgerIndex != 0 && isXAddress(n.LedgerIndex) {
 		return true
 	}
 	if n.present&nftokenofferBitNFTokenID != 0 && isXAddress(n.NFTokenID) {

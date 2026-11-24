@@ -40,6 +40,7 @@ type Escrow struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	LedgerIndex       string // Hash256 (uppercase hex)
 	Sponsor           string // AccountID (base58)
 }
 
@@ -65,6 +66,7 @@ const (
 	escrowBitFlags
 	escrowBitPreviousTxnID
 	escrowBitPreviousTxnLgrSeq
+	escrowBitLedgerIndex
 	escrowBitSponsor
 )
 
@@ -178,6 +180,13 @@ func (e *Escrow) SetPreviousTxnLgrSeq(value uint32) {
 	e.PreviousTxnLgrSeq = value
 	e.dirty = true
 	e.present |= escrowBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (e *Escrow) SetLedgerIndex(value string) {
+	e.LedgerIndex = value
+	e.dirty = true
+	e.present |= escrowBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -583,6 +592,37 @@ func (e *Escrow) SetPreviousTxnLgrSeqValue(value uint32) {
 	e.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (e *Escrow) HasLedgerIndex() bool {
+	return e != nil && e.present&escrowBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (e *Escrow) ClearLedgerIndex() {
+	if e == nil {
+		return
+	}
+	e.LedgerIndex = ""
+	e.present &^= escrowBitLedgerIndex
+	e.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (e *Escrow) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if e == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(e.LedgerIndex, "Escrow.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (e *Escrow) SetLedgerIndexValue(value [32]byte) {
+	e.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (e *Escrow) HasSponsor() bool {
 	return e != nil && e.present&escrowBitSponsor != 0
@@ -772,6 +812,9 @@ func (e *Escrow) decode(data []byte, legacy bool) error {
 			case 5:
 				e.PreviousTxnID = val
 				e.present |= escrowBitPreviousTxnID
+			case 6:
+				e.LedgerIndex = val
+				e.present |= escrowBitLedgerIndex
 			default:
 				return newErrUnknownField("Escrow", typeCode, fieldCode)
 			}
@@ -877,6 +920,9 @@ func (e *Escrow) emitAll(out map[string]any, skipDefault bool) {
 	if e.present&escrowBitFlags != 0 && !(skipDefault && e.Flags == 0) {
 		out["Flags"] = e.Flags
 	}
+	if e.present&escrowBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(e.LedgerIndex)) {
+		out["LedgerIndex"] = e.LedgerIndex
+	}
 	if e.present&escrowBitSponsor != 0 && !(skipDefault && e.Sponsor == "") {
 		out["Sponsor"] = e.Sponsor
 	}
@@ -915,6 +961,7 @@ func (e *Escrow) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "TransferRate", prv.TransferRate, e.TransferRate, prv.present&escrowBitTransferRate, e.present&escrowBitTransferRate)
 	emitIfChangedString(out, "IssuerNode", prv.IssuerNode, e.IssuerNode, prv.present&escrowBitIssuerNode, e.present&escrowBitIssuerNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, e.Flags, prv.present&escrowBitFlags, e.present&escrowBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, e.LedgerIndex, prv.present&escrowBitLedgerIndex, e.present&escrowBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, e.Sponsor, prv.present&escrowBitSponsor, e.present&escrowBitSponsor)
 }
 
@@ -965,6 +1012,9 @@ func (e *Escrow) EmitChangeOrigFields(out map[string]any) {
 	}
 	if e.present&escrowBitFlags != 0 {
 		out["Flags"] = e.Flags
+	}
+	if e.present&escrowBitLedgerIndex != 0 {
+		out["LedgerIndex"] = e.LedgerIndex
 	}
 	if e.present&escrowBitSponsor != 0 {
 		out["Sponsor"] = e.Sponsor
@@ -1057,6 +1107,9 @@ func (e *Escrow) ToMap() map[string]any {
 	}
 	if e.present&escrowBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = e.PreviousTxnLgrSeq
+	}
+	if e.present&escrowBitLedgerIndex != 0 {
+		out["LedgerIndex"] = e.LedgerIndex
 	}
 	if e.present&escrowBitSponsor != 0 {
 		out["Sponsor"] = e.Sponsor
@@ -1151,6 +1204,11 @@ func (e *Escrow) appendBinary(dst []byte) ([]byte, error) {
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if e.present&escrowBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), e.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if e.present&escrowBitAmount != 0 {
 		if dst, err = appendAmount(append(dst, 0x61), e.Amount); err != nil {
 			return nil, err
@@ -1213,6 +1271,9 @@ func (e *Escrow) encodedSizeHint() int {
 	if e.present&escrowBitIssuerNode != 0 {
 		size += 10
 	}
+	if e.present&escrowBitLedgerIndex != 0 {
+		size += 33
+	}
 	if e.present&escrowBitAmount != 0 {
 		size += 1 + amountEncodedLen(e.Amount)
 	}
@@ -1245,6 +1306,9 @@ func (e *Escrow) hasXAddress() bool {
 		return true
 	}
 	if e.present&escrowBitPreviousTxnID != 0 && isXAddress(e.PreviousTxnID) {
+		return true
+	}
+	if e.present&escrowBitLedgerIndex != 0 && isXAddress(e.LedgerIndex) {
 		return true
 	}
 	if e.present&escrowBitAmount != 0 && isXAddressValue(e.Amount) {

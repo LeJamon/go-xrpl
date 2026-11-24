@@ -52,6 +52,7 @@ type AccountRoot struct {
 	WalletSize             uint32
 	PreviousTxnID          string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq      uint32
+	LedgerIndex            string // Hash256 (uppercase hex)
 	Sponsor                string // AccountID (base58)
 }
 
@@ -88,6 +89,7 @@ const (
 	accountrootBitWalletSize
 	accountrootBitPreviousTxnID
 	accountrootBitPreviousTxnLgrSeq
+	accountrootBitLedgerIndex
 	accountrootBitSponsor
 )
 
@@ -299,6 +301,13 @@ func (a *AccountRoot) SetPreviousTxnLgrSeq(value uint32) {
 	a.PreviousTxnLgrSeq = value
 	a.dirty = true
 	a.present |= accountrootBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (a *AccountRoot) SetLedgerIndex(value string) {
+	a.LedgerIndex = value
+	a.dirty = true
+	a.present |= accountrootBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -1033,6 +1042,37 @@ func (a *AccountRoot) SetPreviousTxnLgrSeqValue(value uint32) {
 	a.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (a *AccountRoot) HasLedgerIndex() bool {
+	return a != nil && a.present&accountrootBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (a *AccountRoot) ClearLedgerIndex() {
+	if a == nil {
+		return
+	}
+	a.LedgerIndex = ""
+	a.present &^= accountrootBitLedgerIndex
+	a.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (a *AccountRoot) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if a == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(a.LedgerIndex, "AccountRoot.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (a *AccountRoot) SetLedgerIndexValue(value [32]byte) {
+	a.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (a *AccountRoot) HasSponsor() bool {
 	return a != nil && a.present&accountrootBitSponsor != 0
@@ -1238,6 +1278,9 @@ func (a *AccountRoot) decode(data []byte, legacy bool) error {
 			case 5:
 				a.PreviousTxnID = val
 				a.present |= accountrootBitPreviousTxnID
+			case 6:
+				a.LedgerIndex = val
+				a.present |= accountrootBitLedgerIndex
 			case 7:
 				a.WalletLocator = val
 				a.present |= accountrootBitWalletLocator
@@ -1411,6 +1454,9 @@ func (a *AccountRoot) emitAll(out map[string]any, skipDefault bool) {
 	if a.present&accountrootBitWalletSize != 0 && !(skipDefault && a.WalletSize == 0) {
 		out["WalletSize"] = a.WalletSize
 	}
+	if a.present&accountrootBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(a.LedgerIndex)) {
+		out["LedgerIndex"] = a.LedgerIndex
+	}
 	if a.present&accountrootBitSponsor != 0 && !(skipDefault && a.Sponsor == "") {
 		out["Sponsor"] = a.Sponsor
 	}
@@ -1460,6 +1506,7 @@ func (a *AccountRoot) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "VaultID", prv.VaultID, a.VaultID, prv.present&accountrootBitVaultID, a.present&accountrootBitVaultID)
 	emitIfChangedString(out, "LoanBrokerID", prv.LoanBrokerID, a.LoanBrokerID, prv.present&accountrootBitLoanBrokerID, a.present&accountrootBitLoanBrokerID)
 	emitIfChangedUint32(out, "WalletSize", prv.WalletSize, a.WalletSize, prv.present&accountrootBitWalletSize, a.present&accountrootBitWalletSize)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, a.LedgerIndex, prv.present&accountrootBitLedgerIndex, a.present&accountrootBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, a.Sponsor, prv.present&accountrootBitSponsor, a.present&accountrootBitSponsor)
 }
 
@@ -1543,6 +1590,9 @@ func (a *AccountRoot) EmitChangeOrigFields(out map[string]any) {
 	}
 	if a.present&accountrootBitWalletSize != 0 {
 		out["WalletSize"] = a.WalletSize
+	}
+	if a.present&accountrootBitLedgerIndex != 0 {
+		out["LedgerIndex"] = a.LedgerIndex
 	}
 	if a.present&accountrootBitSponsor != 0 {
 		out["Sponsor"] = a.Sponsor
@@ -1669,6 +1719,9 @@ func (a *AccountRoot) ToMap() map[string]any {
 	if a.present&accountrootBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = a.PreviousTxnLgrSeq
 	}
+	if a.present&accountrootBitLedgerIndex != 0 {
+		out["LedgerIndex"] = a.LedgerIndex
+	}
 	if a.present&accountrootBitSponsor != 0 {
 		out["Sponsor"] = a.Sponsor
 	}
@@ -1769,6 +1822,11 @@ func (a *AccountRoot) appendBinary(dst []byte) ([]byte, error) {
 		}
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if a.present&accountrootBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), a.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
 	}
 	if a.present&accountrootBitWalletLocator != 0 {
 		if dst, err = appendHash(append(dst, 0x57), a.WalletLocator, 32); err != nil {
@@ -1881,6 +1939,9 @@ func (a *AccountRoot) encodedSizeHint() int {
 	if a.present&accountrootBitEmailHash != 0 {
 		size += 17
 	}
+	if a.present&accountrootBitLedgerIndex != 0 {
+		size += 33
+	}
 	if a.present&accountrootBitWalletLocator != 0 {
 		size += 33
 	}
@@ -1931,6 +1992,9 @@ func (a *AccountRoot) hasXAddress() bool {
 		return true
 	}
 	if a.present&accountrootBitPreviousTxnID != 0 && isXAddress(a.PreviousTxnID) {
+		return true
+	}
+	if a.present&accountrootBitLedgerIndex != 0 && isXAddress(a.LedgerIndex) {
 		return true
 	}
 	if a.present&accountrootBitWalletLocator != 0 && isXAddress(a.WalletLocator) {

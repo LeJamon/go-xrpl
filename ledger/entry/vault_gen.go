@@ -44,6 +44,7 @@ type Vault struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	LedgerIndex       string // Hash256 (uppercase hex)
 	Sponsor           string // AccountID (base58)
 }
 
@@ -73,6 +74,7 @@ const (
 	vaultBitFlags
 	vaultBitPreviousTxnID
 	vaultBitPreviousTxnLgrSeq
+	vaultBitLedgerIndex
 	vaultBitSponsor
 )
 
@@ -242,6 +244,13 @@ func (v *Vault) SetPreviousTxnLgrSeq(value uint32) {
 	v.PreviousTxnLgrSeq = value
 	v.dirty = true
 	v.present |= vaultBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (v *Vault) SetLedgerIndex(value string) {
+	v.LedgerIndex = value
+	v.dirty = true
+	v.present |= vaultBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -744,6 +753,37 @@ func (v *Vault) SetPreviousTxnLgrSeqValue(value uint32) {
 	v.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (v *Vault) HasLedgerIndex() bool {
+	return v != nil && v.present&vaultBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (v *Vault) ClearLedgerIndex() {
+	if v == nil {
+		return
+	}
+	v.LedgerIndex = ""
+	v.present &^= vaultBitLedgerIndex
+	v.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (v *Vault) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if v == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(v.LedgerIndex, "Vault.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (v *Vault) SetLedgerIndexValue(value [32]byte) {
+	v.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (v *Vault) HasSponsor() bool {
 	return v != nil && v.present&vaultBitSponsor != 0
@@ -949,6 +989,9 @@ func (v *Vault) decode(data []byte, legacy bool) error {
 			case 5:
 				v.PreviousTxnID = val
 				v.present |= vaultBitPreviousTxnID
+			case 6:
+				v.LedgerIndex = val
+				v.present |= vaultBitLedgerIndex
 			default:
 				return newErrUnknownField("Vault", typeCode, fieldCode)
 			}
@@ -1121,6 +1164,9 @@ func (v *Vault) emitAll(out map[string]any, skipDefault bool) {
 	if v.present&vaultBitFlags != 0 && !(skipDefault && v.Flags == 0) {
 		out["Flags"] = v.Flags
 	}
+	if v.present&vaultBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(v.LedgerIndex)) {
+		out["LedgerIndex"] = v.LedgerIndex
+	}
 	if v.present&vaultBitSponsor != 0 && !(skipDefault && v.Sponsor == "") {
 		out["Sponsor"] = v.Sponsor
 	}
@@ -1163,6 +1209,7 @@ func (v *Vault) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "SubscriptionDate", prv.SubscriptionDate, v.SubscriptionDate, prv.present&vaultBitSubscriptionDate, v.present&vaultBitSubscriptionDate)
 	emitIfChangedUint32(out, "RedemptionDate", prv.RedemptionDate, v.RedemptionDate, prv.present&vaultBitRedemptionDate, v.present&vaultBitRedemptionDate)
 	emitIfChangedUint32(out, "Flags", prv.Flags, v.Flags, prv.present&vaultBitFlags, v.present&vaultBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, v.LedgerIndex, prv.present&vaultBitLedgerIndex, v.present&vaultBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, v.Sponsor, prv.present&vaultBitSponsor, v.present&vaultBitSponsor)
 }
 
@@ -1225,6 +1272,9 @@ func (v *Vault) EmitChangeOrigFields(out map[string]any) {
 	}
 	if v.present&vaultBitFlags != 0 {
 		out["Flags"] = v.Flags
+	}
+	if v.present&vaultBitLedgerIndex != 0 {
+		out["LedgerIndex"] = v.LedgerIndex
 	}
 	if v.present&vaultBitSponsor != 0 {
 		out["Sponsor"] = v.Sponsor
@@ -1330,6 +1380,9 @@ func (v *Vault) ToMap() map[string]any {
 	if v.present&vaultBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = v.PreviousTxnLgrSeq
 	}
+	if v.present&vaultBitLedgerIndex != 0 {
+		out["LedgerIndex"] = v.LedgerIndex
+	}
 	if v.present&vaultBitSponsor != 0 {
 		out["Sponsor"] = v.Sponsor
 	}
@@ -1403,6 +1456,11 @@ func (v *Vault) appendBinary(dst []byte) ([]byte, error) {
 		}
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
+	}
+	if v.present&vaultBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), v.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
 	}
 	if v.present&vaultBitData != 0 {
 		if dst, err = appendBlob(append(dst, 0x70, 0x1B), v.Data); err != nil {
@@ -1496,6 +1554,9 @@ func (v *Vault) encodedSizeHint() int {
 	if v.present&vaultBitOwnerNode != 0 {
 		size += 9
 	}
+	if v.present&vaultBitLedgerIndex != 0 {
+		size += 33
+	}
 	if v.present&vaultBitData != 0 {
 		size += 2 + blobEncodedLen(v.Data)
 	}
@@ -1549,6 +1610,9 @@ func (v *Vault) hasXAddress() bool {
 		return true
 	}
 	if v.present&vaultBitPreviousTxnID != 0 && isXAddress(v.PreviousTxnID) {
+		return true
+	}
+	if v.present&vaultBitLedgerIndex != 0 && isXAddress(v.LedgerIndex) {
 		return true
 	}
 	if v.present&vaultBitData != 0 && isXAddress(v.Data) {

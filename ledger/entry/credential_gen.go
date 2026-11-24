@@ -34,6 +34,7 @@ type Credential struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	LedgerIndex       string // Hash256 (uppercase hex)
 	Sponsor           string // AccountID (base58)
 }
 
@@ -53,6 +54,7 @@ const (
 	credentialBitFlags
 	credentialBitPreviousTxnID
 	credentialBitPreviousTxnLgrSeq
+	credentialBitLedgerIndex
 	credentialBitSponsor
 )
 
@@ -124,6 +126,13 @@ func (c *Credential) SetPreviousTxnLgrSeq(value uint32) {
 	c.PreviousTxnLgrSeq = value
 	c.dirty = true
 	c.present |= credentialBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (c *Credential) SetLedgerIndex(value string) {
+	c.LedgerIndex = value
+	c.dirty = true
+	c.present |= credentialBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -356,6 +365,37 @@ func (c *Credential) SetPreviousTxnLgrSeqValue(value uint32) {
 	c.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (c *Credential) HasLedgerIndex() bool {
+	return c != nil && c.present&credentialBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (c *Credential) ClearLedgerIndex() {
+	if c == nil {
+		return
+	}
+	c.LedgerIndex = ""
+	c.present &^= credentialBitLedgerIndex
+	c.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (c *Credential) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if c == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(c.LedgerIndex, "Credential.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (c *Credential) SetLedgerIndexValue(value [32]byte) {
+	c.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (c *Credential) HasSponsor() bool {
 	return c != nil && c.present&credentialBitSponsor != 0
@@ -523,6 +563,9 @@ func (c *Credential) decode(data []byte, legacy bool) error {
 			case 5:
 				c.PreviousTxnID = val
 				c.present |= credentialBitPreviousTxnID
+			case 6:
+				c.LedgerIndex = val
+				c.present |= credentialBitLedgerIndex
 			default:
 				return newErrUnknownField("Credential", typeCode, fieldCode)
 			}
@@ -601,6 +644,9 @@ func (c *Credential) emitAll(out map[string]any, skipDefault bool) {
 	if c.present&credentialBitFlags != 0 && !(skipDefault && c.Flags == 0) {
 		out["Flags"] = c.Flags
 	}
+	if c.present&credentialBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(c.LedgerIndex)) {
+		out["LedgerIndex"] = c.LedgerIndex
+	}
 	if c.present&credentialBitSponsor != 0 && !(skipDefault && c.Sponsor == "") {
 		out["Sponsor"] = c.Sponsor
 	}
@@ -633,6 +679,7 @@ func (c *Credential) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "IssuerNode", prv.IssuerNode, c.IssuerNode, prv.present&credentialBitIssuerNode, c.present&credentialBitIssuerNode)
 	emitIfChangedString(out, "SubjectNode", prv.SubjectNode, c.SubjectNode, prv.present&credentialBitSubjectNode, c.present&credentialBitSubjectNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, c.Flags, prv.present&credentialBitFlags, c.present&credentialBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, c.LedgerIndex, prv.present&credentialBitLedgerIndex, c.present&credentialBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, c.Sponsor, prv.present&credentialBitSponsor, c.present&credentialBitSponsor)
 }
 
@@ -665,6 +712,9 @@ func (c *Credential) EmitChangeOrigFields(out map[string]any) {
 	}
 	if c.present&credentialBitFlags != 0 {
 		out["Flags"] = c.Flags
+	}
+	if c.present&credentialBitLedgerIndex != 0 {
+		out["LedgerIndex"] = c.LedgerIndex
 	}
 	if c.present&credentialBitSponsor != 0 {
 		out["Sponsor"] = c.Sponsor
@@ -740,6 +790,9 @@ func (c *Credential) ToMap() map[string]any {
 	if c.present&credentialBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = c.PreviousTxnLgrSeq
 	}
+	if c.present&credentialBitLedgerIndex != 0 {
+		out["LedgerIndex"] = c.LedgerIndex
+	}
 	if c.present&credentialBitSponsor != 0 {
 		out["Sponsor"] = c.Sponsor
 	}
@@ -813,6 +866,11 @@ func (c *Credential) appendBinary(dst []byte) ([]byte, error) {
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if c.present&credentialBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), c.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if c.present&credentialBitURI != 0 {
 		if dst, err = appendBlob(append(dst, 0x75), c.URI); err != nil {
 			return nil, err
@@ -857,6 +915,9 @@ func (c *Credential) encodedSizeHint() int {
 	if c.present&credentialBitSubjectNode != 0 {
 		size += 10
 	}
+	if c.present&credentialBitLedgerIndex != 0 {
+		size += 33
+	}
 	if c.present&credentialBitURI != 0 {
 		size += 1 + blobEncodedLen(c.URI)
 	}
@@ -886,6 +947,9 @@ func (c *Credential) hasXAddress() bool {
 		return true
 	}
 	if c.present&credentialBitPreviousTxnID != 0 && isXAddress(c.PreviousTxnID) {
+		return true
+	}
+	if c.present&credentialBitLedgerIndex != 0 && isXAddress(c.LedgerIndex) {
 		return true
 	}
 	if c.present&credentialBitURI != 0 && isXAddress(c.URI) {

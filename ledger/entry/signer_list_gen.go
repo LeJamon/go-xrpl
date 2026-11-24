@@ -32,6 +32,7 @@ type SignerList struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	LedgerIndex       string // Hash256 (uppercase hex)
 	Sponsor           string // AccountID (base58)
 }
 
@@ -49,6 +50,7 @@ const (
 	signerlistBitFlags
 	signerlistBitPreviousTxnID
 	signerlistBitPreviousTxnLgrSeq
+	signerlistBitLedgerIndex
 	signerlistBitSponsor
 )
 
@@ -106,6 +108,13 @@ func (s *SignerList) SetPreviousTxnLgrSeq(value uint32) {
 	s.PreviousTxnLgrSeq = value
 	s.dirty = true
 	s.present |= signerlistBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (s *SignerList) SetLedgerIndex(value string) {
+	s.LedgerIndex = value
+	s.dirty = true
+	s.present |= signerlistBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -282,6 +291,37 @@ func (s *SignerList) SetPreviousTxnLgrSeqValue(value uint32) {
 	s.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (s *SignerList) HasLedgerIndex() bool {
+	return s != nil && s.present&signerlistBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (s *SignerList) ClearLedgerIndex() {
+	if s == nil {
+		return
+	}
+	s.LedgerIndex = ""
+	s.present &^= signerlistBitLedgerIndex
+	s.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (s *SignerList) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if s == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(s.LedgerIndex, "SignerList.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (s *SignerList) SetLedgerIndexValue(value [32]byte) {
+	s.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (s *SignerList) HasSponsor() bool {
 	return s != nil && s.present&signerlistBitSponsor != 0
@@ -451,6 +491,9 @@ func (s *SignerList) decode(data []byte, legacy bool) error {
 			case 5:
 				s.PreviousTxnID = val
 				s.present |= signerlistBitPreviousTxnID
+			case 6:
+				s.LedgerIndex = val
+				s.present |= signerlistBitLedgerIndex
 			default:
 				return newErrUnknownField("SignerList", typeCode, fieldCode)
 			}
@@ -519,6 +562,9 @@ func (s *SignerList) emitAll(out map[string]any, skipDefault bool) {
 	if s.present&signerlistBitFlags != 0 && !(skipDefault && s.Flags == 0) {
 		out["Flags"] = s.Flags
 	}
+	if s.present&signerlistBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(s.LedgerIndex)) {
+		out["LedgerIndex"] = s.LedgerIndex
+	}
 	if s.present&signerlistBitSponsor != 0 && !(skipDefault && s.Sponsor == "") {
 		out["Sponsor"] = s.Sponsor
 	}
@@ -549,6 +595,7 @@ func (s *SignerList) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedDeep(out, "SignerEntries", prv.SignerEntries, s.SignerEntries, prv.present&signerlistBitSignerEntries, s.present&signerlistBitSignerEntries)
 	emitIfChangedUint32(out, "SignerListID", prv.SignerListID, s.SignerListID, prv.present&signerlistBitSignerListID, s.present&signerlistBitSignerListID)
 	emitIfChangedUint32(out, "Flags", prv.Flags, s.Flags, prv.present&signerlistBitFlags, s.present&signerlistBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, s.LedgerIndex, prv.present&signerlistBitLedgerIndex, s.present&signerlistBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, s.Sponsor, prv.present&signerlistBitSponsor, s.present&signerlistBitSponsor)
 }
 
@@ -575,6 +622,9 @@ func (s *SignerList) EmitChangeOrigFields(out map[string]any) {
 	}
 	if s.present&signerlistBitFlags != 0 {
 		out["Flags"] = s.Flags
+	}
+	if s.present&signerlistBitLedgerIndex != 0 {
+		out["LedgerIndex"] = s.LedgerIndex
 	}
 	if s.present&signerlistBitSponsor != 0 {
 		out["Sponsor"] = s.Sponsor
@@ -643,6 +693,9 @@ func (s *SignerList) ToMap() map[string]any {
 	}
 	if s.present&signerlistBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = s.PreviousTxnLgrSeq
+	}
+	if s.present&signerlistBitLedgerIndex != 0 {
+		out["LedgerIndex"] = s.LedgerIndex
 	}
 	if s.present&signerlistBitSponsor != 0 {
 		out["Sponsor"] = s.Sponsor
@@ -715,6 +768,11 @@ func (s *SignerList) appendBinary(dst []byte) ([]byte, error) {
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if s.present&signerlistBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), s.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if s.present&signerlistBitOwner != 0 {
 		if dst, err = appendAccountID(append(dst, 0x82), s.Owner); err != nil {
 			return nil, err
@@ -749,6 +807,9 @@ func (s *SignerList) encodedSizeHint() int {
 	if s.present&signerlistBitOwnerNode != 0 {
 		size += 9
 	}
+	if s.present&signerlistBitLedgerIndex != 0 {
+		size += 33
+	}
 	if s.present&signerlistBitOwner != 0 {
 		size += 1 + accountIDEncodedLen(s.Owner)
 	}
@@ -766,6 +827,9 @@ func (s *SignerList) hasXAddress() bool {
 		return true
 	}
 	if s.present&signerlistBitPreviousTxnID != 0 && isXAddress(s.PreviousTxnID) {
+		return true
+	}
+	if s.present&signerlistBitLedgerIndex != 0 && isXAddress(s.LedgerIndex) {
 		return true
 	}
 	if s.present&signerlistBitOwner != 0 && isXAddress(s.Owner) {

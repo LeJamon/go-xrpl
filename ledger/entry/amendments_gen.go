@@ -29,6 +29,7 @@ type Amendments struct {
 	Majorities        []any
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	LedgerIndex       string // Hash256 (uppercase hex)
 	Sponsor           string // AccountID (base58)
 }
 
@@ -43,6 +44,7 @@ const (
 	amendmentsBitMajorities
 	amendmentsBitPreviousTxnID
 	amendmentsBitPreviousTxnLgrSeq
+	amendmentsBitLedgerIndex
 	amendmentsBitSponsor
 )
 
@@ -79,6 +81,13 @@ func (a *Amendments) SetPreviousTxnLgrSeq(value uint32) {
 	a.PreviousTxnLgrSeq = value
 	a.dirty = true
 	a.present |= amendmentsBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (a *Amendments) SetLedgerIndex(value string) {
+	a.LedgerIndex = value
+	a.dirty = true
+	a.present |= amendmentsBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -226,6 +235,37 @@ func (a *Amendments) SetPreviousTxnLgrSeqValue(value uint32) {
 	a.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (a *Amendments) HasLedgerIndex() bool {
+	return a != nil && a.present&amendmentsBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (a *Amendments) ClearLedgerIndex() {
+	if a == nil {
+		return
+	}
+	a.LedgerIndex = ""
+	a.present &^= amendmentsBitLedgerIndex
+	a.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (a *Amendments) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if a == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(a.LedgerIndex, "Amendments.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (a *Amendments) SetLedgerIndexValue(value [32]byte) {
+	a.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (a *Amendments) HasSponsor() bool {
 	return a != nil && a.present&amendmentsBitSponsor != 0
@@ -341,6 +381,9 @@ func (a *Amendments) decode(data []byte, legacy bool) error {
 			case 5:
 				a.PreviousTxnID = val
 				a.present |= amendmentsBitPreviousTxnID
+			case 6:
+				a.LedgerIndex = val
+				a.present |= amendmentsBitLedgerIndex
 			default:
 				return newErrUnknownField("Amendments", typeCode, fieldCode)
 			}
@@ -407,6 +450,9 @@ func (a *Amendments) emitAll(out map[string]any, skipDefault bool) {
 	if a.present&amendmentsBitMajorities != 0 && !(skipDefault && len(a.Majorities) == 0) {
 		out["Majorities"] = a.Majorities
 	}
+	if a.present&amendmentsBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(a.LedgerIndex)) {
+		out["LedgerIndex"] = a.LedgerIndex
+	}
 	if a.present&amendmentsBitSponsor != 0 && !(skipDefault && a.Sponsor == "") {
 		out["Sponsor"] = a.Sponsor
 	}
@@ -434,6 +480,7 @@ func (a *Amendments) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "Flags", prv.Flags, a.Flags, prv.present&amendmentsBitFlags, a.present&amendmentsBitFlags)
 	emitIfChangedStringSlice(out, "Amendments", prv.Amendments, a.Amendments, prv.present&amendmentsBitAmendments, a.present&amendmentsBitAmendments)
 	emitIfChangedDeep(out, "Majorities", prv.Majorities, a.Majorities, prv.present&amendmentsBitMajorities, a.present&amendmentsBitMajorities)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, a.LedgerIndex, prv.present&amendmentsBitLedgerIndex, a.present&amendmentsBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, a.Sponsor, prv.present&amendmentsBitSponsor, a.present&amendmentsBitSponsor)
 }
 
@@ -451,6 +498,9 @@ func (a *Amendments) EmitChangeOrigFields(out map[string]any) {
 	}
 	if a.present&amendmentsBitMajorities != 0 {
 		out["Majorities"] = a.Majorities
+	}
+	if a.present&amendmentsBitLedgerIndex != 0 {
+		out["LedgerIndex"] = a.LedgerIndex
 	}
 	if a.present&amendmentsBitSponsor != 0 {
 		out["Sponsor"] = a.Sponsor
@@ -511,6 +561,9 @@ func (a *Amendments) ToMap() map[string]any {
 	if a.present&amendmentsBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = a.PreviousTxnLgrSeq
 	}
+	if a.present&amendmentsBitLedgerIndex != 0 {
+		out["LedgerIndex"] = a.LedgerIndex
+	}
 	if a.present&amendmentsBitSponsor != 0 {
 		out["Sponsor"] = a.Sponsor
 	}
@@ -561,6 +614,11 @@ func (a *Amendments) appendBinary(dst []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if a.present&amendmentsBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), a.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if a.present&amendmentsBitSponsor != 0 {
 		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), a.Sponsor); err != nil {
 			return nil, err
@@ -592,6 +650,9 @@ func (a *Amendments) encodedSizeHint() int {
 	if a.present&amendmentsBitPreviousTxnID != 0 {
 		size += 33
 	}
+	if a.present&amendmentsBitLedgerIndex != 0 {
+		size += 33
+	}
 	if a.present&amendmentsBitSponsor != 0 {
 		size += 2 + accountIDEncodedLen(a.Sponsor)
 	}
@@ -606,6 +667,9 @@ func (a *Amendments) encodedSizeHint() int {
 // entries are encoded through it.
 func (a *Amendments) hasXAddress() bool {
 	if a.present&amendmentsBitPreviousTxnID != 0 && isXAddress(a.PreviousTxnID) {
+		return true
+	}
+	if a.present&amendmentsBitLedgerIndex != 0 && isXAddress(a.LedgerIndex) {
 		return true
 	}
 	if a.present&amendmentsBitSponsor != 0 && isXAddress(a.Sponsor) {

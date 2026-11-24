@@ -35,6 +35,7 @@ type Oracle struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	LedgerIndex       string // Hash256 (uppercase hex)
 	Sponsor           string // AccountID (base58)
 }
 
@@ -55,6 +56,7 @@ const (
 	oracleBitFlags
 	oracleBitPreviousTxnID
 	oracleBitPreviousTxnLgrSeq
+	oracleBitLedgerIndex
 	oracleBitSponsor
 )
 
@@ -133,6 +135,13 @@ func (o *Oracle) SetPreviousTxnLgrSeq(value uint32) {
 	o.PreviousTxnLgrSeq = value
 	o.dirty = true
 	o.present |= oracleBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (o *Oracle) SetLedgerIndex(value string) {
+	o.LedgerIndex = value
+	o.dirty = true
+	o.present |= oracleBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -373,6 +382,37 @@ func (o *Oracle) SetPreviousTxnLgrSeqValue(value uint32) {
 	o.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (o *Oracle) HasLedgerIndex() bool {
+	return o != nil && o.present&oracleBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (o *Oracle) ClearLedgerIndex() {
+	if o == nil {
+		return
+	}
+	o.LedgerIndex = ""
+	o.present &^= oracleBitLedgerIndex
+	o.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (o *Oracle) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if o == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(o.LedgerIndex, "Oracle.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (o *Oracle) SetLedgerIndexValue(value [32]byte) {
+	o.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (o *Oracle) HasSponsor() bool {
 	return o != nil && o.present&oracleBitSponsor != 0
@@ -548,6 +588,9 @@ func (o *Oracle) decode(data []byte, legacy bool) error {
 			case 5:
 				o.PreviousTxnID = val
 				o.present |= oracleBitPreviousTxnID
+			case 6:
+				o.LedgerIndex = val
+				o.present |= oracleBitLedgerIndex
 			default:
 				return newErrUnknownField("Oracle", typeCode, fieldCode)
 			}
@@ -641,6 +684,9 @@ func (o *Oracle) emitAll(out map[string]any, skipDefault bool) {
 	if o.present&oracleBitFlags != 0 && !(skipDefault && o.Flags == 0) {
 		out["Flags"] = o.Flags
 	}
+	if o.present&oracleBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(o.LedgerIndex)) {
+		out["LedgerIndex"] = o.LedgerIndex
+	}
 	if o.present&oracleBitSponsor != 0 && !(skipDefault && o.Sponsor == "") {
 		out["Sponsor"] = o.Sponsor
 	}
@@ -674,6 +720,7 @@ func (o *Oracle) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "URI", prv.URI, o.URI, prv.present&oracleBitURI, o.present&oracleBitURI)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, o.OwnerNode, prv.present&oracleBitOwnerNode, o.present&oracleBitOwnerNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, o.Flags, prv.present&oracleBitFlags, o.present&oracleBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, o.LedgerIndex, prv.present&oracleBitLedgerIndex, o.present&oracleBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, o.Sponsor, prv.present&oracleBitSponsor, o.present&oracleBitSponsor)
 }
 
@@ -709,6 +756,9 @@ func (o *Oracle) EmitChangeOrigFields(out map[string]any) {
 	}
 	if o.present&oracleBitFlags != 0 {
 		out["Flags"] = o.Flags
+	}
+	if o.present&oracleBitLedgerIndex != 0 {
+		out["LedgerIndex"] = o.LedgerIndex
 	}
 	if o.present&oracleBitSponsor != 0 {
 		out["Sponsor"] = o.Sponsor
@@ -787,6 +837,9 @@ func (o *Oracle) ToMap() map[string]any {
 	if o.present&oracleBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = o.PreviousTxnLgrSeq
 	}
+	if o.present&oracleBitLedgerIndex != 0 {
+		out["LedgerIndex"] = o.LedgerIndex
+	}
 	if o.present&oracleBitSponsor != 0 {
 		out["Sponsor"] = o.Sponsor
 	}
@@ -858,6 +911,11 @@ func (o *Oracle) appendBinary(dst []byte) ([]byte, error) {
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if o.present&oracleBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), o.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if o.present&oracleBitURI != 0 {
 		if dst, err = appendBlob(append(dst, 0x75), o.URI); err != nil {
 			return nil, err
@@ -907,6 +965,9 @@ func (o *Oracle) encodedSizeHint() int {
 	if o.present&oracleBitOwnerNode != 0 {
 		size += 9
 	}
+	if o.present&oracleBitLedgerIndex != 0 {
+		size += 33
+	}
 	if o.present&oracleBitURI != 0 {
 		size += 1 + blobEncodedLen(o.URI)
 	}
@@ -933,6 +994,9 @@ func (o *Oracle) hasXAddress() bool {
 		return true
 	}
 	if o.present&oracleBitPreviousTxnID != 0 && isXAddress(o.PreviousTxnID) {
+		return true
+	}
+	if o.present&oracleBitLedgerIndex != 0 && isXAddress(o.LedgerIndex) {
 		return true
 	}
 	if o.present&oracleBitURI != 0 && isXAddress(o.URI) {

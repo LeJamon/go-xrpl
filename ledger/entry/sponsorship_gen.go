@@ -34,6 +34,7 @@ type Sponsorship struct {
 	OwnerNode           string // UInt64 (lowercase hex, no leading zeros)
 	SponseeNode         string // UInt64 (lowercase hex, no leading zeros)
 	Flags               uint32
+	LedgerIndex         string // Hash256 (uppercase hex)
 	Sponsor             string // AccountID (base58)
 }
 
@@ -53,6 +54,7 @@ const (
 	sponsorshipBitOwnerNode
 	sponsorshipBitSponseeNode
 	sponsorshipBitFlags
+	sponsorshipBitLedgerIndex
 	sponsorshipBitSponsor
 )
 
@@ -128,6 +130,13 @@ func (s *Sponsorship) SetFlags(value uint32) {
 	s.Flags = value
 	s.dirty = true
 	s.present |= sponsorshipBitFlags
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (s *Sponsorship) SetLedgerIndex(value string) {
+	s.LedgerIndex = value
+	s.dirty = true
+	s.present |= sponsorshipBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -370,6 +379,37 @@ func (s *Sponsorship) SetFlagsValue(value uint32) {
 	s.SetFlags(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (s *Sponsorship) HasLedgerIndex() bool {
+	return s != nil && s.present&sponsorshipBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (s *Sponsorship) ClearLedgerIndex() {
+	if s == nil {
+		return
+	}
+	s.LedgerIndex = ""
+	s.present &^= sponsorshipBitLedgerIndex
+	s.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (s *Sponsorship) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if s == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(s.LedgerIndex, "Sponsorship.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (s *Sponsorship) SetLedgerIndexValue(value [32]byte) {
+	s.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (s *Sponsorship) HasSponsor() bool {
 	return s != nil && s.present&sponsorshipBitSponsor != 0
@@ -540,6 +580,9 @@ func (s *Sponsorship) decode(data []byte, legacy bool) error {
 			case 5:
 				s.PreviousTxnID = val
 				s.present |= sponsorshipBitPreviousTxnID
+			case 6:
+				s.LedgerIndex = val
+				s.present |= sponsorshipBitLedgerIndex
 			default:
 				return newErrUnknownField("Sponsorship", typeCode, fieldCode)
 			}
@@ -618,6 +661,9 @@ func (s *Sponsorship) emitAll(out map[string]any, skipDefault bool) {
 	if s.present&sponsorshipBitFlags != 0 && !(skipDefault && s.Flags == 0) {
 		out["Flags"] = s.Flags
 	}
+	if s.present&sponsorshipBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(s.LedgerIndex)) {
+		out["LedgerIndex"] = s.LedgerIndex
+	}
 	if s.present&sponsorshipBitSponsor != 0 && !(skipDefault && s.Sponsor == "") {
 		out["Sponsor"] = s.Sponsor
 	}
@@ -650,6 +696,7 @@ func (s *Sponsorship) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, s.OwnerNode, prv.present&sponsorshipBitOwnerNode, s.present&sponsorshipBitOwnerNode)
 	emitIfChangedString(out, "SponseeNode", prv.SponseeNode, s.SponseeNode, prv.present&sponsorshipBitSponseeNode, s.present&sponsorshipBitSponseeNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, s.Flags, prv.present&sponsorshipBitFlags, s.present&sponsorshipBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, s.LedgerIndex, prv.present&sponsorshipBitLedgerIndex, s.present&sponsorshipBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, s.Sponsor, prv.present&sponsorshipBitSponsor, s.present&sponsorshipBitSponsor)
 }
 
@@ -682,6 +729,9 @@ func (s *Sponsorship) EmitChangeOrigFields(out map[string]any) {
 	}
 	if s.present&sponsorshipBitFlags != 0 {
 		out["Flags"] = s.Flags
+	}
+	if s.present&sponsorshipBitLedgerIndex != 0 {
+		out["LedgerIndex"] = s.LedgerIndex
 	}
 	if s.present&sponsorshipBitSponsor != 0 {
 		out["Sponsor"] = s.Sponsor
@@ -757,6 +807,9 @@ func (s *Sponsorship) ToMap() map[string]any {
 	if s.present&sponsorshipBitFlags != 0 {
 		out["Flags"] = s.Flags
 	}
+	if s.present&sponsorshipBitLedgerIndex != 0 {
+		out["LedgerIndex"] = s.LedgerIndex
+	}
 	if s.present&sponsorshipBitSponsor != 0 {
 		out["Sponsor"] = s.Sponsor
 	}
@@ -830,6 +883,11 @@ func (s *Sponsorship) appendBinary(dst []byte) ([]byte, error) {
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if s.present&sponsorshipBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), s.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if s.present&sponsorshipBitFeeAmount != 0 {
 		if dst, err = appendAmount(append(dst, 0x60, 0x20), s.FeeAmount); err != nil {
 			return nil, err
@@ -874,6 +932,9 @@ func (s *Sponsorship) encodedSizeHint() int {
 	if s.present&sponsorshipBitSponseeNode != 0 {
 		size += 10
 	}
+	if s.present&sponsorshipBitLedgerIndex != 0 {
+		size += 33
+	}
 	if s.present&sponsorshipBitFeeAmount != 0 {
 		size += 2 + amountEncodedLen(s.FeeAmount)
 	}
@@ -903,6 +964,9 @@ func (s *Sponsorship) hasXAddress() bool {
 		return true
 	}
 	if s.present&sponsorshipBitPreviousTxnID != 0 && isXAddress(s.PreviousTxnID) {
+		return true
+	}
+	if s.present&sponsorshipBitLedgerIndex != 0 && isXAddress(s.LedgerIndex) {
 		return true
 	}
 	if s.present&sponsorshipBitFeeAmount != 0 && isXAddressValue(s.FeeAmount) {

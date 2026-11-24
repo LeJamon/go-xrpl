@@ -30,6 +30,7 @@ type NFTokenPage struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	LedgerIndex       string // Hash256 (uppercase hex)
 	Sponsor           string // AccountID (base58)
 }
 
@@ -45,6 +46,7 @@ const (
 	nftokenpageBitFlags
 	nftokenpageBitPreviousTxnID
 	nftokenpageBitPreviousTxnLgrSeq
+	nftokenpageBitLedgerIndex
 	nftokenpageBitSponsor
 )
 
@@ -88,6 +90,13 @@ func (n *NFTokenPage) SetPreviousTxnLgrSeq(value uint32) {
 	n.PreviousTxnLgrSeq = value
 	n.dirty = true
 	n.present |= nftokenpageBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (n *NFTokenPage) SetLedgerIndex(value string) {
+	n.LedgerIndex = value
+	n.dirty = true
+	n.present |= nftokenpageBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -241,6 +250,37 @@ func (n *NFTokenPage) SetPreviousTxnLgrSeqValue(value uint32) {
 	n.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (n *NFTokenPage) HasLedgerIndex() bool {
+	return n != nil && n.present&nftokenpageBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (n *NFTokenPage) ClearLedgerIndex() {
+	if n == nil {
+		return
+	}
+	n.LedgerIndex = ""
+	n.present &^= nftokenpageBitLedgerIndex
+	n.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (n *NFTokenPage) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if n == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(n.LedgerIndex, "NFTokenPage.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (n *NFTokenPage) SetLedgerIndexValue(value [32]byte) {
+	n.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (n *NFTokenPage) HasSponsor() bool {
 	return n != nil && n.present&nftokenpageBitSponsor != 0
@@ -368,6 +408,9 @@ func (n *NFTokenPage) decode(data []byte, legacy bool) error {
 			case 5:
 				n.PreviousTxnID = val
 				n.present |= nftokenpageBitPreviousTxnID
+			case 6:
+				n.LedgerIndex = val
+				n.present |= nftokenpageBitLedgerIndex
 			case 26:
 				n.PreviousPageMin = val
 				n.present |= nftokenpageBitPreviousPageMin
@@ -431,6 +474,9 @@ func (n *NFTokenPage) emitAll(out map[string]any, skipDefault bool) {
 	if n.present&nftokenpageBitFlags != 0 && !(skipDefault && n.Flags == 0) {
 		out["Flags"] = n.Flags
 	}
+	if n.present&nftokenpageBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(n.LedgerIndex)) {
+		out["LedgerIndex"] = n.LedgerIndex
+	}
 	if n.present&nftokenpageBitSponsor != 0 && !(skipDefault && n.Sponsor == "") {
 		out["Sponsor"] = n.Sponsor
 	}
@@ -459,6 +505,7 @@ func (n *NFTokenPage) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "NextPageMin", prv.NextPageMin, n.NextPageMin, prv.present&nftokenpageBitNextPageMin, n.present&nftokenpageBitNextPageMin)
 	emitIfChangedNFTokens(out, "NFTokens", prv.NFTokens, n.NFTokens, prv.present&nftokenpageBitNFTokens, n.present&nftokenpageBitNFTokens)
 	emitIfChangedUint32(out, "Flags", prv.Flags, n.Flags, prv.present&nftokenpageBitFlags, n.present&nftokenpageBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, n.LedgerIndex, prv.present&nftokenpageBitLedgerIndex, n.present&nftokenpageBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, n.Sponsor, prv.present&nftokenpageBitSponsor, n.present&nftokenpageBitSponsor)
 }
 
@@ -479,6 +526,9 @@ func (n *NFTokenPage) EmitChangeOrigFields(out map[string]any) {
 	}
 	if n.present&nftokenpageBitFlags != 0 {
 		out["Flags"] = n.Flags
+	}
+	if n.present&nftokenpageBitLedgerIndex != 0 {
+		out["LedgerIndex"] = n.LedgerIndex
 	}
 	if n.present&nftokenpageBitSponsor != 0 {
 		out["Sponsor"] = n.Sponsor
@@ -542,6 +592,9 @@ func (n *NFTokenPage) ToMap() map[string]any {
 	if n.present&nftokenpageBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = n.PreviousTxnLgrSeq
 	}
+	if n.present&nftokenpageBitLedgerIndex != 0 {
+		out["LedgerIndex"] = n.LedgerIndex
+	}
 	if n.present&nftokenpageBitSponsor != 0 {
 		out["Sponsor"] = n.Sponsor
 	}
@@ -602,6 +655,11 @@ func (n *NFTokenPage) appendBinary(dst []byte) ([]byte, error) {
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if n.present&nftokenpageBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), n.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if n.present&nftokenpageBitPreviousPageMin != 0 {
 		if dst, err = appendHash(append(dst, 0x50, 0x1A), n.PreviousPageMin, 32); err != nil {
 			return nil, err
@@ -632,6 +690,9 @@ func (n *NFTokenPage) encodedSizeHint() int {
 	if n.present&nftokenpageBitFlags != 0 {
 		size += 5
 	}
+	if n.present&nftokenpageBitLedgerIndex != 0 {
+		size += 33
+	}
 	if n.present&nftokenpageBitPreviousPageMin != 0 {
 		size += 34
 	}
@@ -652,6 +713,9 @@ func (n *NFTokenPage) encodedSizeHint() int {
 // entries are encoded through it.
 func (n *NFTokenPage) hasXAddress() bool {
 	if n.present&nftokenpageBitPreviousTxnID != 0 && isXAddress(n.PreviousTxnID) {
+		return true
+	}
+	if n.present&nftokenpageBitLedgerIndex != 0 && isXAddress(n.LedgerIndex) {
 		return true
 	}
 	if n.present&nftokenpageBitPreviousPageMin != 0 && isXAddress(n.PreviousPageMin) {

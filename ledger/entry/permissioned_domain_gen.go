@@ -31,6 +31,7 @@ type PermissionedDomain struct {
 	Flags               uint32
 	PreviousTxnID       string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq   uint32
+	LedgerIndex         string // Hash256 (uppercase hex)
 	Sponsor             string // AccountID (base58)
 }
 
@@ -47,6 +48,7 @@ const (
 	permissioneddomainBitFlags
 	permissioneddomainBitPreviousTxnID
 	permissioneddomainBitPreviousTxnLgrSeq
+	permissioneddomainBitLedgerIndex
 	permissioneddomainBitSponsor
 )
 
@@ -97,6 +99,13 @@ func (p *PermissionedDomain) SetPreviousTxnLgrSeq(value uint32) {
 	p.PreviousTxnLgrSeq = value
 	p.dirty = true
 	p.present |= permissioneddomainBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (p *PermissionedDomain) SetLedgerIndex(value string) {
+	p.LedgerIndex = value
+	p.dirty = true
+	p.present |= permissioneddomainBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -243,6 +252,37 @@ func (p *PermissionedDomain) GetPreviousTxnLgrSeq() (uint32, error) {
 // SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
 func (p *PermissionedDomain) SetPreviousTxnLgrSeqValue(value uint32) {
 	p.SetPreviousTxnLgrSeq(value)
+}
+
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (p *PermissionedDomain) HasLedgerIndex() bool {
+	return p != nil && p.present&permissioneddomainBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (p *PermissionedDomain) ClearLedgerIndex() {
+	if p == nil {
+		return
+	}
+	p.LedgerIndex = ""
+	p.present &^= permissioneddomainBitLedgerIndex
+	p.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (p *PermissionedDomain) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if p == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(p.LedgerIndex, "PermissionedDomain.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (p *PermissionedDomain) SetLedgerIndexValue(value [32]byte) {
+	p.SetLedgerIndex(hashValueToString(value[:]))
 }
 
 // HasSponsor reports whether Sponsor is present.
@@ -405,6 +445,9 @@ func (p *PermissionedDomain) decode(data []byte, legacy bool) error {
 			case 5:
 				p.PreviousTxnID = val
 				p.present |= permissioneddomainBitPreviousTxnID
+			case 6:
+				p.LedgerIndex = val
+				p.present |= permissioneddomainBitLedgerIndex
 			default:
 				return newErrUnknownField("PermissionedDomain", typeCode, fieldCode)
 			}
@@ -468,6 +511,9 @@ func (p *PermissionedDomain) emitAll(out map[string]any, skipDefault bool) {
 	if p.present&permissioneddomainBitFlags != 0 && !(skipDefault && p.Flags == 0) {
 		out["Flags"] = p.Flags
 	}
+	if p.present&permissioneddomainBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(p.LedgerIndex)) {
+		out["LedgerIndex"] = p.LedgerIndex
+	}
 	if p.present&permissioneddomainBitSponsor != 0 && !(skipDefault && p.Sponsor == "") {
 		out["Sponsor"] = p.Sponsor
 	}
@@ -497,6 +543,7 @@ func (p *PermissionedDomain) EmitPreviousFields(prev Entry, out map[string]any) 
 	emitIfChangedDeep(out, "AcceptedCredentials", prv.AcceptedCredentials, p.AcceptedCredentials, prv.present&permissioneddomainBitAcceptedCredentials, p.present&permissioneddomainBitAcceptedCredentials)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, p.OwnerNode, prv.present&permissioneddomainBitOwnerNode, p.present&permissioneddomainBitOwnerNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, p.Flags, prv.present&permissioneddomainBitFlags, p.present&permissioneddomainBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, p.LedgerIndex, prv.present&permissioneddomainBitLedgerIndex, p.present&permissioneddomainBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, p.Sponsor, prv.present&permissioneddomainBitSponsor, p.present&permissioneddomainBitSponsor)
 }
 
@@ -520,6 +567,9 @@ func (p *PermissionedDomain) EmitChangeOrigFields(out map[string]any) {
 	}
 	if p.present&permissioneddomainBitFlags != 0 {
 		out["Flags"] = p.Flags
+	}
+	if p.present&permissioneddomainBitLedgerIndex != 0 {
+		out["LedgerIndex"] = p.LedgerIndex
 	}
 	if p.present&permissioneddomainBitSponsor != 0 {
 		out["Sponsor"] = p.Sponsor
@@ -585,6 +635,9 @@ func (p *PermissionedDomain) ToMap() map[string]any {
 	}
 	if p.present&permissioneddomainBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = p.PreviousTxnLgrSeq
+	}
+	if p.present&permissioneddomainBitLedgerIndex != 0 {
+		out["LedgerIndex"] = p.LedgerIndex
 	}
 	if p.present&permissioneddomainBitSponsor != 0 {
 		out["Sponsor"] = p.Sponsor
@@ -654,6 +707,11 @@ func (p *PermissionedDomain) appendBinary(dst []byte) ([]byte, error) {
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if p.present&permissioneddomainBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), p.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if p.present&permissioneddomainBitOwner != 0 {
 		if dst, err = appendAccountID(append(dst, 0x82), p.Owner); err != nil {
 			return nil, err
@@ -685,6 +743,9 @@ func (p *PermissionedDomain) encodedSizeHint() int {
 	if p.present&permissioneddomainBitOwnerNode != 0 {
 		size += 9
 	}
+	if p.present&permissioneddomainBitLedgerIndex != 0 {
+		size += 33
+	}
 	if p.present&permissioneddomainBitOwner != 0 {
 		size += 1 + accountIDEncodedLen(p.Owner)
 	}
@@ -702,6 +763,9 @@ func (p *PermissionedDomain) hasXAddress() bool {
 		return true
 	}
 	if p.present&permissioneddomainBitPreviousTxnID != 0 && isXAddress(p.PreviousTxnID) {
+		return true
+	}
+	if p.present&permissioneddomainBitLedgerIndex != 0 && isXAddress(p.LedgerIndex) {
 		return true
 	}
 	if p.present&permissioneddomainBitOwner != 0 && isXAddress(p.Owner) {

@@ -35,6 +35,7 @@ type Bridge struct {
 	Flags                    uint32
 	PreviousTxnID            string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq        uint32
+	LedgerIndex              string // Hash256 (uppercase hex)
 	Sponsor                  string // AccountID (base58)
 }
 
@@ -55,6 +56,7 @@ const (
 	bridgeBitFlags
 	bridgeBitPreviousTxnID
 	bridgeBitPreviousTxnLgrSeq
+	bridgeBitLedgerIndex
 	bridgeBitSponsor
 )
 
@@ -133,6 +135,13 @@ func (b *Bridge) SetPreviousTxnLgrSeq(value uint32) {
 	b.PreviousTxnLgrSeq = value
 	b.dirty = true
 	b.present |= bridgeBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (b *Bridge) SetLedgerIndex(value string) {
+	b.LedgerIndex = value
+	b.dirty = true
+	b.present |= bridgeBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -373,6 +382,37 @@ func (b *Bridge) SetPreviousTxnLgrSeqValue(value uint32) {
 	b.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (b *Bridge) HasLedgerIndex() bool {
+	return b != nil && b.present&bridgeBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (b *Bridge) ClearLedgerIndex() {
+	if b == nil {
+		return
+	}
+	b.LedgerIndex = ""
+	b.present &^= bridgeBitLedgerIndex
+	b.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (b *Bridge) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if b == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(b.LedgerIndex, "Bridge.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (b *Bridge) SetLedgerIndexValue(value [32]byte) {
+	b.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (b *Bridge) HasSponsor() bool {
 	return b != nil && b.present&bridgeBitSponsor != 0
@@ -569,6 +609,9 @@ func (b *Bridge) decode(data []byte, legacy bool) error {
 			case 5:
 				b.PreviousTxnID = val
 				b.present |= bridgeBitPreviousTxnID
+			case 6:
+				b.LedgerIndex = val
+				b.present |= bridgeBitLedgerIndex
 			default:
 				return newErrUnknownField("Bridge", typeCode, fieldCode)
 			}
@@ -659,6 +702,9 @@ func (b *Bridge) emitAll(out map[string]any, skipDefault bool) {
 	if b.present&bridgeBitFlags != 0 && !(skipDefault && b.Flags == 0) {
 		out["Flags"] = b.Flags
 	}
+	if b.present&bridgeBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(b.LedgerIndex)) {
+		out["LedgerIndex"] = b.LedgerIndex
+	}
 	if b.present&bridgeBitSponsor != 0 && !(skipDefault && b.Sponsor == "") {
 		out["Sponsor"] = b.Sponsor
 	}
@@ -692,6 +738,7 @@ func (b *Bridge) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "XChainAccountClaimCount", prv.XChainAccountClaimCount, b.XChainAccountClaimCount, prv.present&bridgeBitXChainAccountClaimCount, b.present&bridgeBitXChainAccountClaimCount)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, b.OwnerNode, prv.present&bridgeBitOwnerNode, b.present&bridgeBitOwnerNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, b.Flags, prv.present&bridgeBitFlags, b.present&bridgeBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, b.LedgerIndex, prv.present&bridgeBitLedgerIndex, b.present&bridgeBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, b.Sponsor, prv.present&bridgeBitSponsor, b.present&bridgeBitSponsor)
 }
 
@@ -727,6 +774,9 @@ func (b *Bridge) EmitChangeOrigFields(out map[string]any) {
 	}
 	if b.present&bridgeBitFlags != 0 {
 		out["Flags"] = b.Flags
+	}
+	if b.present&bridgeBitLedgerIndex != 0 {
+		out["LedgerIndex"] = b.LedgerIndex
 	}
 	if b.present&bridgeBitSponsor != 0 {
 		out["Sponsor"] = b.Sponsor
@@ -804,6 +854,9 @@ func (b *Bridge) ToMap() map[string]any {
 	}
 	if b.present&bridgeBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = b.PreviousTxnLgrSeq
+	}
+	if b.present&bridgeBitLedgerIndex != 0 {
+		out["LedgerIndex"] = b.LedgerIndex
 	}
 	if b.present&bridgeBitSponsor != 0 {
 		out["Sponsor"] = b.Sponsor
@@ -885,6 +938,11 @@ func (b *Bridge) appendBinary(dst []byte) ([]byte, error) {
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if b.present&bridgeBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), b.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if b.present&bridgeBitSignatureReward != 0 {
 		if dst, err = appendAmount(append(dst, 0x60, 0x1D), b.SignatureReward); err != nil {
 			return nil, err
@@ -932,6 +990,9 @@ func (b *Bridge) encodedSizeHint() int {
 	if b.present&bridgeBitXChainAccountClaimCount != 0 {
 		size += 10
 	}
+	if b.present&bridgeBitLedgerIndex != 0 {
+		size += 33
+	}
 	if b.present&bridgeBitSignatureReward != 0 {
 		size += 2 + amountEncodedLen(b.SignatureReward)
 	}
@@ -967,6 +1028,9 @@ func (b *Bridge) hasXAddress() bool {
 		return true
 	}
 	if b.present&bridgeBitPreviousTxnID != 0 && isXAddress(b.PreviousTxnID) {
+		return true
+	}
+	if b.present&bridgeBitLedgerIndex != 0 && isXAddress(b.LedgerIndex) {
 		return true
 	}
 	if b.present&bridgeBitSignatureReward != 0 && isXAddressValue(b.SignatureReward) {

@@ -40,6 +40,7 @@ type PayChannel struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	LedgerIndex       string // Hash256 (uppercase hex)
 	Sponsor           string // AccountID (base58)
 }
 
@@ -65,6 +66,7 @@ const (
 	paychannelBitFlags
 	paychannelBitPreviousTxnID
 	paychannelBitPreviousTxnLgrSeq
+	paychannelBitLedgerIndex
 	paychannelBitSponsor
 )
 
@@ -178,6 +180,13 @@ func (p *PayChannel) SetPreviousTxnLgrSeq(value uint32) {
 	p.PreviousTxnLgrSeq = value
 	p.dirty = true
 	p.present |= paychannelBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (p *PayChannel) SetLedgerIndex(value string) {
+	p.LedgerIndex = value
+	p.dirty = true
+	p.present |= paychannelBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -558,6 +567,37 @@ func (p *PayChannel) SetPreviousTxnLgrSeqValue(value uint32) {
 	p.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (p *PayChannel) HasLedgerIndex() bool {
+	return p != nil && p.present&paychannelBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (p *PayChannel) ClearLedgerIndex() {
+	if p == nil {
+		return
+	}
+	p.LedgerIndex = ""
+	p.present &^= paychannelBitLedgerIndex
+	p.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (p *PayChannel) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if p == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(p.LedgerIndex, "PayChannel.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (p *PayChannel) SetLedgerIndexValue(value [32]byte) {
+	p.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (p *PayChannel) HasSponsor() bool {
 	return p != nil && p.present&paychannelBitSponsor != 0
@@ -758,6 +798,9 @@ func (p *PayChannel) decode(data []byte, legacy bool) error {
 			case 5:
 				p.PreviousTxnID = val
 				p.present |= paychannelBitPreviousTxnID
+			case 6:
+				p.LedgerIndex = val
+				p.present |= paychannelBitLedgerIndex
 			default:
 				return newErrUnknownField("PayChannel", typeCode, fieldCode)
 			}
@@ -866,6 +909,9 @@ func (p *PayChannel) emitAll(out map[string]any, skipDefault bool) {
 	if p.present&paychannelBitFlags != 0 && !(skipDefault && p.Flags == 0) {
 		out["Flags"] = p.Flags
 	}
+	if p.present&paychannelBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(p.LedgerIndex)) {
+		out["LedgerIndex"] = p.LedgerIndex
+	}
 	if p.present&paychannelBitSponsor != 0 && !(skipDefault && p.Sponsor == "") {
 		out["Sponsor"] = p.Sponsor
 	}
@@ -904,6 +950,7 @@ func (p *PayChannel) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, p.OwnerNode, prv.present&paychannelBitOwnerNode, p.present&paychannelBitOwnerNode)
 	emitIfChangedString(out, "DestinationNode", prv.DestinationNode, p.DestinationNode, prv.present&paychannelBitDestinationNode, p.present&paychannelBitDestinationNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, p.Flags, prv.present&paychannelBitFlags, p.present&paychannelBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, p.LedgerIndex, prv.present&paychannelBitLedgerIndex, p.present&paychannelBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, p.Sponsor, prv.present&paychannelBitSponsor, p.present&paychannelBitSponsor)
 }
 
@@ -954,6 +1001,9 @@ func (p *PayChannel) EmitChangeOrigFields(out map[string]any) {
 	}
 	if p.present&paychannelBitFlags != 0 {
 		out["Flags"] = p.Flags
+	}
+	if p.present&paychannelBitLedgerIndex != 0 {
+		out["LedgerIndex"] = p.LedgerIndex
 	}
 	if p.present&paychannelBitSponsor != 0 {
 		out["Sponsor"] = p.Sponsor
@@ -1047,6 +1097,9 @@ func (p *PayChannel) ToMap() map[string]any {
 	if p.present&paychannelBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = p.PreviousTxnLgrSeq
 	}
+	if p.present&paychannelBitLedgerIndex != 0 {
+		out["LedgerIndex"] = p.LedgerIndex
+	}
 	if p.present&paychannelBitSponsor != 0 {
 		out["Sponsor"] = p.Sponsor
 	}
@@ -1135,6 +1188,11 @@ func (p *PayChannel) appendBinary(dst []byte) ([]byte, error) {
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if p.present&paychannelBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), p.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if p.present&paychannelBitAmount != 0 {
 		if dst, err = appendAmount(append(dst, 0x61), p.Amount); err != nil {
 			return nil, err
@@ -1199,6 +1257,9 @@ func (p *PayChannel) encodedSizeHint() int {
 	if p.present&paychannelBitDestinationNode != 0 {
 		size += 9
 	}
+	if p.present&paychannelBitLedgerIndex != 0 {
+		size += 33
+	}
 	if p.present&paychannelBitAmount != 0 {
 		size += 1 + amountEncodedLen(p.Amount)
 	}
@@ -1231,6 +1292,9 @@ func (p *PayChannel) hasXAddress() bool {
 		return true
 	}
 	if p.present&paychannelBitPreviousTxnID != 0 && isXAddress(p.PreviousTxnID) {
+		return true
+	}
+	if p.present&paychannelBitLedgerIndex != 0 && isXAddress(p.LedgerIndex) {
 		return true
 	}
 	if p.present&paychannelBitAmount != 0 && isXAddressValue(p.Amount) {
