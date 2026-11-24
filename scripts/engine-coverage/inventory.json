@@ -14256,7 +14256,7 @@
         "RequiredAmendments": [
           {
             "path": "internal/tx/lending/lending.go",
-            "line": 416,
+            "line": 420,
             "symbol": "LoanSet.RequiredAmendments"
           }
         ],

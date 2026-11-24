@@ -74,6 +74,11 @@ func TestLoanSetCounterpartySignaturePreflight(t *testing.T) {
 	key := "02" + strings.Repeat("11", 32)
 	mixed := &txcore.CounterpartySignature{SigningPubKey: key}
 	mixed.MarkFieldPresent("Signers")
+	absentKey := &txcore.CounterpartySignature{}
+	absentKey.MarkFieldPresent("Signers")
+	emptyKey := &txcore.CounterpartySignature{}
+	emptyKey.MarkFieldPresent("Signers")
+	emptyKey.MarkFieldPresent("SigningPubKey")
 	tests := []struct {
 		name      string
 		signature *txcore.CounterpartySignature
@@ -89,6 +94,8 @@ func TestLoanSetCounterpartySignaturePreflight(t *testing.T) {
 			{Signer: txcore.Signer{Account: precedenceGenesisAddr, SigningPubKey: key, TxnSignature: "AB"}},
 		}}, "1", false, ter.TesSUCCESS, ter.TemINVALID},
 		{"signing key with present Signers", mixed, "1", false, ter.TesSUCCESS, ter.TemINVALID},
+		{"absent key with present Signers", absentKey, "1", false, ter.TesSUCCESS, ter.TefEXCEPTION},
+		{"empty key with present Signers", emptyKey, "1", false, ter.TesSUCCESS, ter.TesSUCCESS},
 		{"simulation finishes before broker ID", &txcore.CounterpartySignature{}, "1", true, ter.TemINVALID, ter.TesSUCCESS},
 	}
 	for _, tc := range tests {

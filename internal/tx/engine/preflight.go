@@ -51,7 +51,7 @@ func (e *Engine) preflight(tx txcore.Transaction) (result ter.Result) {
 		}
 	}
 	if e.config.ApplyFlags&txcore.TapDRY_RUN != 0 {
-		if err := txcore.CheckSimulateKeys(common.SigningPubKey, common.TxnSignature, common.Signers, common.HasField("Signers")); err != nil {
+		if err := txcore.CheckSimulateKeys(&common.SigningPubKey, common.TxnSignature, common.Signers, common.HasField("Signers")); err != nil {
 			return parseValidationError(err)
 		}
 	}

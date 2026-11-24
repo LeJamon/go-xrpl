@@ -78,17 +78,23 @@ func CheckSigningPubKey(key string) error {
 	return nil
 }
 
-func CheckSimulateKeys(key, signature string, signers []SignerWrapper, hasSigners bool) error {
+func CheckSimulateKeys(key *string, signature string, signers []SignerWrapper, hasSigners bool) error {
 	if signature != "" {
 		return ter.Errorf(ter.TemINVALID, "simulation requires an empty TxnSignature")
 	}
-	if key != "" && (hasSigners || len(signers) > 0) {
-		return ter.Errorf(ter.TemINVALID, "cannot combine SigningPubKey and Signers")
+	if !hasSigners && len(signers) == 0 {
+		return nil
 	}
 	for _, signer := range signers {
 		if signer.Signer.TxnSignature != "" {
 			return ter.Errorf(ter.TemINVALID, "simulation requires an empty signer TxnSignature")
 		}
+	}
+	if key == nil {
+		return ter.Errorf(ter.TefEXCEPTION, "missing SigningPubKey on multisigned simulation")
+	}
+	if *key != "" {
+		return ter.Errorf(ter.TemINVALID, "cannot combine SigningPubKey and Signers")
 	}
 	return nil
 }

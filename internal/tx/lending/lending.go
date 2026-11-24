@@ -404,7 +404,11 @@ func (l *LoanSet) PreflightWithFlags(rules *amendment.Rules, flags tx.ApplyFlags
 		}
 	}
 	if flags&tx.TapDRY_RUN != 0 && counterSig != nil {
-		return tx.CheckSimulateKeys(counterSig.SigningPubKey, counterSig.TxnSignature, counterSig.Signers, counterSig.HasField("Signers"))
+		var key *string
+		if counterSig.SigningPubKey != "" || counterSig.HasField("SigningPubKey") {
+			key = &counterSig.SigningPubKey
+		}
+		return tx.CheckSimulateKeys(key, counterSig.TxnSignature, counterSig.Signers, counterSig.HasField("Signers"))
 	}
 	if isZeroHashStr(l.LoanBrokerID) {
 		return ter.Errorf(ter.TemINVALID, "LoanBrokerID cannot be zero")
