@@ -620,6 +620,10 @@ memory, including when peer backfill is disabled. With backfill enabled, it
 can acquire older gaps within `ledger_history` from peers. Online deletion
 limits local retries to ledgers at or above the retention floor.
 
+During a clean shutdown, queued writes are settled first. If the current
+validated tip is the retained owner of a failed save, it receives one final
+queued attempt before the persistence worker drains and exits.
+
 While validated saves keep failing, `server_info` and `server_state` include
 a go-xrpl-specific `ledger_persistence` object with `consecutive_failures` and
 `last_failed_seq`. The peer-port `/health` endpoint also reports a persistence

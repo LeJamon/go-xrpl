@@ -403,6 +403,8 @@ func (s *Service) Stop() {
 	s.openLedgerMu.LockRole(openLedgerShutdown)
 	s.openLedgerMu.Unlock()
 	s.stopNodeStoreSweeper()
+	s.FlushPersists()
+	s.enqueueFailedValidatedTipOnShutdown()
 	s.persistenceWorker.stop()
 	s.retryTipOnShutdown()
 	s.eventPublisher.stop()
@@ -694,6 +696,24 @@ func (s *Service) retryTipOnShutdown() {
 	if err != nil {
 		s.logger.Error("failed to persist validated tip before shutdown", "seq", tip.Sequence(), "err", err)
 	}
+}
+
+// enqueueFailedValidatedTipOnShutdown gives a final failed tip one bounded
+// retry while the persistence worker is still live. The normal worker path
+// then drains this job and any older causal retries before shutdown joins it.
+func (s *Service) enqueueFailedValidatedTipOnShutdown() {
+	tip := s.GetValidatedLedger()
+	if tip == nil {
+		return
+	}
+
+	s.completeMu.RLock()
+	failed := s.failedValidatedLedgers[tip.Sequence()]
+	s.completeMu.RUnlock()
+	if failed == nil || failed.Hash() != tip.Hash() {
+		return
+	}
+	s.enqueuePersist(tip)
 }
 
 func (s *Service) persistValidatedTipLocked(

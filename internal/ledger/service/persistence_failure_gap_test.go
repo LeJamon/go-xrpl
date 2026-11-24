@@ -101,6 +101,41 @@ func requireLedgerIndexed(t *testing.T, repositories relationaldb.RepositoryMana
 	require.Equalf(t, indexed, info != nil, "relational index for ledger %d", seq)
 }
 
+func requireRestartedTransaction(t *testing.T, db nodestore.Database, relational relationaldb.RepositoryManager, tipSeq, txSeq uint32, hash [32]byte, blob []byte) {
+	t.Helper()
+	ctx := context.Background()
+	cfg := DefaultConfig()
+	cfg.FastLoad = true
+	cfg.Standalone = false
+	cfg.NodeStore = db
+	cfg.SHAMapFamily = backend.New(db)
+	cfg.RelationalDB = relational
+	restarted, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, restarted.Start())
+	t.Cleanup(restarted.Stop)
+	require.Equal(t, tipSeq, restarted.GetValidatedLedgerIndex())
+
+	transaction, err := restarted.GetTransaction(hash)
+	require.NoError(t, err)
+	require.Equal(t, txSeq, transaction.LedgerIndex)
+	history, err := restarted.GetAccountTransactionsWithDelegate(
+		ctx,
+		jtx.MasterAccount().Address,
+		int64(txSeq),
+		int64(txSeq),
+		10,
+		nil,
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, history.Transactions, 1)
+	require.Equal(t, hash, history.Transactions[0].Hash)
+	require.Equal(t, blob, history.Transactions[0].TxBlob)
+	require.Equal(t, txSeq, history.Transactions[0].LedgerIndex)
+}
+
 func TestRelationalPersistFailureLeavesNoUnindexedLedgerBelowTip(t *testing.T) {
 	ctx := context.Background()
 	db := newTestNodeStore(t, 10_000)
@@ -135,28 +170,7 @@ func TestRelationalPersistFailureLeavesNoUnindexedLedgerBelowTip(t *testing.T) {
 	requireLedgerIndexed(t, repositories, failed, true)
 	svc.Stop()
 
-	cfg := DefaultConfig()
-	cfg.FastLoad = true
-	cfg.Standalone = false
-	cfg.NodeStore = db
-	cfg.SHAMapFamily = backend.New(db)
-	cfg.RelationalDB = repositories
-	restarted, err := New(cfg)
-	require.NoError(t, err)
-	require.NoError(t, restarted.Start())
-	t.Cleanup(restarted.Stop)
-	require.Equal(t, failed+1, restarted.GetValidatedLedgerIndex())
-
-	transaction, err := restarted.GetTransaction(hash)
-	require.NoError(t, err)
-	require.Equal(t, failed, transaction.LedgerIndex)
-	history, err := restarted.GetAccountTransactionsWithDelegate(ctx, jtx.MasterAccount().Address,
-		int64(failed), int64(failed), 10, nil, false, nil)
-	require.NoError(t, err)
-	require.Len(t, history.Transactions, 1)
-	require.Equal(t, hash, history.Transactions[0].Hash)
-	require.Equal(t, blob, history.Transactions[0].TxBlob)
-	require.Equal(t, failed, history.Transactions[0].LedgerIndex)
+	requireRestartedTransaction(t, db, repositories, failed+1, failed, hash, blob)
 }
 
 func TestNodeStorePersistFailureSkipsRelationalIndex(t *testing.T) {
@@ -177,6 +191,58 @@ func TestNodeStorePersistFailureSkipsRelationalIndex(t *testing.T) {
 	svc.FlushPersists()
 	require.True(t, svc.HasCompleteLedger(failed))
 	requireLedgerIndexed(t, repositories, failed, true)
+}
+
+func TestShutdownRetriesFinalFailedPersist(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		nodeStore  bool
+		relational bool
+	}{
+		{name: "node store", nodeStore: true},
+		{name: "relational", relational: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			db := &failingHeaderStore{Database: newTestNodeStore(t, 10_000)}
+			repositories := newTestRepositories(t, ctx)
+			relational := &failingRepositories{RepositoryManager: repositories}
+			svc := startPersistedTestService(t, db, relational)
+
+			blob, hash := startupPaymentBlob(t, "shutdown-persist", 1)
+			payment, err := tx.ParseFromBinary(blob)
+			require.NoError(t, err)
+			submitted, err := svc.SubmitTransaction(payment, blob, false)
+			require.NoError(t, err)
+			require.True(t, submitted.Applied)
+
+			failed := svc.GetClosedLedgerIndex() + 1
+			if test.nodeStore {
+				db.fail(failed, 1)
+			} else if test.relational {
+				relational.fail(failed, 1)
+			}
+			seq, err := svc.AcceptLedger(ctx)
+			require.NoError(t, err)
+			require.Equal(t, failed, seq)
+			require.False(t, svc.HasCompleteLedger(failed))
+			requireLedgerIndexed(t, repositories, failed, false)
+
+			svc.Stop()
+			if test.nodeStore {
+				require.Equal(t, 2, db.attempts(failed))
+			} else if test.relational {
+				require.Equal(t, 2, relational.attempts(failed))
+			}
+			requireLedgerIndexed(t, repositories, failed, true)
+			tip, err := db.Fetch(ctx, validatedTipKey)
+			require.NoError(t, err)
+			require.NotNil(t, tip)
+			require.Equal(t, failed, tip.LedgerSeq)
+
+			requireRestartedTransaction(t, db, relational, failed, failed, hash, blob)
+		})
+	}
 }
 
 func TestValidatedPersistFailuresCountUntilSuccess(t *testing.T) {
