@@ -19,6 +19,8 @@ func confidentialPreflightRules(enabled bool) *amendment.Rules {
 		Enable(amendment.FeaturePermissionDelegationV1_1)
 	if enabled {
 		builder.Enable(amendment.FeatureConfidentialTransfer)
+	} else {
+		builder.Disable(amendment.FeatureConfidentialTransfer)
 	}
 	return builder.Build()
 }
