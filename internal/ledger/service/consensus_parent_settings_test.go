@@ -11,8 +11,12 @@ import (
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -34,6 +38,13 @@ func (f *oneShotSettingsReadError) Fetch(ctx context.Context, hash [32]byte) ([]
 }
 
 func TestConsensusCloseParentSettingsReadError(t *testing.T) {
+	const (
+		inheritedReserveDrops = uint64(10_000_000)
+		currentReserveDrops   = uint64(20_000_000)
+		paymentAmountDrops    = uint64(15_000_000)
+		paymentFeeDrops       = uint64(30)
+	)
+
 	all.RegisterAll()
 	control := newConsensusParentGuardService(t)
 	genesis := control.GetClosedLedger()
@@ -48,7 +59,7 @@ func TestConsensusCloseParentSettingsReadError(t *testing.T) {
 	fees, err := state.SerializeFeeSettings(&state.FeeSettings{
 		XRPFeesMode:           true,
 		BaseFeeDrops:          20,
-		ReserveBaseDrops:      20_000_000,
+		ReserveBaseDrops:      currentReserveDrops,
 		ReserveIncrementDrops: 2_000_000,
 	})
 	require.NoError(t, err)
@@ -57,6 +68,11 @@ func TestConsensusCloseParentSettingsReadError(t *testing.T) {
 
 	parent, backing := coldAcceptanceParent(t, updated)
 	require.NoError(t, control.SwitchToPreferredLedger(parent))
+	require.EqualValues(t, inheritedReserveDrops, parent.Fees().Reserve.Drops())
+	_, reserveBase, reserveIncrement, err := FeesFromLedgerStrict(parent)
+	require.NoError(t, err)
+	require.EqualValues(t, currentReserveDrops, reserveBase)
+	require.EqualValues(t, 2_000_000, reserveIncrement)
 	closeTime := parent.CloseTime().Add(time.Second)
 	nextSeq := parent.Sequence() + 1
 	setFee := pseudo.NewSetFee()
@@ -66,11 +82,41 @@ func TestConsensusCloseParentSettingsReadError(t *testing.T) {
 	setFee.ReserveIncrementDrops = "2000000"
 	blob, err := pseudo.EncodePseudoTx(setFee)
 	require.NoError(t, err)
-	agreed := [][]byte{blob}
+	master := jtx.MasterAccount()
+	destination := jtx.NewAccount("reserve-sensitive-destination")
+	masterBefore, err := state.ReadAccountRoot(parent, master.ID)
+	require.NoError(t, err)
+	require.NotNil(t, masterBefore)
+	paymentEnv := jtx.NewTestEnv(t)
+	paymentEnv.SetVerifySignatures(true)
+	paymentTx := payment.Pay(master, destination, paymentAmountDrops).
+		Fee(paymentFeeDrops).
+		Sequence(masterBefore.Sequence).
+		Build()
+	paymentEnv.SignWith(paymentTx, master)
+	paymentBlob, err := tx.SerializeTransaction(paymentTx)
+	require.NoError(t, err)
+	paymentHash, err := tx.ComputeTransactionHash(paymentTx)
+	require.NoError(t, err)
+	agreed := [][]byte{blob, paymentBlob}
 	_, err = control.AcceptConsensusResult(t.Context(), parent, agreed, nil, closeTime, true)
 	require.NoError(t, err)
 	want := control.GetClosedLedger()
-	require.EqualValues(t, 1, want.TxCount(), "the parent enables modern SetFee")
+	require.EqualValues(t, 2, want.TxCount(), "the parent enables modern SetFee and the reserve-sensitive payment")
+
+	stored, found, err := want.GetTransaction(paymentHash)
+	require.NoError(t, err)
+	require.True(t, found)
+	accepted := ParseAcceptedTransaction(stored)
+	require.NoError(t, accepted.ParseError())
+	require.Equal(t, ter.TecNO_DST_INSUF_XRP, accepted.Result())
+	created, err := want.Exists(keylet.Account(destination.ID))
+	require.NoError(t, err)
+	require.False(t, created)
+	masterAfter, err := state.ReadAccountRoot(want, master.ID)
+	require.NoError(t, err)
+	require.NotNil(t, masterAfter)
+	require.Equal(t, masterBefore.Balance-paymentFeeDrops, masterAfter.Balance)
 
 	for _, tc := range []struct {
 		name string
