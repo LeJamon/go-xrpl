@@ -35,8 +35,9 @@ func (c *catchupReplayCoordinator) prepareLegacyTransactionReplay(ctx context.Co
 
 func (c *catchupReplayCoordinator) prepareLegacyReplay(ctx context.Context, result *acquisitionCompletionResult, parent *ledger.Ledger, rd *inbound.ReplayDelta) (err error) {
 	svc := c.adaptor.LedgerService()
+	recordPreparationFailure := true
 	defer func() {
-		if err != nil && ctx.Err() == nil && !errors.Is(err, inbound.ErrReplayMemory) {
+		if recordPreparationFailure && err != nil && ctx.Err() == nil && !errors.Is(err, inbound.ErrReplayMemory) {
 			svc.RecordReplayPreparationFailure(ctx, result.header, result.txMap, parent,
 				c.replayTargetAuthenticated(result.header), err)
 		}
@@ -82,7 +83,14 @@ func (c *catchupReplayCoordinator) prepareLegacyReplay(ctx context.Context, resu
 		}
 		defer rd.ReleaseMemory()
 	}
-	derived, err := svc.ApplyReplay(ctx, rd, c.adaptor.EngineConfigForReplay(parent), c.replayTargetAuthenticated(result.header))
+	cfg, err := svc.EngineConfigForReplay(ctx, parent)
+	if err != nil {
+		if !replayConfigStateError(err) {
+			recordPreparationFailure = false
+		}
+		return err
+	}
+	derived, err := svc.ApplyReplay(ctx, rd, cfg, c.replayTargetAuthenticated(result.header))
 	if err != nil {
 		return err
 	}

@@ -15,7 +15,7 @@ import (
 )
 
 func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
-	return newOpen(parent, closeTime, false, nil)
+	return newOpenContext(context.Background(), parent, closeTime, false, nil)
 }
 
 // NewOpenWithRules creates an open successor using rules selected by the
@@ -23,14 +23,20 @@ func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
 // The rules pointer is captured in the immutable open ledger snapshot and is
 // used for every transaction applied to that snapshot.
 func NewOpenWithRules(parent *Ledger, closeTime time.Time, rules *amendment.Rules) (*Ledger, error) {
-	return newOpen(parent, closeTime, false, rules)
+	return newOpenContext(context.Background(), parent, closeTime, false, rules)
 }
 
 // NewOpenForBuild creates the mutable successor used to build a closed ledger.
 // Its provisional close time is visible to transactions until Close installs
 // the accepted close time.
 func NewOpenForBuild(parent *Ledger, closeTime time.Time) (*Ledger, error) {
-	return newOpen(parent, closeTime, true, nil)
+	return NewOpenForBuildContext(context.Background(), parent, closeTime)
+}
+
+// NewOpenForBuildContext is NewOpenForBuild with caller-controlled snapshot
+// cancellation.
+func NewOpenForBuildContext(ctx context.Context, parent *Ledger, closeTime time.Time) (*Ledger, error) {
+	return newOpenContext(ctx, parent, closeTime, true, nil)
 }
 
 // ApplicationViewCloseTime returns the provisional successor time visible to
@@ -49,9 +55,12 @@ func ApplicationViewCloseTime(parentCloseTime, proposedCloseTime time.Time, reso
 	return protocol.FromRippleTime(seconds)
 }
 
-func newOpen(parent *Ledger, closeTime time.Time, building bool, rulesOverride *amendment.Rules) (*Ledger, error) {
+func newOpenContext(ctx context.Context, parent *Ledger, closeTime time.Time, building bool, rulesOverride *amendment.Rules) (*Ledger, error) {
 	if parent == nil {
 		return nil, errors.New("parent ledger cannot be nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	parent.mu.RLock()
@@ -74,7 +83,7 @@ func newOpen(parent *Ledger, closeTime time.Time, building bool, rulesOverride *
 	if rulesOverride != nil {
 		parentRules = rulesOverride
 	}
-	stateMap, err := parent.stateMap.SnapshotMutable()
+	stateMap, err := parent.stateMap.SnapshotMutableContext(ctx)
 	parent.mu.RUnlock()
 	if err != nil {
 		return nil, fmt.Errorf("failed to snapshot state map: %w", err)

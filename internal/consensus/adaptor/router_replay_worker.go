@@ -313,6 +313,17 @@ func (c *catchupReplayCoordinator) prepareStandardReplayDrainResult(
 		return c.finishStandardReplayWorkerFailure(result, claim.copy, parent, txMap)
 	}
 	result.parentStats = parentProof.Stats()
+	cfg, err := svc.EngineConfigForReplay(ctx, parent)
+	if err != nil {
+		result.err = err
+		if replayConfigStateError(err) {
+			return c.finishStandardReplayWorkerFailure(result, claim.copy, parent, txMap)
+		}
+		// A transient fee-settings read is setup failure, not replay
+		// disagreement. Leave the parent available for the normal acquisition
+		// fallback without recording a replay fault.
+		return result
+	}
 	stateMap, err := parent.StateMapSnapshotContext(ctx)
 	if err != nil {
 		result.err = fmt.Errorf("snapshot replay predecessor state: %w", err)
@@ -340,7 +351,7 @@ func (c *catchupReplayCoordinator) prepareStandardReplayDrainResult(
 	}
 	result.replayRelease = replay.ReleaseMemory
 	applyStarted := time.Now()
-	derived, err := svc.ApplyReplay(ctx, replay, c.adaptor.EngineConfigForReplay(parent), c.replayTargetAuthenticated(h))
+	derived, err := svc.ApplyReplay(ctx, replay, cfg, c.replayTargetAuthenticated(h))
 	result.applyDuration = time.Since(applyStarted)
 	if err != nil {
 		result.err = err
@@ -391,6 +402,10 @@ func (c *catchupReplayCoordinator) prepareStandardReplayDrainResult(
 		return c.finishStandardReplayWorkerFailure(result, claim.copy, parent, txMap)
 	}
 	return result
+}
+
+func replayConfigStateError(err error) bool {
+	return errors.Is(err, shamap.ErrNodeNotInStore) || errors.Is(err, shamap.ErrInvalidNodeData)
 }
 
 func (c *catchupReplayCoordinator) finishStandardReplayWorkerFailure(

@@ -1052,8 +1052,9 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 //
 // The supplied EngineConfig provides shared (non-per-ledger) settings
 // (BaseFee, ReserveBase, NetworkID, Logger, etc.). Per-ledger fields
-// — LedgerSequence, ParentCloseTime, ParentHash, Rules — are overridden
-// here from the verified target header / parent.
+// — LedgerSequence, ParentCloseTime, ParentHash, and application close time —
+// are overridden here from the verified target header / parent. A nil Rules
+// value inherits the verified parent's rule set.
 //
 // Reference:
 //   - rippled/src/xrpld/app/ledger/detail/BuildLedger.cpp:225-248
@@ -1106,42 +1107,24 @@ func (r *ReplayDelta) ApplyContext(ctx context.Context, engineCfg tx.EngineConfi
 	// needs — close time, sequence, drops baseline, target hashes.
 	hdr := r.result.Header()
 
-	// Build a mutable child ledger anchored on the parent. Mirror
-	// rippled's Ledger(parent, closeTime) constructor: child inherits
-	// the parent's totalCoins and chains its parent linkage from the
-	// parent rather than the deserialized response header.
-	stateMap, err := r.parent.StateMapSnapshotContext(ctx)
+	// Build a mutable child through the parent constructor so its verified
+	// amendment rules and inherited fee schedule are retained without a second
+	// amendment-state read before execution.
+	child, err := ledger.NewOpenForBuildContext(ctx, r.parent, hdr.CloseTime)
 	if err != nil {
-		return nil, newReplayFailure(err, "parent_state", "snapshot parent state: %v", err)
+		return nil, newReplayFailure(err, "parent_state", "construct replay ledger: %v", err)
 	}
-	txMap := shamap.New(shamap.TypeTransaction)
-	parentHeader := r.parent.Header()
-	applicationResolution := consensus.GetNextLedgerTimeResolution(
-		uint32(parentHeader.CloseTimeResolution),
-		parentHeader.GetCloseAgree(),
-		hdr.LedgerIndex,
-	)
-	if uint32(hdr.CloseTimeResolution) != applicationResolution {
+	if child.Sequence() != hdr.LedgerIndex {
 		return nil, fmt.Errorf(
-			"target close time resolution: got %d, derived %d from parent",
-			hdr.CloseTimeResolution, applicationResolution,
+			"target ledger sequence: got %d, derived %d from parent",
+			hdr.LedgerIndex, child.Sequence(),
 		)
 	}
-	applicationCloseTime := ledger.ApplicationViewCloseTime(r.parent.CloseTime(), hdr.CloseTime, applicationResolution)
-	openHdr := header.LedgerHeader{
-		LedgerIndex:         hdr.LedgerIndex,
-		ParentHash:          r.parent.Hash(),
-		ParentCloseTime:     r.parent.CloseTime(),
-		CloseTime:           applicationCloseTime,
-		CloseTimeResolution: hdr.CloseTimeResolution,
-		// Drops baseline matches rippled's Ledger(parent, closeTime)
-		// constructor: child inherits parent's totalCoins; Close()
-		// subtracts dropsDestroyed accumulated during apply.
-		Drops: r.parent.TotalDrops(),
-	}
-	child, err := ledger.NewOpenWithHeader(openHdr, stateMap, txMap, r.parent.Fees())
-	if err != nil {
-		return nil, fmt.Errorf("construct replay ledger: %w", err)
+	if child.CloseTimeResolution() != uint32(hdr.CloseTimeResolution) {
+		return nil, fmt.Errorf(
+			"target close time resolution: got %d, derived %d from parent",
+			hdr.CloseTimeResolution, child.CloseTimeResolution(),
+		)
 	}
 
 	// Override per-ledger config fields from the verified header /
@@ -1152,7 +1135,7 @@ func (r *ReplayDelta) ApplyContext(ctx context.Context, engineCfg tx.EngineConfi
 	// any terRETRY indicates divergence.
 	engineCfg.LedgerSequence = hdr.LedgerIndex
 	engineCfg.ParentCloseTime = parentCloseTimeRippleEpoch(r.parent)
-	engineCfg.ApplicationCloseTime = protocol.ToRippleTime(applicationCloseTime)
+	engineCfg.ApplicationCloseTime = protocol.ToRippleTime(child.CloseTime())
 	engineCfg.ApplicationCloseTimeSet = true
 	engineCfg.ParentHash = r.parent.Hash()
 	engineCfg.ApplyFlags = tx.TapNONE
@@ -1160,14 +1143,7 @@ func (r *ReplayDelta) ApplyContext(ctx context.Context, engineCfg tx.EngineConfi
 	engineCfg.ViewOpen = false
 	engineCfg.EnforceLoadFee = false
 	if engineCfg.Rules == nil {
-		// Caller didn't supply rules: derive from the parent's
-		// Amendments SLE so the engine sees the same amendment set
-		// that was active when these txs were first applied.
-		rules, rulesErr := ledger.LoadAmendmentsFromLedger(r.parent)
-		if rulesErr != nil {
-			return nil, fmt.Errorf("load amendment rules from parent: %w", rulesErr)
-		}
-		engineCfg.Rules = rules
+		engineCfg.Rules = r.parent.Rules()
 	}
 
 	engine := txengine.NewEngine(child, engineCfg)

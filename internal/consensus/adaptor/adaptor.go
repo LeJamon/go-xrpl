@@ -23,7 +23,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
-	"github.com/LeJamon/go-xrpl/internal/tx"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 )
 
@@ -708,16 +707,6 @@ func (a *Adaptor) RequestLedger(id consensus.LedgerID) error {
 	a.reqLedgerLast[id] = now
 	a.reqLedgerMu.Unlock()
 	return a.sender.RequestLedger(id)
-}
-
-// EngineConfigForReplay returns the shared (non-per-ledger) tx.EngineConfig
-// for replaying a ledger anchored on parent (fees from parent's FeeSettings
-// SLE). The caller overrides the per-ledger fields from the target header.
-func (a *Adaptor) EngineConfigForReplay(parent *ledger.Ledger) tx.EngineConfig {
-	if a.ledgerService == nil {
-		return tx.EngineConfig{}
-	}
-	return a.ledgerService.EngineConfigForReplay(parent)
 }
 
 // GetParentLedgerForReplay returns the closed ledger at seq-1 (the anchor for

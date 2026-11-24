@@ -32,6 +32,13 @@ func replayFaultService(t *testing.T, path string) *Service {
 	return svc
 }
 
+func mustReplayEngineConfig(t testing.TB, svc *Service, parent *ledger.Ledger) tx.EngineConfig {
+	t.Helper()
+	cfg, err := svc.EngineConfigForReplay(context.Background(), parent)
+	require.NoError(t, err)
+	return cfg
+}
+
 func replayFaultTarget(t *testing.T, parent *ledger.Ledger, divergent bool) *ledger.Ledger {
 	t.Helper()
 	closeTime := parent.CloseTime().Add(10 * time.Second)
@@ -59,7 +66,7 @@ func TestReplayFaultPreservesFrontierAndRestartGate(t *testing.T) {
 	target := replayFaultTarget(t, parent, true)
 	replay, err := inbound.NewStoredLedgerReplay(parent, target, nil)
 	require.NoError(t, err)
-	_, err = svc.ApplyReplay(context.Background(), replay, svc.EngineConfigForReplay(parent), true)
+	_, err = svc.ApplyReplay(context.Background(), replay, mustReplayEngineConfig(t, svc, parent), true)
 	require.Error(t, err)
 	require.True(t, svc.ReplayBlocked())
 	require.Same(t, parent, svc.GetClosedLedger())
@@ -222,7 +229,7 @@ func TestReplayFaultKnownMissingStateSurvivesCanceledDiagnosis(t *testing.T) {
 	fault := svc.replayFaults.Snapshot()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	svc.diagnoseReplayFault(ctx, *fault, evidence, parent, replay, svc.EngineConfigForReplay(parent), shamap.ErrNodeNotInStore)
+	svc.diagnoseReplayFault(ctx, *fault, evidence, parent, replay, mustReplayEngineConfig(t, svc, parent), shamap.ErrNodeNotInStore)
 	require.Equal(t, replayfault.MissingState, svc.replayFaults.Snapshot().Class)
 }
 
@@ -639,7 +646,7 @@ func TestReplayFaultPersistsReproducedMetadataDisagreement(t *testing.T) {
 	require.NoError(t, err)
 	replay, err := inbound.NewStoredLedgerReplay(parent, target, nil)
 	require.NoError(t, err)
-	_, err = svc.ApplyReplay(context.Background(), replay, svc.EngineConfigForReplay(parent), true)
+	_, err = svc.ApplyReplay(context.Background(), replay, mustReplayEngineConfig(t, svc, parent), true)
 	require.ErrorIs(t, err, inbound.ErrReplayMetadataDiverged)
 	require.Eventually(t, func() bool {
 		f := svc.replayFaults.Snapshot()

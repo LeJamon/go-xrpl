@@ -72,6 +72,7 @@ func (s *Service) acceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	var retriableTxs []openledger.PendingTx
 	closed, replayed, err := s.applyStartupReplayLocked(ctx)
 	if err != nil {
+		failedParent = s.closedLedger
 		return 0, err
 	}
 	if replayed {
@@ -204,7 +205,7 @@ func (s *Service) buildClosedLedgerWithOwnership(ctx context.Context, parent *le
 	}
 	openledger.CanonicalSort(pending, salt)
 
-	freshLedger, err := ledger.NewOpenForBuild(parent, closeTime)
+	freshLedger, err := ledger.NewOpenForBuildContext(ctx, parent, closeTime)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create fresh ledger for close: %w", err)
 	}
