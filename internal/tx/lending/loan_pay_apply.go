@@ -250,13 +250,8 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Reverse any impairment before applying the payment.
 	if loan.Flags&LsfLoanImpaired != 0 {
-		if r := reverseImpairment(ctx, loan, vaultKey, vinfo, integral); r != ter.TesSUCCESS {
+		if r := reverseImpairment(ctx, loan, vinfo, integral); r != ter.TesSUCCESS {
 			return r
-		}
-		// Re-read the vault totals after the loss reversal.
-		vinfo, verr = vault.ReadVaultLending(ctx.View, vaultKey)
-		if verr != nil || vinfo == nil {
-			return ter.TefBAD_LEDGER
 		}
 	}
 
@@ -359,7 +354,7 @@ func creditLoanPayment(v *vault.VaultLending, paid, totalDelta lmath.N, rules *a
 // reverseImpairment clears an impaired loan's unrealized loss from the vault and
 // clears the flag, restoring the normal payment schedule (rippled unimpairLoan,
 // invoked at the top of LoanPay::doApply).
-func reverseImpairment(ctx *tx.ApplyContext, loan *loanData, vaultKey keylet.Keylet, v *vault.VaultLending, integral bool) ter.Result {
+func reverseImpairment(ctx *tx.ApplyContext, loan *loanData, v *vault.VaultLending, integral bool) ter.Result {
 	asset := lmath.Asset{Integral: integral}
 	scale := vaultScaleOfForRules(v, integral, ctx.Rules())
 	loss := loanVaultExposureForRules(v, loan, ctx.Rules())
@@ -367,9 +362,7 @@ func reverseImpairment(ctx *tx.ApplyContext, loan *loanData, vaultKey keylet.Key
 		return ter.TefBAD_LEDGER
 	}
 	newLoss := lmath.AdjustImprecise(asset, lendNumForRules(v.LossUnrealized, ctx.Rules()), loss.Negate(), scale)
-	if r := vault.UpdateVaultTotals(ctx, vaultKey, v.AssetsTotal, v.AssetsAvailable, numStr(newLoss)); r != ter.TesSUCCESS {
-		return r
-	}
+	v.LossUnrealized = numStr(newLoss)
 	loan.Flags &^= LsfLoanImpaired
 	if !ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) {
 		prev := loan.PreviousPaymentDueDate

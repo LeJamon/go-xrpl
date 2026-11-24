@@ -37,33 +37,57 @@ func assertAccountingEntriesEqual(t *testing.T, name string, want, got map[strin
 }
 
 func TestLoanPayUnexpectedRoundedTotalRollsBack(t *testing.T) {
-	f := newAccountingAssetFixture(t, false, true, "MPT")
-	loanID, loanKey := createMatrixLoan(t, f, false)
-	f.fundHolding(f.borrower, 1_000)
+	for _, impaired := range []bool{false, true} {
+		t.Run(fmt.Sprintf("impaired=%t", impaired), func(t *testing.T) {
+			f := newAccountingAssetFixture(t, false, true, "MPT")
+			loanID, loanKey := createMatrixLoan(t, f, false)
+			f.fundHolding(f.borrower, 1_000)
 
-	// A fractional opening total is synthetic for an integral asset.
-	fields := decodeLendingEntry(t, f.env, f.vaultKey)
-	fields["AssetsTotal"] = matrixNumber(t, fields, "AssetsTotal").String() + ".25"
-	data, err := binarycodec.EncodeDecodedFields(fields)
-	require.NoError(t, err)
-	require.NoError(t, f.env.Ledger().Update(f.vaultKey, data))
+			if impaired {
+				loan := decodeLendingEntry(t, f.env, loanKey)
+				due, ok := loan["NextPaymentDueDate"].(uint32)
+				if !ok {
+					t.Fatalf("Loan NextPaymentDueDate = %v, want uint32", loan["NextPaymentDueDate"])
+				}
+				f.env.CloseToParentCloseTime(due + 1)
+				manage := lending.NewLoanManage(f.owner.Address, loanID)
+				flags := lending.TfLoanImpair
+				manage.GetCommon().Flags = &flags
+				jtx.RequireTxSuccess(t, f.env.Submit(manage))
+				requireLoanFlags(t, decodeLendingEntry(t, f.env, loanKey), lending.LsfLoanImpaired, true)
+			}
 
-	before := loanSetLedgerState(t, f.env)
-	balance := f.env.Balance(f.borrower)
-	sequence := f.env.Seq(f.borrower)
-	loan := decodeLendingEntry(t, f.env, loanKey)
-	amount := matrixNumber(t, loan, "PeriodicPayment").ToInt64WithMode(state.RoundUpward)
-	result := f.env.SubmitSigned(accountingLoanPay(t, f, loanID, f.amount(amount)))
+			// A fractional opening total is synthetic for an integral asset and
+			// must remain visible through impairment reversal.
+			fields := decodeLendingEntry(t, f.env, f.vaultKey)
+			fields["AssetsTotal"] = matrixNumber(t, fields, "AssetsTotal").String() + ".25"
+			data, err := binarycodec.EncodeDecodedFields(fields)
+			require.NoError(t, err)
+			require.NoError(t, f.env.Ledger().Update(f.vaultKey, data))
 
-	jtx.RequireTxClaimed(t, result, "tecINTERNAL")
-	require.Equal(t, uint64(20), result.Fee)
-	require.Equal(t, balance-result.Fee, f.env.Balance(f.borrower))
-	require.Equal(t, sequence+1, f.env.Seq(f.borrower))
-	require.NotNil(t, result.Metadata)
-	require.Equal(t, result.Code, result.Metadata.TransactionResult.String())
-	require.Len(t, result.Metadata.AffectedNodes, 1)
-	require.NotNil(t, loanSetMetadataNode(result, keylet.Account(f.borrower.AccountID())))
-	requireLoanSetLedgerRollback(t, f, before)
+			before := loanSetLedgerState(t, f.env)
+			balance := f.env.Balance(f.borrower)
+			sequence := f.env.Seq(f.borrower)
+			loan := decodeLendingEntry(t, f.env, loanKey)
+			amount := matrixNumber(t, loan, "PeriodicPayment").ToInt64WithMode(state.RoundUpward)
+			payment := accountingLoanPay(t, f, loanID, f.amount(amount))
+			if impaired {
+				flags := lending.TfLoanLatePayment
+				payment.GetCommon().Flags = &flags
+			}
+			result := f.env.SubmitSigned(payment)
+
+			jtx.RequireTxClaimed(t, result, "tecINTERNAL")
+			require.Equal(t, uint64(20), result.Fee)
+			require.Equal(t, balance-result.Fee, f.env.Balance(f.borrower))
+			require.Equal(t, sequence+1, f.env.Seq(f.borrower))
+			require.NotNil(t, result.Metadata)
+			require.Equal(t, result.Code, result.Metadata.TransactionResult.String())
+			require.Len(t, result.Metadata.AffectedNodes, 1)
+			require.NotNil(t, loanSetMetadataNode(result, keylet.Account(f.borrower.AccountID())))
+			requireLoanSetLedgerRollback(t, f, before)
+		})
+	}
 }
 
 func TestLoanPayAssetPaymentRollbackAndAccounting(t *testing.T) {
