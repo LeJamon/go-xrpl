@@ -115,13 +115,13 @@ func TestXRPLiquidSignedReserveOverflowFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeAccountID: %v", err)
 	}
-	account := &state.AccountRoot{Account: accountAddress, Balance: math.MaxInt64}
+	account := &state.AccountRoot{Account: accountAddress, Balance: uint64(drops.MaxDrops), OwnerCount: 91}
 	view := newMockBaseView()
 	view.data[keylet.Account(accountID).Key], err = state.SerializeAccountRoot(account)
 	if err != nil {
 		t.Fatalf("SerializeAccountRoot: %v", err)
 	}
-	fees := drops.Fees{Reserve: -1}
+	fees := drops.Fees{Reserve: -drops.MaxDrops, Increment: -drops.MaxDrops}
 	if got := XRPLiquidOf(view, accountID, account, 0, fees).Drops(); got != 0 {
 		t.Fatalf("XRPLiquidOf(overflow) = %d, want 0", got)
 	}
