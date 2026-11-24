@@ -8,15 +8,12 @@ import (
 
 	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	rpcpathfind "github.com/LeJamon/go-xrpl/internal/rpc/pathfind"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment/pathfinder"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
-
-// maxSrcCurrencies is the maximum number of explicit source_currencies
-// entries (rippled RPC::Tuning::max_src_cur).
-const maxSrcCurrencies = 18
 
 // ripplePathFindResponse represents the ripple_path_find RPC response.
 // Reference: rippled PathRequest::doUpdate() builds newStatus with these
@@ -297,115 +294,7 @@ func parseSourceCurrencies(
 	if !ok {
 		return nil, nil
 	}
-
-	var entries []json.RawMessage
-	if err := json.Unmarshal(rawSC, &entries); err != nil || len(entries) == 0 || len(entries) > maxSrcCurrencies {
-		return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
-	}
-
-	var sendMaxIssue payment.Issue
-	if sendMax != nil {
-		sendMaxIssue = payment.GetIssue(*sendMax)
-	}
-
-	var srcCurrencies []payment.Issue
-	seen := make(map[payment.Issue]bool)
-	add := func(issue payment.Issue) {
-		if !seen[issue] {
-			seen[issue] = true
-			srcCurrencies = append(srcCurrencies, issue)
-		}
-	}
-
-	for _, raw := range entries {
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &fields); err != nil {
-			return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
-		}
-		rawCurrency, hasCurrency := fields["currency"]
-		rawMPT, hasMPT := fields["mpt_issuance_id"]
-		_, hasIssuer := fields["issuer"]
-		if hasCurrency == hasMPT {
-			return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
-		}
-		if hasMPT && hasIssuer {
-			return nil, rpcerrors.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
-		}
-		if hasMPT {
-			var mptID string
-			if err := json.Unmarshal(rawMPT, &mptID); err != nil {
-				return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
-			}
-			id, ok := pathfinder.ParseSourceMPTID(mptID)
-			if !ok {
-				return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
-			}
-			issue := payment.NewMPTIssue(id)
-			if sendMax != nil {
-				if !issue.Equal(sendMaxIssue) {
-					continue
-				}
-			}
-			add(issue)
-			continue
-		}
-		var currencyValue string
-		if err := json.Unmarshal(rawCurrency, &currencyValue); err != nil || !keylet.IsValidCurrencyCode(currencyValue) {
-			return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
-		}
-		currency := canonCurrency(currencyValue)
-		isXRPCur := currency == "XRP"
-
-		var issuerID [20]byte
-		if rawIssuer, hasIssuer := fields["issuer"]; hasIssuer {
-			var issuerStr string
-			if err := json.Unmarshal(rawIssuer, &issuerStr); err != nil {
-				return nil, rpcerrors.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
-			}
-			id, err := state.DecodeAccountID(issuerStr)
-			if err != nil {
-				return nil, rpcerrors.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
-			}
-			issuerID = id
-		}
-
-		if isXRPCur {
-			if issuerID != ([20]byte{}) {
-				return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
-			}
-		} else if issuerID == ([20]byte{}) {
-			issuerID = srcAccount
-		}
-
-		if sendMax != nil {
-			// If the currencies don't match, ignore the source currency.
-			if sendMaxIssue.IsMPT || keylet.CurrencyBytes(currencyValue) != keylet.CurrencyBytes(sendMaxIssue.Currency) {
-				continue
-			}
-			// If neither issuer is the source and they are not equal, the
-			// source issuer is illegal.
-			if issuerID != srcAccount && sendMaxIssue.Issuer != srcAccount && issuerID != sendMaxIssue.Issuer {
-				return nil, rpcerrors.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
-			}
-			// If both are the source, use the source; otherwise use the one
-			// that's not the source.
-			if issuerID != srcAccount {
-				add(payment.Issue{Currency: currency, Issuer: issuerID})
-			} else if sendMaxIssue.Issuer != srcAccount {
-				add(payment.Issue{Currency: currency, Issuer: sendMaxIssue.Issuer})
-			} else {
-				add(payment.Issue{Currency: currency, Issuer: srcAccount})
-			}
-			if !isXRPCur {
-				add(payment.Issue{Currency: currency, Issuer: srcAccount})
-			}
-			continue
-		}
-
-		add(payment.Issue{Currency: currency, Issuer: issuerID})
-	}
-
-	return srcCurrencies, nil
+	return rpcpathfind.ParseSourceCurrencies(rawSC, srcAccount, sendMax)
 }
 
 // pathFindLedgerMeta carries the metadata of an explicitly selected ledger,

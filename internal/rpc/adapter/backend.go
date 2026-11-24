@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"reflect"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -28,6 +29,7 @@ type ledgerControl interface {
 	GetCurrentLedgerIndex() uint32
 	GetClosedLedgerIndex() uint32
 	GetValidatedLedgerIndex() uint32
+	GetValidatedLedgerAge() time.Duration
 	IsStandalone() bool
 	GetServerInfo() service.ServerInfo
 	GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint64)

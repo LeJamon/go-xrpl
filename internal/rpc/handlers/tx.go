@@ -177,6 +177,9 @@ func jsonCppUInt32Raw(raw json.RawMessage) (uint32, bool) {
 		}
 		return uint32(number), true
 	case string:
+		if nul := strings.IndexByte(value, 0); nul >= 0 {
+			value = value[:nul]
+		}
 		if strings.HasPrefix(value, "+") {
 			value = strings.TrimPrefix(value, "+")
 		}

@@ -106,7 +106,7 @@ var methodDescriptors = []MethodDescriptor{
 	guest("channel_verify", &ChannelVerifyMethod{}),
 	guest("json", &jsonMethod{}),
 	admin("wallet_propose", &WalletProposeMethod{}),
-	requiring(guest("deposit_authorized", &DepositAuthorizedMethod{}), types.NeedsCurrentLedger),
+	guest("deposit_authorized", &DepositAuthorizedMethod{}),
 	guest("nft_buy_offers", &NftBuyOffersMethod{}),
 	guest("nft_sell_offers", &NftSellOffersMethod{}),
 
@@ -134,7 +134,7 @@ var methodDescriptors = []MethodDescriptor{
 
 	guest("amm_info", &AMMInfoMethod{}),
 	guest("vault_info", &VaultInfoMethod{}),
-	requiring(guest("get_aggregate_price", &GetAggregatePriceMethod{}), types.NeedsCurrentLedger),
+	guest("get_aggregate_price", &GetAggregatePriceMethod{}),
 
 	guest("subscribe", &SubscribeMethod{}),
 	guest("unsubscribe", &UnsubscribeMethod{}),

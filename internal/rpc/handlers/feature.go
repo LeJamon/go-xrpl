@@ -64,7 +64,7 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 
 	f := resolveFeature(request.Feature.value)
 	if f == nil {
-		return nil, rpcerrors.RpcErrorBadFeature("Feature not found: " + request.Feature.value)
+		return nil, rpcerrors.RpcErrorBadFeature("Feature unknown or invalid.")
 	}
 
 	// Admin vote mutation: set or clear a veto on a specific amendment.

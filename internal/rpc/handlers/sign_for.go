@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"math"
 	"sort"
 	"strconv"
@@ -15,6 +13,7 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -29,51 +28,33 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	if rpcErr := rejectDisabledSigning(ctx); rpcErr != nil {
 		return nil, rpcErr
 	}
-	defer func() {
-		result, rpcErr = addSigningDeprecation(result, rpcErr)
-	}()
-
 	setLoadHeavy(ctx)
-	var request struct {
-		signingRequest
-		Account string `json:"account"`
+	fields, rpcErr := rawJSONFields(params)
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
-
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+	rawAccount, present := fields["account"]
+	if !present {
+		return addSigningDeprecation(nil, rpcerrors.RpcErrorMissingField("account"))
+	}
+	account, rpcErr := jsonCppStringValue(rawAccount)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	includeDeprecation := true
+	defer func() {
+		if includeDeprecation {
+			result, rpcErr = addSigningDeprecation(result, rpcErr)
 		}
-	}
-
-	// Validate the signer's account before tx_json, matching rippled's
-	// transactionSignFor order. An unparseable account is srcActMalformed
-	// ("Invalid field 'account'."), not the generic actMalformed.
-	if request.Account == "" {
-		return nil, rpcerrors.RpcErrorMissingField("account")
-	}
-	if !addresscodec.IsValidClassicAddress(request.Account) {
+	}()
+	if !addresscodec.IsValidClassicAddress(account) {
 		return nil, rpcerrors.RpcErrorSrcActMalformed("Invalid field 'account'.")
 	}
-
-	if len(request.TxJson) == 0 {
-		return nil, rpcerrors.RpcErrorMissingField("tx_json")
+	txMap, rpcErr := multisignTxObject(fields["tx_json"])
+	if rpcErr != nil {
+		return nil, rpcErr
 	}
-
-	signatureTargetPresent := jsonFieldPresent(params, "signature_target")
-	signingRole := binarycodec.TransactionRole
-	var txMap map[string]any
-	decoder := json.NewDecoder(bytes.NewReader(request.TxJson))
-	decoder.UseNumber()
-	if err := decoder.Decode(&txMap); err != nil {
-		return nil, rpcerrors.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		return nil, rpcerrors.RpcErrorInvalidParams("Invalid tx_json: expected object")
-	}
-	if txMap == nil {
-		return nil, rpcerrors.RpcErrorExpectedField("tx_json", "object")
-	}
+	rawTarget, signatureTargetPresent := fields["signature_target"]
 
 	// On networks with ID > 1024, sign_for requires tx_json to carry a matching
 	// integral NetworkID, else invalidParams. Unlike sign/submit — which autofill
@@ -107,28 +88,39 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 		}
 	}
 
-	privateKey, publicKey, _, rpcErr := request.signCredentials.deriveKeypair(types.DefaultApiVersion, params)
+	privateKey, publicKey, _, rpcErr := parseCredentialsAndDeriveKeypair(types.DefaultApiVersion, params)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
+	signingRole := binarycodec.TransactionRole
+	var signatureTarget string
 	if signatureTargetPresent {
+		signatureTarget, rpcErr = jsonCppStringValue(rawTarget)
+		if rpcErr != nil {
+			includeDeprecation = false
+			return nil, rpcErr
+		}
 		var valid bool
-		signingRole, valid = signingRoleForTarget(request.SignatureTarget)
+		signingRole, valid = signingRoleForTarget(signatureTarget)
 		if !valid {
-			return nil, rpcerrors.RpcErrorInvalidParams(request.SignatureTarget)
+			if _, err := definitions.Get().FieldHeaderByName(signatureTarget); err != nil {
+				signatureTarget = ""
+			}
+			return nil, rpcerrors.NewRpcError(rpcerrors.RpcINVALID_PARAMS, "invalidParams", "invalidParams", signatureTarget)
 		}
 	}
 	rules := transactionRulesForContext(ctx)
 	if rpcErr := validateSigningTxJSONShape(txMap); rpcErr != nil {
 		return nil, rpcErr
 	}
-	if rpcErr := rejectOnlineSigningWithoutCurrentLedger(ctx.Services, request.Offline.value, ctx.ApiVersion); rpcErr != nil {
+	offline := jsonCppBoolRaw(fields["offline"])
+	if rpcErr := rejectOnlineSigningWithoutCurrentLedger(ctx.Services, offline, ctx.ApiVersion); rpcErr != nil {
 		return nil, rpcErr
 	}
 	if rpcErr := rejectSigningWhenLoaded(ctx.Services, ctx.Role.IsUnlimited()); rpcErr != nil {
 		return nil, rpcErr
 	}
-	if !request.Offline.value && ctx.Services != nil && ctx.Services.Ledger() != nil {
+	if !offline && ctx.Services != nil && ctx.Services.Ledger() != nil {
 		if _, err := ctx.Services.Ledger().GetAccountInfo(ctx.Context, txMap["Account"].(string), "current"); err != nil {
 			if errors.Is(err, svcerr.ErrAccountNotFound) {
 				return nil, rpcerrors.RpcErrorSrcActNotFound("Source account not found.")
@@ -144,7 +136,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	}
 
 	if signatureTargetPresent {
-		nested, targetErr := signatureTargetObject(txMap, request.SignatureTarget)
+		nested, targetErr := signatureTargetObject(txMap, signatureTarget)
 		if targetErr != nil {
 			return nil, targetErr
 		}
@@ -164,7 +156,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	if derivationErr != nil {
 		return nil, rpcInternalError("sign_for: account address derivation failed", derivationErr)
 	}
-	if rpcErr := authorizeSigningKey(ctx, request.Account, derivedAccount, false); rpcErr != nil {
+	if rpcErr := authorizeSigningKey(ctx, account, derivedAccount, false); rpcErr != nil {
 		return nil, rpcErr
 	}
 
@@ -193,12 +185,12 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	// changes the multisigning preimage; the parsed transaction remains the
 	// object that receives the new signer and is flattened below.
 	signature, err := sign.SignTransactionForMultiSignRole(
-		transaction, request.Account, privateKey, signingRole, rules)
+		transaction, account, privateKey, signingRole, rules)
 	if err != nil {
 		return nil, rpcInternalError("sign_for: multisigning payload signing failed", err)
 	}
 
-	canonicalAccount, accountErr := canonicalAccountID(request.Account)
+	canonicalAccount, accountErr := canonicalAccountID(account)
 	if accountErr != nil {
 		return nil, rpcerrors.RpcErrorInvalidParams("Invalid field 'account'.")
 	}
@@ -240,6 +232,18 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (r
 	canonicalMap["hash"] = txHash
 
 	return formatSignResult(signResult{TxMap: canonicalMap, TxBlob: txBlob}, ctx.ApiVersion), nil
+}
+
+func multisignTxObject(raw json.RawMessage) (map[string]any, *rpcerrors.RpcError) {
+	if raw == nil {
+		return nil, rpcerrors.RpcErrorMissingField("tx_json")
+	}
+	value, err := decodeRawJSONValue(raw)
+	object, ok := value.(map[string]any)
+	if err != nil || !ok {
+		return nil, rpcerrors.RpcErrorExpectedField("tx_json", "object")
+	}
+	return object, nil
 }
 
 func integralNetworkID(value any) (uint32, bool) {

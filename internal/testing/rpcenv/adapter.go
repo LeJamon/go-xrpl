@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -126,6 +127,14 @@ func (a *ledgerAdapter) GetValidatedLedgerIndex() uint32 {
 		return 0
 	}
 	return ledgerSeq(a.env.LastClosedLedger())
+}
+
+func (a *ledgerAdapter) GetValidatedLedgerAge() time.Duration {
+	if !a.haveValidated() {
+		return 14 * 24 * time.Hour
+	}
+	seconds := a.env.Now().Unix() - a.env.LastClosedLedger().CloseTime().Unix()
+	return time.Duration(max(seconds, 0)) * time.Second
 }
 
 func (a *ledgerAdapter) AcceptLedger(ctx context.Context) (uint32, error) {
@@ -471,7 +480,27 @@ func (a *ledgerAdapter) getAccountTransactions(ctx context.Context, account stri
 		Validated: true,
 	}
 	transactions := make([]types.AccountTransaction, 0)
-	for sequence := minSequence; sequence <= maxSequence; sequence++ {
+	scanMinSequence, scanMaxSequence := minSequence, maxSequence
+	if marker != nil {
+		// Match rippled's continuation UNION by scanning only the marker ledger
+		// and the direction-specific continuation window. The marker ledger is
+		// retained even when the caller changes the range between pages.
+		if marker.LedgerSeq == 0 || marker.LedgerSeq > closed.Sequence() {
+			return result, nil
+		}
+		if forward {
+			scanMinSequence = marker.LedgerSeq
+			if scanMaxSequence < scanMinSequence {
+				scanMaxSequence = scanMinSequence
+			}
+		} else {
+			scanMaxSequence = marker.LedgerSeq
+			if scanMinSequence > scanMaxSequence {
+				scanMinSequence = scanMaxSequence
+			}
+		}
+	}
+	for sequence := scanMinSequence; sequence <= scanMaxSequence; sequence++ {
 		closed := a.closedLedger(sequence)
 		if closed == nil {
 			continue
@@ -509,7 +538,7 @@ func (a *ledgerAdapter) getAccountTransactions(ctx context.Context, account stri
 		if iterationErr != nil {
 			return nil, iterationErr
 		}
-		if sequence == maxSequence {
+		if sequence == scanMaxSequence {
 			break
 		}
 	}
@@ -532,15 +561,12 @@ func (a *ledgerAdapter) getAccountTransactions(ctx context.Context, account stri
 		for i := range transactions {
 			if transactions[i].LedgerIndex == marker.LedgerSeq && transactions[i].TxnSeq == marker.TxnSeq {
 				start = i
-				if delegate == nil {
-					start++
-				}
 				found = true
 				break
 			}
 		}
 		if !found {
-			return nil, errors.New("rpcenv: account_tx marker not found")
+			return result, nil
 		}
 	}
 	if delegate != nil {
@@ -549,9 +575,9 @@ func (a *ledgerAdapter) getAccountTransactions(ctx context.Context, account stri
 
 	end := min(start+int(limit), len(transactions))
 	result.Transactions = transactions[start:end]
-	if end < len(transactions) && end > start {
-		last := transactions[end-1]
-		result.Marker = &types.AccountTxMarker{LedgerSeq: last.LedgerIndex, TxnSeq: last.TxnSeq}
+	if end < len(transactions) {
+		next := transactions[end]
+		result.Marker = &types.AccountTxMarker{LedgerSeq: next.LedgerIndex, TxnSeq: next.TxnSeq}
 	}
 	return result, nil
 }

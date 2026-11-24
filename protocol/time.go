@@ -5,7 +5,12 @@ import (
 )
 
 const closeTimeISOLayout = "2006-01-02T15:04:05Z"
-const closeTimeHumanLayout = "2006-Jan-02 15:04:05 UTC"
+
+// closeTimeHumanLayout matches rippled's to_string(NetClock::time_point)
+// (include/xrpl/basics/chrono.h): the close time is converted to a
+// nanosecond system_clock time_point before date::format("%Y-%b-%d %T %Z"),
+// so %T always prints nine fractional digits.
+const closeTimeHumanLayout = "2006-Jan-02 15:04:05.000000000 UTC"
 
 // RippleSeconds converts a wall-clock time to seconds since the XRPL epoch.
 // Go's zero time encodes as zero.
@@ -38,10 +43,11 @@ func FormatCloseTimeISO(t time.Time) string {
 }
 
 // FormatCloseTimeHuman formats a ledger close time in the human-readable
-// whole-second form used by XRPL ledger responses.
+// form used by XRPL ledger responses. Close times have whole-second
+// resolution, so any sub-second part is discarded and the fraction is zero.
 func FormatCloseTimeHuman(t time.Time) string {
 	if t.IsZero() {
 		t = FromRippleTime(0)
 	}
-	return t.UTC().Format(closeTimeHumanLayout)
+	return t.UTC().Truncate(time.Second).Format(closeTimeHumanLayout)
 }

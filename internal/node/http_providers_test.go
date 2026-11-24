@@ -117,8 +117,8 @@ func TestPeerUNLInfoSuppressesAdminOnlyCollections(t *testing.T) {
 		sites: []types.ValidatorListSiteInfo{{
 			URI:                "https://vl.example",
 			RefreshIntervalMin: 15,
-			NextRefreshISO:     "2026-Nov-06 12:00:00 UTC",
-			LastRefreshISO:     "2026-Nov-06 11:45:00 UTC",
+			NextRefreshISO:     "2026-Nov-06 12:00:00.000000000 UTC",
+			LastRefreshISO:     "2026-Nov-06 11:45:00.000000000 UTC",
 			LastDisposition:    "accepted",
 			LastDispositionSet: true,
 			LastError:          "transient warning",

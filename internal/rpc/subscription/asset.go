@@ -163,7 +163,7 @@ func parseAsset(raw json.RawMessage, isPays bool) (asset, *rpcerrors.RpcError) {
 			if json.Unmarshal(rawIssuer, &issuer) != nil {
 				return asset{}, issuerErr()
 			}
-			issuerID, ok := parseIssuer(issuer)
+			issuerID, ok := types.ParseIssuer(issuer)
 			if !ok {
 				return asset{}, issuerErr()
 			}
@@ -237,23 +237,6 @@ func jsonStringLike(raw json.RawMessage) (string, bool) {
 	}
 }
 
-func parseIssuer(value string) ([20]byte, bool) {
-	var issuer [20]byte
-	if value == "0" {
-		return issuer, true
-	}
-	if decoded, err := hex.DecodeString(value); err == nil && len(decoded) == len(issuer) {
-		copy(issuer[:], decoded)
-		return issuer, true
-	}
-	_, decoded, err := addresscodec.DecodeClassicAddressToAccountID(value)
-	if err != nil {
-		return [20]byte{}, false
-	}
-	copy(issuer[:], decoded)
-	return issuer, true
-}
-
 func parseDomain(value string, domain *[32]byte) bool {
 	if value == "0" {
 		*domain = [32]byte{}
@@ -310,7 +293,7 @@ func assetFromSpec(spec types.CurrencySpec) (asset, bool) {
 	}
 	canonicalAsset := asset{kind: assetIssue, currency: keylet.CurrencyBytes(currency)}
 	if spec.Issuer != "" {
-		issuer, ok := parseIssuer(spec.Issuer)
+		issuer, ok := types.ParseIssuer(spec.Issuer)
 		if !ok {
 			return asset{}, false
 		}

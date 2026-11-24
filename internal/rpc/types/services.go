@@ -866,6 +866,7 @@ type LedgerSelectionReader interface {
 	GetCurrentLedgerIndex() uint32
 	GetClosedLedgerIndex() uint32
 	GetValidatedLedgerIndex() uint32
+	GetValidatedLedgerAge() time.Duration
 	IsStandalone() bool
 }
 

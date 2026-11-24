@@ -28,12 +28,12 @@ Total: 75 methods.
 | `channel_verify` | guest | none | 1, 2, 3 |
 | `connect` | admin | none | 1, 2, 3 |
 | `consensus_info` | admin | none | 1, 2, 3 |
-| `deposit_authorized` | guest | current ledger | 1, 2, 3 |
+| `deposit_authorized` | guest | none | 1, 2, 3 |
 | `feature` | guest | none | 1, 2, 3 |
 | `fee` | guest | current ledger | 1, 2, 3 |
 | `fetch_info` | admin | none | 1, 2, 3 |
 | `gateway_balances` | guest | none | 1, 2, 3 |
-| `get_aggregate_price` | guest | current ledger | 1, 2, 3 |
+| `get_aggregate_price` | guest | none | 1, 2, 3 |
 | `get_counts` | admin | none | 1, 2, 3 |
 | `json` | guest | none | 1, 2, 3 |
 | `ledger` | guest | none | 1, 2, 3 |

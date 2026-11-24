@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
@@ -54,6 +55,10 @@ func (a *LedgerServiceAdapter) GetClosedLedgerIndex() uint32 {
 // GetValidatedLedgerIndex returns the highest validated ledger index
 func (a *LedgerServiceAdapter) GetValidatedLedgerIndex() uint32 {
 	return a.backend().GetValidatedLedgerIndex()
+}
+
+func (a *LedgerServiceAdapter) GetValidatedLedgerAge() time.Duration {
+	return a.backend().GetValidatedLedgerAge()
 }
 
 // AcceptLedger closes the current open ledger (standalone mode only)

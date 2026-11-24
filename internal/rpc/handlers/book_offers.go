@@ -14,6 +14,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -207,9 +208,8 @@ func validateTakerBookJSON(inner map[string]json.RawMessage, name string) *rpcer
 
 func parseTakerBookAsset(inner map[string]json.RawMessage, isPay bool) (types.Amount, [20]byte, *rpcerrors.RpcError) {
 	if raw, ok := inner["currency"]; ok {
-		var currency string
-		_ = json.Unmarshal(raw, &currency)
-		if !keylet.IsValidCurrencyCode(currency) {
+		currency, ok := types.AssetString(raw)
+		if !ok || !keylet.IsValidCurrencyCode(currency) {
 			if isPay {
 				return types.Amount{}, [20]byte{}, rpcerrors.RpcErrorSrcCurMalformed(
 					"Invalid field 'taker_pays.currency', bad currency.")
@@ -220,8 +220,7 @@ func parseTakerBookAsset(inner map[string]json.RawMessage, isPay bool) (types.Am
 		return types.Amount{Currency: canonCurrency(currency)}, [20]byte{}, nil
 	}
 
-	var value string
-	_ = json.Unmarshal(inner["mpt_issuance_id"], &value)
+	value, _ := types.AssetString(inner["mpt_issuance_id"])
 	id, ok := parseBookMPTID(value)
 	if !ok {
 		field := "taker_gets.mpt_issuance_id"
@@ -259,7 +258,7 @@ func sameBookAsset(a types.Amount, aIssuer [20]byte, b types.Amount, bIssuer [20
 
 // readAndValidateIssuer decodes the issuer field for one side of the book and
 // runs the rippled cross-checks (BookOffers.cpp:98-129 / :131-162). Returns
-// the literal issuer string for downstream callers and the decoded AccountID
+// the canonical issuer string for downstream callers and the decoded AccountID
 // for canonical-form comparisons (e.g. badMarket).
 func readAndValidateIssuer(inner map[string]json.RawMessage, currency string, isPay bool) (string, [20]byte, *rpcerrors.RpcError) {
 	makeErr := rpcerrors.RpcErrorDstIsrMalformed
@@ -276,17 +275,19 @@ func readAndValidateIssuer(inner map[string]json.RawMessage, currency string, is
 		if !isJSONString(rawIssuer) {
 			return "", [20]byte{}, rpcerrors.RpcErrorExpectedField(field, "string")
 		}
-		if err := json.Unmarshal(rawIssuer, &issuerStr); err != nil {
+		issuerStr, ok = types.AssetString(rawIssuer)
+		if !ok {
 			return "", [20]byte{}, rpcerrors.RpcErrorExpectedField(field, "string")
 		}
-		_, idBytes, err := addresscodec.DecodeClassicAddressToAccountID(issuerStr)
-		if err != nil {
+		parsedIssuer, ok := types.ParseIssuer(issuerStr)
+		if !ok {
 			return "", [20]byte{}, makeErr(fmt.Sprintf("Invalid field '%s', bad issuer.", field))
 		}
-		copy(issuerID[:], idBytes)
+		issuerID = parsedIssuer
 		if issuerID == noAccountID {
 			return "", [20]byte{}, makeErr(fmt.Sprintf("Invalid field '%s', bad issuer account one.", field))
 		}
+		issuerStr = state.EncodeAccountIDSafe(issuerID)
 		hasIssuer = true
 	}
 
@@ -315,11 +316,6 @@ func canonCurrency(c string) string {
 	return c
 }
 
-// canonIssuerString returns the issuer string to pass downstream. For XRP
-// currency we forward an empty string regardless of what the user sent
-// (e.g. the canonical xrpAccountAddress); for IOU currency we forward what
-// the user sent verbatim — by the time we get here it's been decoded
-// successfully, so re-encoding round-trip is unnecessary.
 func canonIssuerString(issuer, currency string) string {
 	if isNativeCurrency(currency) {
 		return ""

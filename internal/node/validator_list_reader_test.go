@@ -73,7 +73,7 @@ func TestValidatorsRPCEffectiveTime(t *testing.T) {
 	}{
 		{name: "absent", effective: epoch},
 		{name: "explicit zero", set: true, effective: epoch},
-		{name: "nonzero", set: true, effective: epoch.Add(123 * time.Second), want: "2000-Jan-01 00:02:03 UTC"},
+		{name: "nonzero", set: true, effective: epoch.Add(123 * time.Second), want: "2000-Jan-01 00:02:03.000000000 UTC"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			expiration := epoch.Add(time.Hour)
@@ -107,6 +107,45 @@ func TestValidatorsRPCEffectiveTime(t *testing.T) {
 	}
 }
 
+func TestValidatorsRPCTimestampsPreserveFractionalSeconds(t *testing.T) {
+	currentEffective := time.Date(2026, time.May, 1, 11, 0, 0, 123456789, time.UTC)
+	currentExpiration := time.Date(2026, time.May, 2, 12, 0, 0, 987654321, time.UTC)
+	pendingEffective := time.Date(2026, time.May, 1, 13, 0, 0, 111111111, time.UTC)
+	pendingExpiration := time.Date(2026, time.May, 3, 12, 0, 0, 222222222, time.UTC)
+	projected := publisherInfos([]validatorlist.PublisherInfo{{
+		MasterKey:    [33]byte{1},
+		Status:       validatorlist.StatusAvailable,
+		Sequence:     2,
+		Version:      1,
+		Effective:    currentEffective,
+		EffectiveSet: true,
+		Expiration:   currentExpiration,
+		Remaining: map[uint32]*validatorlist.RemainingInfo{3: {
+			Sequence:     3,
+			Effective:    pendingEffective,
+			EffectiveSet: true,
+			Expiration:   pendingExpiration,
+		}},
+	}})
+
+	var response map[string]any
+	raw := validatorListRPCJSON(t, "validators", httpProviderValidatorList{publishers: projected})
+	require.NoError(t, json.Unmarshal(raw, &response))
+	publishers := response["publisher_lists"].([]any)
+	require.Len(t, publishers, 1)
+	publisher := publishers[0].(map[string]any)
+	require.Equal(t, "2026-May-01 11:00:00.123456789 UTC", publisher["effective"])
+	require.Equal(t, "2026-May-02 12:00:00.987654321 UTC", publisher["expiration"])
+	remaining := publisher["remaining"].([]any)
+	require.Len(t, remaining, 1)
+	next := remaining[0].(map[string]any)
+	require.Equal(t, "2026-May-01 13:00:00.111111111 UTC", next["effective"])
+	require.Equal(t, "2026-May-03 12:00:00.222222222 UTC", next["expiration"])
+
+	summary := response["validator_list"].(map[string]any)
+	require.Equal(t, "2026-May-03 12:00:00.000000000 UTC", summary["expiration"])
+}
+
 func TestSiteInfosProjection(t *testing.T) {
 	got := siteInfos([]validatorlist.SiteInfo{{
 		URI:                "https://a (redirects to https://b)",
@@ -122,7 +161,7 @@ func TestSiteInfosProjection(t *testing.T) {
 
 func TestValidatorListSitesRPC(t *testing.T) {
 	const uri = "https://validators.example/list"
-	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 11, 20, 12, 0, 0, 123456789, time.UTC)
 	agg, err := validatorlist.New(validatorlist.Config{
 		SiteURIs: []string{uri},
 		Clock:    func() time.Time { return now },
@@ -131,15 +170,15 @@ func TestValidatorListSitesRPC(t *testing.T) {
 	reader := &validatorListReader{agg: agg}
 	require.JSONEq(t, `{"validator_sites":[{
 		"uri":"https://validators.example/list", "refresh_interval_min":5,
-		"next_refresh_time":"2026-Nov-20 12:05:00 UTC"
+		"next_refresh_time":"2026-Nov-20 12:05:00.123456789 UTC"
 	}]}`, string(validatorListRPCJSON(t, "validator_list_sites", reader)))
 
 	last := now.Add(time.Hour)
 	agg.UpdateSiteState(uri, last, time.Time{}, "bad response", validatorlist.Malformed, 150, last.Add(150*time.Second))
 	require.JSONEq(t, `{"validator_sites":[{
 		"uri":"https://validators.example/list", "refresh_interval_min":2,
-		"last_refresh_time":"2026-Nov-20 13:00:00 UTC", "last_refresh_status":"invalid",
-		"last_refresh_message":"bad response", "next_refresh_time":"2026-Nov-20 13:02:30 UTC"
+		"last_refresh_time":"2026-Nov-20 13:00:00.123456789 UTC", "last_refresh_status":"invalid",
+		"last_refresh_message":"bad response", "next_refresh_time":"2026-Nov-20 13:02:30.123456789 UTC"
 	}]}`, string(validatorListRPCJSON(t, "validator_list_sites", reader)))
 }
 

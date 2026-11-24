@@ -252,8 +252,30 @@ func TestWebSocketPathFindCreateDoesNotUseLegacyBusyGate(t *testing.T) {
 	_, rpcErr := ws.executePathFind(conn, ctx, types.WebSocketCommand{
 		Params: json.RawMessage(`{"subcommand":"create"}`),
 	})
-	if rpcErr == nil || rpcErr.ErrorString != "invalidParams" || rpcErr.Message != "Missing field 'source_account'." {
+	if rpcErr == nil || rpcErr.ErrorString != "srcActMissing" || rpcErr.Message != "Source account not provided." {
 		t.Fatalf("path_find create error = %v, want field validation after admission", rpcErr)
+	}
+}
+
+func TestWebSocketPathFindCreatePreservesPathRequestFieldErrors(t *testing.T) {
+	const acct = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	for _, test := range []struct {
+		name   string
+		params string
+		code   int
+		token  string
+	}{
+		{name: "case-sensitive source key", params: `{"subcommand":"create","Source_Account":"` + acct + `","destination_account":"` + acct + `","destination_amount":"1000"}`, code: rpcerrors.RpcSRC_ACT_MISSING, token: "srcActMissing"},
+		{name: "container source", params: `{"subcommand":"create","source_account":{},"destination_account":"` + acct + `","destination_amount":"1000"}`, code: rpcerrors.RpcINTERNAL, token: "internal"},
+		{name: "container destination", params: `{"subcommand":"create","source_account":"` + acct + `","destination_account":[],"destination_amount":"1000"}`, code: rpcerrors.RpcINTERNAL, token: "internal"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ws, conn, ctx := newSpecialDispatchHarness(t)
+			_, rpcErr := ws.executePathFind(conn, ctx, types.WebSocketCommand{Params: json.RawMessage(test.params)})
+			if rpcErr == nil || rpcErr.Code != test.code || rpcErr.ErrorString != test.token {
+				t.Fatalf("error = %#v, want %d/%s", rpcErr, test.code, test.token)
+			}
+		})
 	}
 }
 

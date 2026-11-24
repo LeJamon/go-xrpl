@@ -11,9 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-// rippledTimeLayout mirrors rippled's to_string(NetClock::time_point)
-// format `%Y-%b-%d %T %Z` — e.g. "2026-May-18 10:30:00 UTC".
-const rippledTimeLayout = "2006-Jan-02 15:04:05 UTC"
+const rippledTimeLayout = "2006-Jan-02 15:04:05.000000000 UTC"
 
 var _ rpctypes.ValidatorListReader = (*validatorListReader)(nil)
 

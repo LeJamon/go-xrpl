@@ -7,7 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-const maxValidatedLedgerAge = 120 * time.Second
+const MaxValidatedLedgerAge = 120 * time.Second
 
 func ValidatedLedgerStale(info LedgerServerInfo) bool {
 	if !info.HaveValidated || info.ValidatedLedgerCloseTime == 0 {
@@ -15,7 +15,7 @@ func ValidatedLedgerStale(info LedgerServerInfo) bool {
 	}
 	nowRipple := time.Now().Unix() - protocol.RippleEpochUnix
 	age := nowRipple - info.ValidatedLedgerCloseTime
-	return age > int64(maxValidatedLedgerAge/time.Second)
+	return age > int64(MaxValidatedLedgerAge/time.Second)
 }
 
 func CurrentLedgerUnavailable(apiVersion int) *RpcError {
