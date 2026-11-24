@@ -17,7 +17,7 @@ import (
 func TransactionOwnerFunds(
 	txJSON map[string]any,
 	view types.LedgerStateView,
-	reserveBase, reserveInc uint64,
+	reserveBase, reserveInc drops.XRPAmount,
 ) (string, bool, error) {
 	accountID, amount, ok := transactionOwnerFundsInput(txJSON)
 	if !ok {
@@ -37,7 +37,9 @@ func TransactionOwnerFunds(
 		return state.NewMPTAmountWithIssuanceID(funds, "", amount.MPTIssuanceID()).Value(), true, nil
 	}
 
-	funds, err := tx.AccountFundsNoFreezeStrict(view, accountID, amount, reserveBase, reserveInc)
+	funds, err := tx.AccountFundsNoFreezeStrict(view, accountID, amount, drops.Fees{
+		Reserve: reserveBase, Increment: reserveInc,
+	})
 	if err != nil {
 		return "", true, err
 	}
@@ -83,7 +85,7 @@ func transactionOwnerFundsInput(txJSON map[string]any) ([20]byte, state.Amount, 
 	return accountID, amount, true
 }
 
-func reserveSettingsFromLedger(view types.LedgerStateView, fallbackBase, fallbackInc uint64) (uint64, uint64, error) {
+func reserveSettingsFromLedger(view types.LedgerStateView, fallbackBase, fallbackInc uint64) (drops.XRPAmount, drops.XRPAmount, error) {
 	if view == nil {
 		return 0, 0, fmt.Errorf("reserve settings: nil ledger view")
 	}
@@ -91,23 +93,24 @@ func reserveSettingsFromLedger(view types.LedgerStateView, fallbackBase, fallbac
 	if ledger, ok := view.(interface{ Fees() drops.Fees }); ok {
 		fees = ledger.Fees()
 	} else {
+		fallback, ok := tx.ReserveFeesFromUint64(fallbackBase, fallbackInc)
+		if !ok {
+			return 0, 0, fmt.Errorf("reserve settings: reserve exceeds int64")
+		}
 		data, err := view.Read(keylet.Fees())
 		if err != nil {
 			return 0, 0, fmt.Errorf("reserve settings: read FeeSettings: %w", err)
 		}
 		if data == nil {
-			return fallbackBase, fallbackInc, nil
+			return fallback.Reserve, fallback.Increment, nil
 		}
 		settings, err := state.ParseFeeSettings(data)
 		if err != nil {
 			return 0, 0, fmt.Errorf("reserve settings: parse FeeSettings: %w", err)
 		}
-		fees = settings.ApplyTo(drops.Fees{Reserve: drops.XRPAmount(fallbackBase), Increment: drops.XRPAmount(fallbackInc)})
+		fees = settings.ApplyTo(fallback)
 	}
-	if fees.Reserve < 0 || fees.Increment < 0 {
-		return 0, 0, fmt.Errorf("reserve settings: negative XRP reserve")
-	}
-	return uint64(fees.Reserve), uint64(fees.Increment), nil
+	return fees.Reserve, fees.Increment, nil
 }
 
 func parseTransactionAmount(raw any) (state.Amount, bool) {

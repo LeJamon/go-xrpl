@@ -10,6 +10,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
@@ -816,14 +817,14 @@ func proposedOwnerFunds(rawSTTx []byte, view *ledger.Ledger) (string, bool, erro
 	if !amount.IsNative() && amount.Issuer == account {
 		return "", false, nil
 	}
-	var reserveBase, reserveInc uint64
+	fees := drops.Fees{}
 	if amount.IsNative() {
-		_, reserveBase, reserveInc, err = readFeesFromLedgerContext(context.Background(), view)
+		fees, err = FeesFromLedgerStrict(context.Background(), view)
 		if err != nil {
 			return "", true, fmt.Errorf("proposed owner funds: read fees: %w", err)
 		}
 	}
-	funds, err := txcore.AccountFundsNoFreezeStrict(view, accountID, amount, reserveBase, reserveInc)
+	funds, err := txcore.AccountFundsNoFreezeStrict(view, accountID, amount, fees)
 	if err != nil {
 		return "", true, err
 	}

@@ -294,7 +294,7 @@ func (s *XRPEndpointStep) xrpLiquid(sb *PaymentSandbox) int64 {
 // liquidOf is xrpLiquid for the step account's AccountRoot as already read
 // from sb, nil when absent or unreadable. accountRoot is not modified.
 func (s *XRPEndpointStep) liquidOf(sb *PaymentSandbox, accountRoot *state.AccountRoot) int64 {
-	return tx.XRPLiquidOf(sb, s.account, accountRoot, int64(s.reserveReduction), uint64(sb.fees.Reserve), uint64(sb.fees.Increment)).Drops()
+	return tx.XRPLiquidOf(sb, s.account, accountRoot, int64(s.reserveReduction), sb.fees).Drops()
 }
 
 // accountSend transfers XRP between accounts in the sandbox. account is the

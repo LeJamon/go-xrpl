@@ -195,7 +195,7 @@ func buildOfferCreateCross(tb testing.TB) applyFixture {
 	fixture := finish(tb, env, taker, offerbuild.OfferCreate(taker, want, jtx.XRPTxAmountFromXRP(100)).Build())
 	fixture.check = func(t *testing.T, view *ledger.Ledger) {
 		t.Helper()
-		got, err := tx.AccountFundsNoFreezeStrict(view, taker.ID, want, 0, 0)
+		got, err := tx.AccountFundsNoFreezeStrictUnsigned(view, taker.ID, want, 0, 0)
 		if err != nil {
 			t.Fatal(err)
 		}

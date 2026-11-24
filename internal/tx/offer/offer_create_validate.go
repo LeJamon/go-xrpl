@@ -248,7 +248,11 @@ func (o *OfferCreate) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfi
 		}
 		var funds tx.Amount
 		if saTakerGets.IsNative() {
-			funds = tx.XRPLiquidOf(view, accountID, account, 0, config.ReserveBase, config.ReserveIncrement)
+			fees, ok := tx.ReserveFeesFromUint64(config.ReserveBase, config.ReserveIncrement)
+			if !ok {
+				return ter.TecUNFUNDED_OFFER
+			}
+			funds = tx.XRPLiquidOf(view, accountID, account, 0, fees)
 		} else {
 			funds = mptutil.AccountFunds(view, accountID, saTakerGets, true, config.ReserveBase, config.ReserveIncrement)
 		}

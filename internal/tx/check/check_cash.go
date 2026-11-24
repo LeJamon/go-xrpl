@@ -311,7 +311,7 @@ func checkCashSourceFunds(view tx.ReadOnlyLedgerView, config tx.EngineConfig, so
 	if mptutil.CanTransferLPToken(view, sourceID, sourceID, issuerID) != ter.TesSUCCESS {
 		return ter.TecPATH_PARTIAL
 	}
-	funds, err := tx.AccountFundsNoFreezeStrict(view, sourceID, value, config.ReserveBase, config.ReserveIncrement)
+	funds, err := tx.AccountFundsNoFreezeStrictUnsigned(view, sourceID, value, config.ReserveBase, config.ReserveIncrement)
 	if err != nil {
 		return ter.TefINTERNAL
 	}

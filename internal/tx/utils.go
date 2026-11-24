@@ -3,8 +3,10 @@ package tx
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -276,18 +278,33 @@ func accountWithOwnerCountHook(view ReadOnlyLedgerView, accountID [20]byte, acco
 // XRPLiquid returns the amount of XRP an account can spend (balance minus reserve).
 // Reference: rippled ledger/View.cpp xrpLiquid()
 // ownerCountAdj allows adjusting the owner count (e.g., +1 to account for a pending new object).
-func XRPLiquid(view ReadOnlyLedgerView, accountID [20]byte, ownerCountAdj int64, reserveBase, reserveIncrement uint64) Amount {
+func XRPLiquid(view ReadOnlyLedgerView, accountID [20]byte, ownerCountAdj int64, fees drops.Fees) Amount {
 	account, err := ReadAccountRoot(view, accountID)
 	if err != nil {
 		return NewXRPAmount(0)
 	}
-	return XRPLiquidOf(view, accountID, account, ownerCountAdj, reserveBase, reserveIncrement)
+	return XRPLiquidOf(view, accountID, account, ownerCountAdj, fees)
+}
+
+// ReserveFeesFromUint64 converts a legacy unsigned reserve schedule to the
+// signed ledger representation, rejecting values outside XRPAmount's range.
+func ReserveFeesFromUint64(reserveBase, reserveIncrement uint64) (drops.Fees, bool) {
+	if reserveBase > uint64(math.MaxInt64) || reserveIncrement > uint64(math.MaxInt64) {
+		return drops.Fees{}, false
+	}
+	return drops.Fees{
+		Reserve: drops.XRPAmount(reserveBase), Increment: drops.XRPAmount(reserveIncrement),
+	}, true
 }
 
 // XRPLiquidOf is XRPLiquid for an AccountRoot the caller already read from
-// view; account is not modified.
-func XRPLiquidOf(view ReadOnlyLedgerView, accountID [20]byte, account *state.AccountRoot, ownerCountAdj int64, reserveBase, reserveIncrement uint64) Amount {
+// view; account is not modified. Reserve values come from the signed ledger
+// fee schedule so modern negative fields are preserved.
+func XRPLiquidOf(view ReadOnlyLedgerView, accountID [20]byte, account *state.AccountRoot, ownerCountAdj int64, fees drops.Fees) Amount {
 	if account == nil {
+		return NewXRPAmount(0)
+	}
+	if account.Balance > uint64(math.MaxInt64) {
 		return NewXRPAmount(0)
 	}
 	balance := NewXRPAmount(int64(account.Balance))
@@ -295,6 +312,9 @@ func XRPLiquidOf(view ReadOnlyLedgerView, accountID [20]byte, account *state.Acc
 		balance = hook.BalanceHook(accountID, [20]byte{}, balance)
 	}
 	if account.IsPseudoAccount() {
+		if balance.Drops() < 0 {
+			return NewXRPAmount(0)
+		}
 		return balance
 	}
 	if ownerCountAdj > math.MaxInt || ownerCountAdj < math.MinInt {
@@ -306,20 +326,52 @@ func XRPLiquidOf(view ReadOnlyLedgerView, accountID [20]byte, account *state.Acc
 	}
 	ownerCount := ConfineOwnerCount(ownerCounts(&hooked).effective(), int(ownerCountAdj))
 	accountCount := reserveAccountCount(&hooked, 0)
-	reserve, ok := checkedAccountReserve(EngineConfig{ReserveBase: reserveBase, ReserveIncrement: reserveIncrement}, ownerCount, accountCount)
+	reserve, ok := checkedFeeReserve(fees, ownerCount, accountCount)
 	if !ok {
 		return NewXRPAmount(0)
 	}
-	if spendable := balance.Drops(); spendable > 0 && uint64(spendable) > reserve {
-		return NewXRPAmount(spendable - int64(reserve))
+	liquid, ok := liquidXRP(balance.Drops(), reserve)
+	if !ok {
+		return NewXRPAmount(0)
 	}
-	return NewXRPAmount(0)
+	return NewXRPAmount(liquid)
+}
+
+func checkedFeeReserve(fees drops.Fees, ownerCount, accountCount uint32) (drops.XRPAmount, bool) {
+	if fees.Reserve >= 0 && fees.Increment >= 0 {
+		reserve, ok := checkedAccountReserve(EngineConfig{
+			ReserveBase:      uint64(fees.Reserve),
+			ReserveIncrement: uint64(fees.Increment),
+		}, ownerCount, accountCount)
+		if !ok || reserve > uint64(math.MaxInt64) {
+			return 0, false
+		}
+		return drops.XRPAmount(reserve), true
+	}
+	var reserve, owner, base big.Int
+	owner.Mul(big.NewInt(int64(fees.Increment)), new(big.Int).SetUint64(uint64(ownerCount)))
+	base.Mul(big.NewInt(int64(fees.Reserve)), new(big.Int).SetUint64(uint64(accountCount)))
+	reserve.Add(&owner, &base)
+	if !reserve.IsInt64() {
+		return 0, false
+	}
+	return drops.XRPAmount(reserve.Int64()), true
+}
+
+func liquidXRP(balance int64, reserve drops.XRPAmount) (int64, bool) {
+	if balance <= int64(reserve) {
+		return 0, true
+	}
+	if reserve < 0 && balance > math.MaxInt64+int64(reserve) {
+		return 0, false
+	}
+	return balance - int64(reserve), true
 }
 
 // AccountFundsNoFreezeStrict returns owner funds without applying freeze
 // rules. Missing account or trust-line entries are a zero balance; storage,
 // decoding, and reserve-arithmetic failures are returned to the caller.
-func AccountFundsNoFreezeStrict(view ReadOnlyLedgerView, accountID [20]byte, amount Amount, reserveBase, reserveIncrement uint64) (Amount, error) {
+func AccountFundsNoFreezeStrict(view ReadOnlyLedgerView, accountID [20]byte, amount Amount, fees drops.Fees) (Amount, error) {
 	if view == nil {
 		return Amount{}, fmt.Errorf("account funds: nil ledger view")
 	}
@@ -331,25 +383,27 @@ func AccountFundsNoFreezeStrict(view ReadOnlyLedgerView, accountID [20]byte, amo
 		if account == nil {
 			return NewXRPAmount(0), nil
 		}
-		accountWithHook := accountWithOwnerCountHook(view, accountID, account)
-		ownerCount := accountWithHook.OwnerCount
+		if account.Balance > uint64(math.MaxInt64) {
+			return Amount{}, fmt.Errorf("account funds: balance exceeds int64")
+		}
 		if account.IsPseudoAccount() {
 			return NewXRPAmount(int64(account.Balance)), nil
 		}
-		reserve, ok := AccountReserveForView(view, EngineConfig{
-			ReserveBase: reserveBase, ReserveIncrement: reserveIncrement,
-		}, &accountWithHook, ownerCount)
+		accountWithHook := accountWithOwnerCountHook(view, accountID, account)
+		if accountWithHook.SponsoredOwnerCount > accountWithHook.OwnerCount {
+			return Amount{}, fmt.Errorf("account funds: invalid reserve counters")
+		}
+		ownerCount := ownerCounts(&accountWithHook).effective()
+		accountCount := reserveAccountCount(&accountWithHook, 0)
+		reserve, ok := checkedFeeReserve(fees, ownerCount, accountCount)
 		if !ok {
 			return Amount{}, fmt.Errorf("account funds: invalid reserve counters")
 		}
-		if account.Balance <= reserve {
-			return NewXRPAmount(0), nil
-		}
-		liquid := account.Balance - reserve
-		if liquid > math.MaxInt64 {
+		liquid, ok := liquidXRP(int64(account.Balance), reserve)
+		if !ok {
 			return Amount{}, fmt.Errorf("account funds: liquid XRP exceeds int64")
 		}
-		return NewXRPAmount(int64(liquid)), nil
+		return NewXRPAmount(liquid), nil
 	}
 
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
@@ -374,4 +428,18 @@ func AccountFundsNoFreezeStrict(view ReadOnlyLedgerView, accountID [20]byte, amo
 		return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer), nil
 	}
 	return state.NewIssuedAmountFromValue(balance.IOU().Mantissa(), balance.IOU().Exponent(), amount.Currency, amount.Issuer), nil
+}
+
+// AccountFundsNoFreezeStrictUnsigned preserves the legacy uint64 boundary for
+// callers that have not yet migrated from EngineConfig. Reserve conversion is
+// checked only for native amounts; issued-asset queries do not use reserves.
+func AccountFundsNoFreezeStrictUnsigned(view ReadOnlyLedgerView, accountID [20]byte, amount Amount, reserveBase, reserveIncrement uint64) (Amount, error) {
+	if !amount.IsNative() {
+		return AccountFundsNoFreezeStrict(view, accountID, amount, drops.Fees{})
+	}
+	fees, ok := ReserveFeesFromUint64(reserveBase, reserveIncrement)
+	if !ok {
+		return Amount{}, fmt.Errorf("account funds: reserve exceeds int64")
+	}
+	return AccountFundsNoFreezeStrict(view, accountID, amount, fees)
 }

@@ -339,6 +339,18 @@ func TestLedgerOwnerFundsUsesTargetLedgerReservesIncludingZero(t *testing.T) {
 	entry = resultToMap(t, result)["ledger"].(map[string]any)["transactions"].([]any)[0].(map[string]any)
 	assert.Equal(t, "1000000000", entry["owner_funds"])
 
+	negativeFeeData, err := state.SerializeFeeSettings(&state.FeeSettings{
+		XRPFeesMode:           true,
+		ReserveBaseDrops:      -10,
+		ReserveIncrementDrops: 0,
+	})
+	require.NoError(t, err)
+	view.entries[keylet.Fees()] = negativeFeeData
+	result, rpcErr = (&handlers.LedgerMethod{}).Handle(ctx, paramsJSON)
+	require.Nil(t, rpcErr)
+	entry = resultToMap(t, result)["ledger"].(map[string]any)["transactions"].([]any)[0].(map[string]any)
+	assert.Equal(t, "1000000010", entry["owner_funds"])
+
 	partialFeeData, err := binarycodec.EncodeBytes(map[string]any{
 		"LedgerEntryType":       "FeeSettings",
 		"Flags":                 uint32(0),

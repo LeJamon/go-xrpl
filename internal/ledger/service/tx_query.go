@@ -364,35 +364,19 @@ func mayPublishProposedTransaction(flags uint32) bool {
 }
 
 func readFeesFromLedger(l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64) {
-	baseFee, reserveBase, reserveIncrement, err := readFeesFromLedgerContext(context.Background(), l)
-	if err == nil {
-		return baseFee, reserveBase, reserveIncrement
-	}
-	return effectiveFeesFromLedger(l)
-}
-
-func effectiveFeesFromLedger(l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64) {
-	fees := drops.DefaultFees()
-	if l != nil {
+	fees, err := FeesFromLedgerStrict(context.Background(), l)
+	if err != nil {
 		fees = l.Fees()
 	}
 	return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment)
 }
 
 func readFeesFromLedgerContext(ctx context.Context, l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64, err error) {
-	if l != nil {
-		data, err := l.ReadContext(ctx, keylet.Fees())
-		if err != nil {
-			return 0, 0, 0, err
-		}
-		if data != nil {
-			if _, err := state.ParseFeeSettings(data); err != nil {
-				return 0, 0, 0, fmt.Errorf("parse FeeSettings: %w", err)
-			}
-		}
+	fees, err := FeesFromLedgerStrict(ctx, l)
+	if err != nil {
+		return 0, 0, 0, err
 	}
-	baseFee, reserveBase, reserveIncrement = effectiveFeesFromLedger(l)
-	return baseFee, reserveBase, reserveIncrement, nil
+	return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
 }
 
 // FeesFromLedger returns the effective fees and reserves for this ledger.
@@ -400,11 +384,22 @@ func FeesFromLedger(l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement ui
 	return readFeesFromLedger(l)
 }
 
-// FeesFromLedgerStrict returns the fee settings carried by l while preserving
-// storage and decoding failures. A missing FeeSettings entry uses the ledger's
-// configured fee values.
-func FeesFromLedgerStrict(l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64, err error) {
-	return readFeesFromLedgerContext(context.Background(), l)
+// FeesFromLedgerStrict returns the ledger's effective schedule and checks that
+// its FeeSettings entry is readable.
+func FeesFromLedgerStrict(ctx context.Context, l *ledger.Ledger) (drops.Fees, error) {
+	if l == nil {
+		return drops.DefaultFees(), nil
+	}
+	data, err := l.ReadContext(ctx, keylet.Fees())
+	if err != nil {
+		return drops.Fees{}, err
+	}
+	if data != nil {
+		if _, err := state.ParseFeeSettings(data); err != nil {
+			return drops.Fees{}, fmt.Errorf("parse FeeSettings: %w", err)
+		}
+	}
+	return l.Fees(), nil
 }
 
 // GetCurrentFees returns the current fee settings read from the FeeSettings

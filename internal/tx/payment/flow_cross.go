@@ -459,7 +459,7 @@ func AccountFundsInSandbox(sb *PaymentSandbox, accountID [20]byte, amount tx.Amo
 	if amount.IsMPT() || amount.IsNative() {
 		return accountFundsForCross(sb, accountID, amount, fhZeroIfFrozen, parentCloseTime)
 	}
-	rawBalance := mptutil.AccountFunds(sb, accountID, amount, fhZeroIfFrozen, uint64(sb.fees.Reserve), uint64(sb.fees.Increment))
+	rawBalance := mptutil.AccountFunds(sb, accountID, amount, fhZeroIfFrozen, 0, 0)
 
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
@@ -469,8 +469,11 @@ func AccountFundsInSandbox(sb *PaymentSandbox, accountID [20]byte, amount tx.Amo
 }
 
 func accountFundsForCross(view *PaymentSandbox, accountID [20]byte, amount tx.Amount, zeroIfFrozen bool, parentCloseTime uint32) (tx.Amount, ter.Result) {
+	if amount.IsNative() {
+		return tx.XRPLiquid(view, accountID, 0, view.fees), ter.TesSUCCESS
+	}
 	if !amount.IsMPT() {
-		return mptutil.AccountFunds(view, accountID, amount, zeroIfFrozen, uint64(view.fees.Reserve), uint64(view.fees.Increment)), ter.TesSUCCESS
+		return mptutil.AccountFunds(view, accountID, amount, zeroIfFrozen, 0, 0), ter.TesSUCCESS
 	}
 	id, ok := decodeMPTID(amount.MPTIssuanceID())
 	if !ok {

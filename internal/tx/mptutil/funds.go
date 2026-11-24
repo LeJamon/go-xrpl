@@ -104,7 +104,11 @@ func issueFromField(field entry.IssueValue) (tx.Asset, bool) {
 // Reference: rippled ledger/View.h accountFunds()
 func AccountFunds(view tx.ReadOnlyLedgerView, accountID [20]byte, amount tx.Amount, fhZeroIfFrozen bool, reserveBase, reserveIncrement uint64) tx.Amount {
 	if amount.IsNative() {
-		return tx.XRPLiquid(view, accountID, 0, reserveBase, reserveIncrement)
+		fees, ok := tx.ReserveFeesFromUint64(reserveBase, reserveIncrement)
+		if !ok {
+			return tx.NewXRPAmount(0)
+		}
+		return tx.XRPLiquid(view, accountID, 0, fees)
 	}
 
 	issuerID, err := state.DecodeAccountID(amount.Issuer)

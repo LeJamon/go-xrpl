@@ -612,7 +612,7 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 	// Funding is determined by the asset the offer owner gives (TakerGets),
 	// which is the offer's authoritative balance and freeze context.
 	if offerTakerGets.IsNative {
-		funds := tx.XRPLiquid(sb, offerOwner, 0, uint64(sb.fees.Reserve), uint64(sb.fees.Increment))
+		funds := tx.XRPLiquid(sb, offerOwner, 0, sb.fees)
 		return NewXRPEitherAmount(funds.Drops()), nil
 	}
 
