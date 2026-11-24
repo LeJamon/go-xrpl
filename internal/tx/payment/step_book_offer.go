@@ -221,8 +221,7 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 		// expired hybrid offers remain usable in the open book.
 		// Reference: rippled OfferStream.cpp lines 294-303
 		if s.offerOutOfDomain(sb, offer) {
-			ofrsToRm[offerKey] = true
-			s.recordPermRm(offerKey)
+			s.removeSteppedOffer(sb, offer, offerKey, offerOwner, ofrsToRm)
 			continue
 		}
 		groomed, err := s.groomUnfundedOffer(sb, afView, offer, offerKey, offerOwner, ofrsToRm)

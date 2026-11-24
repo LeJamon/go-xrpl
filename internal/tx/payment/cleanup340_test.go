@@ -52,7 +52,7 @@ func TestBookCleanup340CorruptDomainMembership(t *testing.T) {
 				}
 				preserved, err := f.sandbox.Read(keylet.Offer(f.owner, 1))
 				require.NoError(t, err)
-				require.NotNil(t, preserved)
+				require.Equal(t, enabled || missing, preserved != nil)
 			})
 		}
 	}
