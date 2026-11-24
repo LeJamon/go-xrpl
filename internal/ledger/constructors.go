@@ -193,7 +193,7 @@ func newFromHeaderContext(
 	if err != nil {
 		return nil, fmt.Errorf("failed to load amendment rules: %w", err)
 	}
-	settings, err := readFeeSettings(ctx, immutableState)
+	settings, err := ReadFeeSettings(ctx, immutableState)
 	if err != nil {
 		return nil, err
 	}
@@ -245,12 +245,24 @@ func NewOpenWithHeader(
 	}, nil
 }
 
-func readFeeSettings(ctx context.Context, stateMap *shamap.SHAMap) (*state.FeeSettings, error) {
-	item, found, err := stateMap.GetContext(ctx, keylet.Fees().Key)
+// ReadFeeSettings loads the singleton FeeSettings entry from a state map.
+// A well-formed entry of another ledger type at the fee key is treated as
+// absent, matching keylet::feeSettings() lookup semantics. Malformed type
+// headers and malformed FeeSettings payloads remain errors.
+func ReadFeeSettings(ctx context.Context, stateMap *shamap.SHAMap) (*state.FeeSettings, error) {
+	feesKey := keylet.Fees()
+	item, found, err := stateMap.GetContext(ctx, feesKey.Key)
 	if err != nil {
 		return nil, fmt.Errorf("read fee settings: %w", err)
 	}
 	if !found {
+		return nil, nil
+	}
+	typ, err := state.DecodeType(item.Data())
+	if err != nil {
+		return nil, fmt.Errorf("decode fee settings type: %w", err)
+	}
+	if typ != feesKey.Type {
 		return nil, nil
 	}
 	settings, err := state.ParseFeeSettings(item.Data())

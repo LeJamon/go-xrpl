@@ -109,6 +109,47 @@ func TestFromGenesisRejectsMalformedAmendments(t *testing.T) {
 	}
 }
 
+func TestReadFeeSettingsTypeValidation(t *testing.T) {
+	feesKey := keylet.Fees()
+	typeHeader := func(k keylet.Keylet) []byte {
+		return []byte{0x11, byte(k.Type >> 8), byte(k.Type)}
+	}
+	tests := []struct {
+		name    string
+		data    []byte
+		wantErr bool
+	}{
+		{name: "missing", data: nil},
+		{name: "wrong entry type", data: append(typeHeader(keylet.Amendments()), 0)},
+		{name: "malformed type header", data: []byte{0x01, 0x00, 0x00}, wantErr: true},
+		{name: "malformed fee settings", data: append(typeHeader(feesKey), 0), wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stateMap := shamap.New(shamap.TypeState)
+			if test.data != nil {
+				if err := stateMap.Put(feesKey.Key, test.data); err != nil {
+					t.Fatalf("seed fee settings: %v", err)
+				}
+			}
+			settings, err := ReadFeeSettings(context.Background(), stateMap)
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("ReadFeeSettings error = nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ReadFeeSettings: %v", err)
+			}
+			if settings != nil {
+				t.Fatalf("ReadFeeSettings = %+v, want absent", settings)
+			}
+		})
+	}
+}
+
 func TestNewOpenWithHeaderDetachesReplayInputs(t *testing.T) {
 	stateMap := shamap.New(shamap.TypeState)
 	txMap := shamap.New(shamap.TypeTransaction)

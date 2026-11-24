@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -127,9 +128,9 @@ func (s *SetFee) hasModernFields() bool {
 
 type parsedFeeFields struct {
 	baseFee               uint64
-	baseFeeDrops          uint64
-	reserveBaseDrops      uint64
-	reserveIncrementDrops uint64
+	baseFeeDrops          drops.XRPAmount
+	reserveBaseDrops      drops.XRPAmount
+	reserveIncrementDrops drops.XRPAmount
 }
 
 // parsedOrError returns the memoised numeric values, parsing on first call.
@@ -287,9 +288,10 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) ter.Result {
 	return ter.TesSUCCESS
 }
 
-// parseDropsAmount parses a decimal drops amount string to uint64.
-func parseDropsAmount(s string) (uint64, error) {
-	return strconv.ParseUint(s, 10, 64)
+// parseDropsAmount parses a signed decimal drops amount string.
+func parseDropsAmount(s string) (drops.XRPAmount, error) {
+	v, err := strconv.ParseInt(s, 10, 64)
+	return drops.XRPAmount(v), err
 }
 
 // parseHexUint64 parses a hex string to uint64.

@@ -45,7 +45,7 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 	if err != nil {
 		return fmt.Errorf("failed to load amendment rules: %w", err)
 	}
-	settings, err := readFeeSettings(context.Background(), stateMap)
+	settings, err := ReadFeeSettings(context.Background(), stateMap)
 	if err != nil {
 		return fmt.Errorf("load closing ledger fees: %w", err)
 	}

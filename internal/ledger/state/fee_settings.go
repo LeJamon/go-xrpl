@@ -15,10 +15,11 @@ var ErrInvalidFeeSettings = errors.New("invalid FeeSettings field combination")
 // This entry stores the current network fee configuration.
 // Reference: rippled LedgerFormats.h and Fees.h
 type FeeSettings struct {
-	// Modern fee fields (XRPFees amendment)
-	BaseFeeDrops          uint64 // Base transaction fee in drops
-	ReserveBaseDrops      uint64 // Account reserve base in drops
-	ReserveIncrementDrops uint64 // Owner reserve increment in drops
+	// Modern fee fields (XRPFees amendment). Rippled stores these as native
+	// STAmount values, so the sign is part of the persisted representation.
+	BaseFeeDrops          drops.XRPAmount // Base transaction fee in drops
+	ReserveBaseDrops      drops.XRPAmount // Account reserve base in drops
+	ReserveIncrementDrops drops.XRPAmount // Owner reserve increment in drops
 
 	// Legacy fee fields (pre-XRPFees amendment)
 	BaseFee           uint64 // Base fee (legacy)
@@ -83,7 +84,7 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 	for _, amount := range []struct {
 		name    string
 		value   func() (ledgerfields.AmountValue, error)
-		dst     *uint64
+		dst     *drops.XRPAmount
 		present *bool
 	}{
 		{"BaseFeeDrops", decoded.GetBaseFeeDrops, &fee.BaseFeeDrops, &fee.HasBaseFeeDrops},
@@ -110,7 +111,7 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 		if err != nil {
 			return nil, err
 		}
-		drops, err := nonNegativeNativeDrops("FeeSettings."+amount.name, decodedAmount)
+		drops, err := signedNativeDrops("FeeSettings."+amount.name, decodedAmount)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrInvalidFeeSettings, err)
 		}
@@ -136,6 +137,13 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 	fee.feeFieldsPresent = modern || legacy || hasReferenceFeeUnits
 
 	return fee, nil
+}
+
+func signedNativeDrops(field string, amount Amount) (drops.XRPAmount, error) {
+	if !amount.IsNative() {
+		return 0, fmt.Errorf("%s: expected native XRP amount", field)
+	}
+	return drops.XRPAmount(amount.Drops()), nil
 }
 
 // SerializeFeeSettings serializes a FeeSettings to binary format. The active
@@ -206,27 +214,27 @@ func SerializeFeeSettings(fee *FeeSettings) ([]byte, error) {
 }
 
 // GetBaseFee returns the base transaction fee in drops.
-func (f *FeeSettings) GetBaseFee() uint64 {
+func (f *FeeSettings) GetBaseFee() drops.XRPAmount {
 	if f.XRPFeesMode {
 		return f.BaseFeeDrops
 	}
-	return f.BaseFee
+	return drops.XRPAmount(f.BaseFee)
 }
 
 // GetReserveBase returns the account reserve base in drops.
-func (f *FeeSettings) GetReserveBase() uint64 {
+func (f *FeeSettings) GetReserveBase() drops.XRPAmount {
 	if f.XRPFeesMode {
 		return f.ReserveBaseDrops
 	}
-	return uint64(f.ReserveBase)
+	return drops.XRPAmount(f.ReserveBase)
 }
 
 // GetReserveIncrement returns the owner reserve increment in drops.
-func (f *FeeSettings) GetReserveIncrement() uint64 {
+func (f *FeeSettings) GetReserveIncrement() drops.XRPAmount {
 	if f.XRPFeesMode {
 		return f.ReserveIncrementDrops
 	}
-	return uint64(f.ReserveIncrement)
+	return drops.XRPAmount(f.ReserveIncrement)
 }
 
 // FeesForView returns the view's effective schedule, including inherited reserve fields.
@@ -255,13 +263,13 @@ func (f *FeeSettings) ApplyTo(fees drops.Fees) drops.Fees {
 		return fees
 	}
 	if f.HasBaseFeeDrops {
-		fees.Base = drops.XRPAmount(f.BaseFeeDrops)
+		fees.Base = f.BaseFeeDrops
 	}
 	if f.HasReserveBaseDrops {
-		fees.Reserve = drops.XRPAmount(f.ReserveBaseDrops)
+		fees.Reserve = f.ReserveBaseDrops
 	}
 	if f.HasReserveIncrementDrops {
-		fees.Increment = drops.XRPAmount(f.ReserveIncrementDrops)
+		fees.Increment = f.ReserveIncrementDrops
 	}
 	if f.HasBaseFee {
 		fees.Base = drops.XRPAmount(f.BaseFee)
@@ -282,9 +290,9 @@ func (f *FeeSettings) Fees() drops.Fees {
 		return drops.DefaultFees()
 	}
 	return drops.Fees{
-		Base:      drops.XRPAmount(f.GetBaseFee()),
-		Reserve:   drops.XRPAmount(f.GetReserveBase()),
-		Increment: drops.XRPAmount(f.GetReserveIncrement()),
+		Base:      f.GetBaseFee(),
+		Reserve:   f.GetReserveBase(),
+		Increment: f.GetReserveIncrement(),
 	}
 }
 
