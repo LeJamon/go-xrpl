@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -265,7 +265,11 @@ func ReadFeeSettings(ctx context.Context, stateMap *shamap.SHAMap) (*state.FeeSe
 		return nil, fmt.Errorf("decode fee settings type: %w", err)
 	}
 	if typ != feesKey.Type {
-		if _, err := binarycodec.DecodeBytes(item.Data()); err != nil {
+		other := entry.New(typ)
+		if other == nil {
+			return nil, fmt.Errorf("unsupported ledger entry type %d at fee settings key", typ)
+		}
+		if err := other.Decode(item.Data()); err != nil {
 			return nil, fmt.Errorf("decode fee settings entry: %w", err)
 		}
 		return nil, nil

@@ -128,6 +128,7 @@ func TestReadFeeSettingsTypeValidation(t *testing.T) {
 	}{
 		{name: "missing", data: nil},
 		{name: "wrong entry type valid SLE", data: validAccountRoot},
+		{name: "wrong entry type missing required fields", data: typeHeader(keylet.Amendments()), wantErr: true},
 		{name: "wrong entry type malformed SLE", data: append(typeHeader(keylet.Amendments()), 0), wantErr: true},
 		{name: "unknown entry type", data: []byte{0x11, 0xff, 0xff}, wantErr: true},
 		{name: "malformed type header", data: []byte{0x01, 0x00, 0x00}, wantErr: true},
