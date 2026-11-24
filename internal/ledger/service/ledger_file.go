@@ -205,15 +205,6 @@ func (s *Service) loadLedgerJSON(
 		}
 	}
 
-	rules, err := ledger.LoadAmendmentsFromSHAMapContext(ctx, stateMap)
-	if err != nil {
-		return nil, fmt.Errorf("load amendment rules: %w", err)
-	}
-	fees, err := storedLedgerFees(ctx, stateMap, rules.XRPFeesEnabled(), s.configuredFees)
-	if err != nil {
-		return nil, fmt.Errorf("load ledger fees: %w", err)
-	}
-
 	txMap := shamap.New(shamap.TypeTransaction)
 	txHash, err := txMap.Hash()
 	if err != nil {
@@ -236,7 +227,7 @@ func (s *Service) loadLedgerJSON(
 	}
 	hdr.Hash = header.CalculateHash(hdr)
 
-	loaded, err := ledger.NewClosedFromHeaderContext(ctx, hdr, stateMap, txMap, fees)
+	loaded, err := ledger.NewClosedFromHeaderContext(ctx, hdr, stateMap, txMap, s.configuredFees)
 	if err != nil {
 		return nil, fmt.Errorf("construct loaded ledger: %w", err)
 	}

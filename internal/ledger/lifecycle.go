@@ -1,14 +1,13 @@
 package ledger
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/negativeunl"
 	"github.com/LeJamon/go-xrpl/internal/ledger/skiplist"
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
@@ -46,17 +45,9 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 	if err != nil {
 		return fmt.Errorf("failed to load amendment rules: %w", err)
 	}
-	fees := l.fees
-	item, found, err := stateMap.Get(keylet.Fees().Key)
+	settings, err := readFeeSettings(context.Background(), stateMap)
 	if err != nil {
-		return fmt.Errorf("read closing ledger fee settings: %w", err)
-	}
-	if found {
-		settings, err := state.ParseFeeSettings(item.Data())
-		if err != nil {
-			return fmt.Errorf("parse closing ledger fee settings: %w", err)
-		}
-		fees = settings.ApplyTo(fees)
+		return fmt.Errorf("load closing ledger fees: %w", err)
 	}
 	if err := stateMap.SetImmutable(); err != nil {
 		return fmt.Errorf("failed to make state map immutable: %w", err)
@@ -86,7 +77,7 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 	l.txMap = txMap
 	l.header = hdr
 	l.rules = rules
-	l.fees = fees
+	l.fees = settings.ApplyTo(l.fees)
 	l.state = StateClosed
 	l.writable = false
 

@@ -812,12 +812,11 @@ func (s *Service) Start() (err error) {
 		return fmt.Errorf("failed to create genesis ledger: %w", err)
 	}
 
-	// Fees are read dynamically from the FeeSettings SLE by readFeesFromLedger.
 	genesisLedger, err := ledger.FromGenesis(
 		genesisResult.Header,
 		genesisResult.StateMap,
 		genesisResult.TxMap,
-		drops.Fees{},
+		s.configuredFees,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to construct genesis ledger: %w", err)

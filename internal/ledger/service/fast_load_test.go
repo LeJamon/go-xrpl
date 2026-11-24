@@ -11,9 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -502,14 +504,24 @@ func TestStoredLedgerFeesPreservesDefaultsForAbsentFields(t *testing.T) {
 	require.NoError(t, stateMap.Put(keylet.Fees().Key, feeData))
 
 	configured := drops.Fees{Base: 23, Reserve: 34_000_000, Increment: 5_000_000}
-	fees, err := storedLedgerFees(context.Background(), stateMap, true, configured)
-	require.NoError(t, err)
-	require.EqualValues(t, 17, fees.Base)
-	require.Equal(t, configured.Reserve, fees.Reserve)
-	require.Equal(t, configured.Increment, fees.Increment)
-
-	_, err = storedLedgerFees(context.Background(), stateMap, false, configured)
+	txs := shamap.New(shamap.TypeTransaction)
+	_, err = ledger.NewClosedFromHeaderContext(context.Background(), header.LedgerHeader{}, stateMap, txs, configured)
 	require.ErrorContains(t, err, "before the amendment is enabled")
+
+	amendments, err := binarycodec.EncodeBytes(map[string]any{
+		"LedgerEntryType": "Amendments",
+		"Flags":           uint32(0),
+		"Amendments":      []string{protocol.Hash256Hex(amendment.FeatureXRPFees)},
+	})
+	require.NoError(t, err)
+	require.NoError(t, stateMap.Put(keylet.Amendments().Key, amendments))
+	closed, err := ledger.NewClosedFromHeaderContext(context.Background(), header.LedgerHeader{}, stateMap, txs, configured)
+	require.NoError(t, err)
+	want := drops.Fees{Base: 17, Reserve: configured.Reserve, Increment: configured.Increment}
+	require.Equal(t, want, closed.Fees())
+	child, err := ledger.NewOpen(closed, closed.CloseTime())
+	require.NoError(t, err)
+	require.Equal(t, want, child.Fees())
 }
 
 func TestService_FastLoadRestoresPersistedValidatedLedger(t *testing.T) {

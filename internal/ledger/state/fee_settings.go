@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/keylet"
 	ledgerfields "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -228,8 +229,31 @@ func (f *FeeSettings) GetReserveIncrement() uint64 {
 	return uint64(f.ReserveIncrement)
 }
 
+// FeesForView returns the view's effective schedule, including inherited reserve fields.
+func FeesForView(view ReadOnlyLedgerView) (drops.Fees, error) {
+	if v, ok := view.(interface{ Fees() drops.Fees }); ok {
+		return v.Fees(), nil
+	}
+	data, err := view.Read(keylet.Fees())
+	if err != nil {
+		return drops.Fees{}, err
+	}
+	fees := drops.DefaultFees()
+	if data == nil {
+		return fees, nil
+	}
+	settings, err := ParseFeeSettings(data)
+	if err != nil {
+		return drops.Fees{}, err
+	}
+	return settings.ApplyTo(fees), nil
+}
+
 // ApplyTo updates the inherited schedule with the fields present in the ledger entry.
 func (f *FeeSettings) ApplyTo(fees drops.Fees) drops.Fees {
+	if f == nil {
+		return fees
+	}
 	if f.HasBaseFeeDrops {
 		fees.Base = drops.XRPAmount(f.BaseFeeDrops)
 	}

@@ -10,6 +10,8 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -174,7 +176,7 @@ func newFromHeaderContext(
 	stateMap *shamap.SHAMap,
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
-	state State,
+	ledgerState State,
 ) (*Ledger, error) {
 	if err := validateMaps(stateMap, txMap); err != nil {
 		return nil, err
@@ -191,12 +193,19 @@ func newFromHeaderContext(
 	if err != nil {
 		return nil, fmt.Errorf("failed to load amendment rules: %w", err)
 	}
+	settings, err := readFeeSettings(ctx, immutableState)
+	if err != nil {
+		return nil, err
+	}
+	if settings != nil && settings.IsUsingModernFees() && !rules.XRPFeesEnabled() {
+		return nil, fmt.Errorf("%w: XRPFees fields are present before the amendment is enabled", state.ErrInvalidFeeSettings)
+	}
 	return &Ledger{
 		stateMap: immutableState,
 		txMap:    immutableTx,
 		header:   hdr,
-		fees:     fees,
-		state:    state,
+		fees:     settings.ApplyTo(fees),
+		state:    ledgerState,
 		writable: false,
 		rules:    rules,
 	}, nil
@@ -234,6 +243,21 @@ func NewOpenWithHeader(
 		writable: true,
 		rules:    rules,
 	}, nil
+}
+
+func readFeeSettings(ctx context.Context, stateMap *shamap.SHAMap) (*state.FeeSettings, error) {
+	item, found, err := stateMap.GetContext(ctx, keylet.Fees().Key)
+	if err != nil {
+		return nil, fmt.Errorf("read fee settings: %w", err)
+	}
+	if !found {
+		return nil, nil
+	}
+	settings, err := state.ParseFeeSettings(item.Data())
+	if err != nil {
+		return nil, fmt.Errorf("parse fee settings: %w", err)
+	}
+	return settings, nil
 }
 
 func validateMaps(stateMap, txMap *shamap.SHAMap) error {

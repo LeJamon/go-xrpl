@@ -11,11 +11,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
@@ -243,24 +241,10 @@ func (s *Service) loadStoredLedgerByHash(ctx context.Context, hash [32]byte) (*l
 	if err := txMap.SetImmutable(); err != nil {
 		return nil, err
 	}
-	rules, err := ledger.LoadAmendmentsFromSHAMapContext(ctx, stateMap)
-	if err != nil {
-		if isUnavailableSHAMapNode(err) {
-			return nil, fmt.Errorf("%w: amendment state: %w", errStoredLedgerUnavailable, err)
-		}
-		return nil, err
-	}
-	fees, err := storedLedgerFees(ctx, stateMap, rules.XRPFeesEnabled(), s.configuredFees)
-	if err != nil {
-		if isUnavailableSHAMapNode(err) || errors.Is(err, state.ErrInvalidFeeSettings) || errors.Is(err, errStoredLedgerUnavailable) {
-			return nil, fmt.Errorf("%w: fee settings: %w", errStoredLedgerUnavailable, err)
-		}
-		return nil, err
-	}
 	h.Validated = false
 	h.Accepted = true
-	loaded, err := ledger.NewClosedFromHeaderContext(ctx, *h, stateMap, txMap, fees)
-	if err != nil && isUnavailableSHAMapNode(err) {
+	loaded, err := ledger.NewClosedFromHeaderContext(ctx, *h, stateMap, txMap, s.configuredFees)
+	if isUnavailableSHAMapNode(err) || errors.Is(err, state.ErrInvalidFeeSettings) {
 		return nil, fmt.Errorf("%w: ledger state: %w", errStoredLedgerUnavailable, err)
 	}
 	return loaded, err
@@ -274,24 +258,6 @@ func storedHeaderMatchesInfo(h header.LedgerHeader, info *relationaldb.LedgerInf
 		h.CloseTime.Equal(info.CloseTime) && h.ParentCloseTime.Equal(info.ParentCloseTime) &&
 		uint32(h.CloseTimeResolution) == uint32(info.CloseTimeRes) && h.CloseFlags == uint8(info.CloseFlags) &&
 		header.CalculateHash(h) == h.Hash
-}
-
-func storedLedgerFees(ctx context.Context, stateMap *shamap.SHAMap, xrpFeesEnabled bool, fees drops.Fees) (drops.Fees, error) {
-	item, found, err := stateMap.GetContext(ctx, keylet.Fees().Key)
-	if err != nil {
-		return drops.Fees{}, fmt.Errorf("read stored fee settings: %w", err)
-	}
-	if !found || item == nil {
-		return fees, nil
-	}
-	settings, err := state.ParseFeeSettings(item.Data())
-	if err != nil {
-		return drops.Fees{}, fmt.Errorf("parse stored fee settings: %w", err)
-	}
-	if settings.IsUsingModernFees() && !xrpFeesEnabled {
-		return drops.Fees{}, fmt.Errorf("%w: XRPFees fields are present before the amendment is enabled", errStoredLedgerUnavailable)
-	}
-	return settings.ApplyTo(fees), nil
 }
 
 func (s *Service) verifyStoredSHAMap(ctx context.Context, root [32]byte, mapType shamap.Type) error {

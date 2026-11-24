@@ -180,16 +180,11 @@ func (m *ripplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 			return nil, rpcerrors.RpcErrorActNotFound("Account not found.")
 		}
 		if !convertAll {
-			feeData, feeErr := view.Read(keylet.Fees())
-			if feeErr != nil {
-				return nil, rpcInternalError("ripple_path_find: fee settings lookup failed", feeErr)
+			fees, err := state.FeesForView(view)
+			if err != nil {
+				return nil, rpcInternalError("ripple_path_find: fee settings lookup failed", err)
 			}
-			fees, feeErr := state.ParseFeeSettings(feeData)
-			if feeErr != nil {
-				return nil, rpcInternalError("ripple_path_find: fee settings parsing failed", feeErr)
-			}
-			reserveBase := fees.GetReserveBase()
-			if dstAmount.Drops() < int64(reserveBase) {
+			if dstAmount.Drops() < int64(fees.Reserve) {
 				return nil, rpcerrors.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 			}
 		}

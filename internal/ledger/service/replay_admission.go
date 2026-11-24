@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -1055,7 +1054,7 @@ func (s *Service) PrepareAcquiredLedger(ctx context.Context, h *header.LedgerHea
 		}
 		txMap = shamap.New(shamap.TypeTransaction)
 	}
-	source, err := ledger.NewClosedFromHeaderContext(ctx, *h, stateMap, txMap, drops.Fees{})
+	source, err := ledger.NewClosedFromHeaderContext(ctx, *h, stateMap, txMap, s.configuredFees)
 	if err != nil {
 		return nil, err
 	}

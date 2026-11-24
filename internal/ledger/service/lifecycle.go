@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
@@ -1053,7 +1052,7 @@ func (s *Service) ledgerWithStateLocked(h *header.LedgerHeader, stateMap *shamap
 		return nil, fmt.Errorf("acquired transaction map root mismatch: got %x, want %x", txHash, h.TxHash)
 	}
 
-	acquired, err := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+	acquired, err := ledger.NewFromHeader(*h, stateMap, txMap, s.configuredFees)
 	if err != nil {
 		return nil, fmt.Errorf("failed to construct acquired ledger: %w", err)
 	}

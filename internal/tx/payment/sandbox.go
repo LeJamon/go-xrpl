@@ -127,14 +127,9 @@ type Adjustment struct {
 
 // NewPaymentSandbox snapshots the fee schedule of the ledger being queried.
 func NewPaymentSandbox(view tx.LedgerView) *PaymentSandbox {
-	if parent, ok := view.(*PaymentSandbox); ok {
-		return newPaymentSandbox(view, parent.fees)
-	}
-	fees := drops.DefaultFees()
-	if data, err := view.Read(keylet.Fees()); err == nil && data != nil {
-		if settings, err := state.ParseFeeSettings(data); err == nil {
-			fees = settings.Fees()
-		}
+	fees, err := state.FeesForView(view)
+	if err != nil {
+		fees = drops.DefaultFees()
 	}
 	return newPaymentSandbox(view, fees)
 }
@@ -163,14 +158,9 @@ func newPaymentSandbox(view tx.LedgerView, fees drops.Fees) *PaymentSandbox {
 	}
 }
 
-func (s *PaymentSandbox) accountReserve(account *state.AccountRoot, counts tx.OwnerCounts, ownerCount uint32) (uint64, bool) {
-	withHook := *account
-	withHook.OwnerCount = counts.Owner
-	withHook.SponsoredOwnerCount = counts.Sponsored
-	withHook.SponsoringOwnerCount = counts.Sponsoring
-	return tx.AccountReserveForView(s, tx.EngineConfig{
-		ReserveBase: uint64(s.fees.Reserve), ReserveIncrement: uint64(s.fees.Increment),
-	}, &withHook, ownerCount)
+// Fees returns the schedule captured when the sandbox was created.
+func (s *PaymentSandbox) Fees() drops.Fees {
+	return s.fees
 }
 
 // DebugCounts returns the number of modifications, insertions, and deletions in this sandbox

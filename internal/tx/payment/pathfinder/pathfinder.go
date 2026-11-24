@@ -256,8 +256,10 @@ func (pf *Pathfinder) FindPaths(searchLevel int) bool {
 		if !pf.dstAmount.IsNative() {
 			return false
 		}
-		// For XRP payments, destination can be created if amount >= reserve
-		// but we don't check reserve here — just note it may not exist
+		fees, err := state.FeesForView(pf.ledger)
+		if err != nil || pf.dstAmount.Drops() < int64(fees.Reserve) {
+			return false
+		}
 	}
 
 	// Determine payment type

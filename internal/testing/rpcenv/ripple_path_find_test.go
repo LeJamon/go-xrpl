@@ -6,11 +6,13 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/testing/rpcenv"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -288,6 +290,14 @@ func TestRipplePathFind_LedgerChecks(t *testing.T) {
 	env, gw, alice, bob := newPathFindEnv(t)
 	ghost := jtx.NewAccount("ghost") // never funded
 
+	partial, err := binarycodec.EncodeBytes(map[string]any{
+		"LedgerEntryType": "FeeSettings", "Flags": uint32(0), "BaseFeeDrops": "17",
+	})
+	require.NoError(t, err)
+	require.NoError(t, env.Ledger().Update(keylet.Fees(), partial))
+	env.Close()
+	require.EqualValues(t, env.ReserveBase(), env.LastClosedLedger().Fees().Reserve)
+
 	t.Run("source account not found", func(t *testing.T) {
 		_, rpcErr := env.RPC("ripple_path_find", map[string]any{
 			"source_account":      ghost.Address,
@@ -319,6 +329,7 @@ func TestRipplePathFind_LedgerChecks(t *testing.T) {
 		})
 		require.NotNil(t, rpcErr)
 		require.Equal(t, "dstAmtMalformed", rpcErr.ErrorString)
+		require.Equal(t, 51, rpcErr.Code)
 	})
 
 	t.Run("XRP at reserve to non-existent destination", func(t *testing.T) {
