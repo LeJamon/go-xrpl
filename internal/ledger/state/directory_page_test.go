@@ -687,22 +687,26 @@ func TestEmptyDirDeleteRejectsMalformedChain(t *testing.T) {
 			assert.True(t, v.hasPage(dir, 0))
 		})
 	}
+}
 
-	t.Run("missing legacy last page", func(t *testing.T) {
-		v := newStubView()
-		dir := testDir()
-		root := &DirectoryNode{RootIndex: dir.Key}
-		root.SetIndexNext(1)
-		root.SetIndexPrevious(1)
-		data, err := SerializeDirectoryNode(root, false)
-		require.NoError(t, err)
-		require.NoError(t, v.Insert(dir, data))
+func TestDirectoryOperationsRejectMissingLastPage(t *testing.T) {
+	t.Parallel()
 
-		deleted, err := EmptyDirDelete(v, dir)
-		require.ErrorIs(t, err, ErrMalformedDirectory)
-		assert.False(t, deleted)
-		assert.True(t, v.hasPage(dir, 0))
-	})
+	v := newStubView()
+	dir := testDir()
+	root := &DirectoryNode{RootIndex: dir.Key}
+	root.SetIndexNext(1)
+	root.SetIndexPrevious(1)
+	data, err := SerializeDirectoryNode(root, false)
+	require.NoError(t, err)
+	require.NoError(t, v.Insert(dir, data))
+
+	_, err = DirInsert(v, dir, itemKeyN(1), false, nil)
+	require.ErrorIs(t, err, ErrMalformedDirectory)
+	deleted, err := EmptyDirDelete(v, dir)
+	require.ErrorIs(t, err, ErrMalformedDirectory)
+	assert.False(t, deleted)
+	assert.True(t, v.hasPage(dir, 0))
 }
 
 func TestEmptyDirDeletePropagatesEraseFailure(t *testing.T) {
