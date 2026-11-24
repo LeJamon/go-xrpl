@@ -397,7 +397,12 @@ func readFeesFromLedgerContext(ctx context.Context, l *ledger.Ledger) (baseFee, 
 		return 0, 0, 0, fmt.Errorf("parse FeeSettings: %w", err)
 	}
 	if feeSettings != nil {
-		fees = mergeFeeSettings(fees, feeSettings)
+		// Open views inherit fees from the closed parent but may use rules from an older validated ledger.
+		allowModern := l.IsOpen() || l.Rules().XRPFeesEnabled()
+		fees, err = mergeFeeSettings(fees, feeSettings, allowModern)
+		if err != nil {
+			return 0, 0, 0, err
+		}
 	}
 	return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
 }

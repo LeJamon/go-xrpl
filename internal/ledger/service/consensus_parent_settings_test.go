@@ -145,3 +145,43 @@ func TestConsensusCloseFeeSettingsLookup(t *testing.T) {
 		})
 	}
 }
+
+func TestConsensusCloseFeeSettingsActivation(t *testing.T) {
+	svc := newConsensusParentGuardService(t)
+	genesis := svc.GetClosedLedger()
+	closeTime := genesis.CloseTime().Add(time.Second)
+	parent, err := ledger.NewOpen(genesis, closeTime)
+	require.NoError(t, err)
+	fees, err := state.SerializeFeeSettings(&state.FeeSettings{
+		XRPFeesMode:           true,
+		BaseFeeDrops:          23,
+		ReserveBaseDrops:      20_000_000,
+		ReserveIncrementDrops: 2_000_000,
+	})
+	require.NoError(t, err)
+	require.NoError(t, parent.Update(keylet.Fees(), fees))
+	require.NoError(t, parent.Close(closeTime, 0))
+	require.False(t, parent.Rules().XRPFeesEnabled())
+	require.NoError(t, svc.SwitchToPreferredLedger(parent))
+	nextClose := closeTime.Add(time.Second)
+	_, err = svc.AcceptConsensusResult(t.Context(), parent, nil, nil, nextClose, true)
+	require.ErrorIs(t, err, state.ErrInvalidFeeSettings)
+	require.Same(t, parent, svc.GetClosedLedger())
+
+	enabled, err := ledger.NewOpen(parent, nextClose)
+	require.NoError(t, err)
+	amendments, err := pseudo.SerializeAmendmentsSLE(&pseudo.AmendmentsSLE{
+		Amendments: [][32]byte{amendment.FeatureXRPFees},
+	})
+	require.NoError(t, err)
+	require.NoError(t, enabled.Insert(keylet.Amendments(), amendments))
+	require.NoError(t, enabled.Close(nextClose, 0))
+	// The validated ledger can lag a closed parent that has activated XRPFees.
+	open, err := ledger.NewOpenWithRules(enabled, nextClose.Add(time.Second), parent.Rules())
+	require.NoError(t, err)
+	base, reserve, increment, err := FeesFromLedgerStrict(open)
+	require.NoError(t, err)
+	require.EqualValues(t, 23, base)
+	require.EqualValues(t, 20_000_000, reserve)
+	require.EqualValues(t, 2_000_000, increment)
+}
