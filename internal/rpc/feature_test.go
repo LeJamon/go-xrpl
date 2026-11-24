@@ -241,6 +241,7 @@ func TestFeatureInvalidName(t *testing.T) {
 		feature string
 	}{
 		{"unknown feature name", "AllTheThings"},
+		{"unknown feature ID", "1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF"},
 		{"case sensitive mismatch", "multisignreserve"}, // wrong case
 		{"empty-ish string", "x"},
 		{"random string", "notAFeature"},
