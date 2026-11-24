@@ -3,7 +3,7 @@ package pathfind
 import (
 	"bytes"
 	"encoding/json"
-	"sort"
+	"slices"
 
 	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
@@ -43,11 +43,7 @@ func ParseSourceCurrencies(raw json.RawMessage, srcAccount [20]byte, sendMax *tx
 
 		// validJSONAsset rejects an MPT carrying either currency or issuer
 		// before parsing the asset or its optional issuer.
-		if hasMPT {
-			if hasCurrency || hasIssuer {
-				return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
-			}
-		} else if !hasCurrency {
+		if hasCurrency == hasMPT || (hasMPT && hasIssuer) {
 			return nil, rpcerrors.RpcErrorSrcCurMalformed("Source currency is malformed.")
 		}
 
@@ -107,46 +103,29 @@ func ParseSourceCurrencies(raw json.RawMessage, srcAccount [20]byte, sendMax *tx
 			if issuer == srcAccount {
 				issuer = sendMaxIssue.Issuer
 			}
-			sourceCurrencies = append(sourceCurrencies, payment.Issue{Currency: currency, Issuer: issuer})
-			continue
 		}
 
 		sourceCurrencies = append(sourceCurrencies, payment.Issue{Currency: currency, Issuer: issuer})
 	}
 
-	sort.Slice(sourceCurrencies, func(i, j int) bool {
-		return issueLess(sourceCurrencies[i], sourceCurrencies[j])
-	})
-	unique := sourceCurrencies[:0]
-	for _, issue := range sourceCurrencies {
-		if len(unique) == 0 || !sameIssue(unique[len(unique)-1], issue) {
-			unique = append(unique, issue)
-		}
-	}
-	return unique, nil
+	slices.SortFunc(sourceCurrencies, compareIssues)
+	return slices.Compact(sourceCurrencies), nil
 }
 
-func issueLess(a, b payment.Issue) bool {
-	if a.IsMPT != b.IsMPT {
-		return a.IsMPT
-	}
+func compareIssues(a, b payment.Issue) int {
 	if a.IsMPT {
-		return bytes.Compare(a.MPTID[:], b.MPTID[:]) < 0
+		if b.IsMPT {
+			return bytes.Compare(a.MPTID[:], b.MPTID[:])
+		}
+		return -1
+	}
+	if b.IsMPT {
+		return 1
 	}
 	aCurrency := keylet.CurrencyBytes(a.Currency)
 	bCurrency := keylet.CurrencyBytes(b.Currency)
 	if cmp := bytes.Compare(aCurrency[:], bCurrency[:]); cmp != 0 {
-		return cmp < 0
+		return cmp
 	}
-	if a.IsXRP() || b.IsXRP() {
-		return false
-	}
-	return bytes.Compare(a.Issuer[:], b.Issuer[:]) < 0
-}
-
-func sameIssue(a, b payment.Issue) bool {
-	if a.IsMPT || b.IsMPT {
-		return a.IsMPT && b.IsMPT && a.MPTID == b.MPTID
-	}
-	return keylet.CurrencyBytes(a.Currency) == keylet.CurrencyBytes(b.Currency) && a.Issuer == b.Issuer
+	return bytes.Compare(a.Issuer[:], b.Issuer[:])
 }
