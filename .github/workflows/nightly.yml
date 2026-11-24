@@ -157,7 +157,7 @@ jobs:
           ./amendment/... ./protocol/... ./config/...
           ./internal/tx/... ./internal/ledger/... ./internal/txq/... ./internal/rpc/...
       - name: Upload to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         continue-on-error: true
         with:
           files: coverage.out
