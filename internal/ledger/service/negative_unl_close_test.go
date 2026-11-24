@@ -2,13 +2,23 @@ package service_test
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/all"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/stretchr/testify/require"
 )
 
 // TestAcceptConsensusResult_FlagLedgerAppliesNegativeUNL is the regression test
@@ -92,4 +102,75 @@ func TestAcceptConsensusResult_FlagLedgerAppliesNegativeUNL(t *testing.T) {
 	}
 
 	assertFlagLedgerTransitioned(t, svc, validator)
+}
+
+func TestAcceptConsensusResult_UNLModifyVote(t *testing.T) {
+	all.RegisterAll()
+	var fixture struct {
+		ParentHeader string
+		ParentState  []struct{ Index, Data string }
+		ChildHeader  string
+		Vote         string
+		TxID         string
+		Metadata     string
+		NegativeUNL  string
+	}
+	data, err := os.ReadFile("testdata/unl_modify_vote.json")
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(data, &fixture))
+	decode := func(s string) []byte {
+		t.Helper()
+		b, err := hex.DecodeString(s)
+		require.NoError(t, err)
+		return b
+	}
+
+	parentHeader, err := header.DeserializeHeader(decode(fixture.ParentHeader), false)
+	require.NoError(t, err)
+	parentHeader.Hash = header.CalculateHash(*parentHeader)
+	state := shamap.New(shamap.TypeState)
+	for _, entry := range fixture.ParentState {
+		key, err := protocol.Hash256FromHex(entry.Index)
+		require.NoError(t, err)
+		require.NoError(t, state.Put(key, decode(entry.Data)))
+	}
+	root, err := state.Hash()
+	require.NoError(t, err)
+	require.Equal(t, parentHeader.AccountHash, root)
+	require.Zero(t, parentHeader.TxHash)
+	parent, err := ledger.NewFromHeader(*parentHeader, state, shamap.New(shamap.TypeTransaction), drops.DefaultFees())
+	require.NoError(t, err)
+
+	config := defaultServiceConfig()
+	config.Standalone = false
+	svc, err := service.New(config)
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
+	require.NoError(t, svc.SwitchToPreferredLedger(parent))
+
+	child, err := header.DeserializeHeader(decode(fixture.ChildHeader), false)
+	require.NoError(t, err)
+	require.Equal(t, parent.Hash(), child.ParentHash)
+	vote := decode(fixture.Vote)
+	seq, err := svc.AcceptConsensusResult(t.Context(), parent, [][]byte{vote}, nil, child.CloseTime, child.GetCloseAgree())
+	require.NoError(t, err)
+	require.Equal(t, child.LedgerIndex, seq)
+
+	closed := svc.GetClosedLedger()
+	id, err := protocol.Hash256FromHex(fixture.TxID)
+	require.NoError(t, err)
+	leaf, found, err := closed.GetTransaction(id)
+	require.NoError(t, err)
+	require.True(t, found)
+	txBlob, meta, err := tx.SplitTxWithMetaBlobStrict(leaf)
+	require.NoError(t, err)
+	require.Equal(t, vote, txBlob)
+	require.Equal(t, decode(fixture.Metadata), meta)
+	sle, err := closed.Read(keylet.NegativeUNL())
+	require.NoError(t, err)
+	require.Equal(t, decode(fixture.NegativeUNL), sle)
+	require.Equal(t, child.TxHash, closed.Header().TxHash)
+	require.Equal(t, child.AccountHash, closed.Header().AccountHash)
+	require.Equal(t, header.CalculateHash(*child), closed.Hash())
 }

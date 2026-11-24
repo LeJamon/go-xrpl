@@ -4,8 +4,49 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
+	"github.com/LeJamon/go-xrpl/internal/tx/all"
+	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/stretchr/testify/require"
 )
+
+func TestPendingTxZeroAccount(t *testing.T) {
+	all.RegisterAll()
+	fields := map[string]any{
+		"TransactionType":    "UNLModify",
+		"Fee":                "0",
+		"Sequence":           uint32(0),
+		"SigningPubKey":      "",
+		"LedgerSequence":     uint32(256),
+		"UNLModifyDisabling": uint8(1),
+		"UNLModifyValidator": "021111111111111111111111111111111111111111111111111111111111111111",
+	}
+	for _, account := range []string{"", protocol.ZeroAccount} {
+		fields["Account"] = account
+		blob, err := binarycodec.EncodeBytes(fields)
+		require.NoError(t, err)
+		pending, err := ParsePendingTx(blob)
+		require.NoError(t, err)
+		require.Equal(t, [20]byte{}, pending.Account)
+		require.Equal(t, blob, pending.Blob)
+		require.Equal(t, sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), blob), pending.Hash)
+		require.True(t, pending.ParsedMatchesCanonical())
+		pending.Account[0]++
+		require.False(t, pending.ParsedMatchesCanonical())
+	}
+	blob, err := binarycodec.EncodeBytes(map[string]any{
+		"TransactionType": "AccountSet",
+		"Account":         "",
+		"Fee":             "10",
+		"Sequence":        uint32(1),
+		"SigningPubKey":   "",
+		"Domain":          "6578616D706C652E636F6D",
+	})
+	require.NoError(t, err)
+	_, err = ParsePendingTx(blob)
+	require.ErrorContains(t, err, "invalid transaction account")
+}
 
 func TestCanonicalSortEmpty(t *testing.T) {
 	t.Parallel()
