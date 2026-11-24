@@ -146,6 +146,47 @@ func TestLedgerRequest_AcquiringTargetReturnsBareSnapshot(t *testing.T) {
 	assert.Equal(t, hash, gotHash, "the requested hash must be forwarded to the acquisition coordinator")
 }
 
+func TestLedgerRequest_AcceptsRippledZeroHashEncoding(t *testing.T) {
+	var fullHash [32]byte
+	fullHash[0] = 0x42
+	fullHashText := hex.EncodeToString(fullHash[:])
+	acquiring := map[string]any{"hash": strings.ToUpper(fullHashText), "have_header": false}
+
+	for _, test := range []struct {
+		name string
+		hash string
+		want [32]byte
+	}{
+		{name: "zero shorthand", hash: "0"},
+		{name: "zero shorthand with embedded NUL", hash: "0\x00"},
+		{name: "full hash with embedded NUL", hash: fullHashText + "\x00", want: fullHash},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mock := newLedgerRequestMock()
+			var gotHash [32]byte
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleAdmin,
+				ApiVersion: types.ApiVersion1,
+				Services: types.NewTestServiceGraph(&types.ServiceContainer{
+					Ledger: mock,
+					RequestLedger: func(hash [32]byte, _ uint32) (map[string]any, bool, bool) {
+						gotHash = hash
+						return acquiring, true, false
+					},
+				}),
+			}
+			params, err := json.Marshal(map[string]string{"ledger_hash": test.hash})
+			require.NoError(t, err)
+
+			result, rpcErr := (&handlers.LedgerRequestMethod{}).Handle(ctx, params)
+			require.Nil(t, rpcErr)
+			assert.Equal(t, acquiring, result)
+			assert.Equal(t, test.want, gotHash)
+		})
+	}
+}
+
 // TestLedgerRequest_AcquiringReferenceReturnsLgrNotFound covers rippled's
 // deep-index path: when a reference ledger must be fetched to learn the
 // target's hash, rippled wraps the snapshot as lgrNotFound + acquiring

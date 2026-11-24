@@ -89,11 +89,19 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		if err := json.Unmarshal(rawHash, &hashString); err != nil || !isJSONString(rawHash) {
 			return nil, rpcerrors.RpcErrorExpectedField("ledger_hash", "hex string")
 		}
-		hb, err := hex.DecodeString(hashString)
-		if err != nil || len(hb) != 32 {
-			return nil, rpcerrors.RpcErrorExpectedField("ledger_hash", "hex string")
+		// JsonCpp's asString() truncates at an embedded NUL before
+		// BaseUInt::parseFromStringView validates the hash. Preserve that
+		// behavior for JSON strings containing \u0000.
+		if nul := strings.IndexByte(hashString, 0); nul >= 0 {
+			hashString = hashString[:nul]
 		}
-		copy(targetHash[:], hb)
+		if hashString != "0" {
+			hb, err := hex.DecodeString(hashString)
+			if err != nil || len(hb) != 32 {
+				return nil, rpcerrors.RpcErrorExpectedField("ledger_hash", "hex string")
+			}
+			copy(targetHash[:], hb)
+		}
 
 		l, err := getLedgerByHashContext(ctx.Context, ctx.Services.Ledger(), targetHash)
 		if err == nil && l != nil {
