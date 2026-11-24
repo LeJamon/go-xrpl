@@ -343,6 +343,8 @@ func creditLoanPayment(v *vault.VaultLending, paid, totalDelta lmath.N, rules *a
 	totalUnchanged := totalAfter.Equal(totalBefore)
 
 	switch {
+	case v.Asset.IsNative() && (exceedsXRPRange(availableAfter) || exceedsXRPRange(totalAfter)):
+		return ter.TefEXCEPTION
 	case availableAfter.Equal(availableBefore), !totalDelta.IsZero() && totalUnchanged:
 		return ter.TecPRECISION_LOSS
 	case totalDelta.IsZero() && !totalUnchanged, availableAfter.Cmp(totalAfter) > 0:

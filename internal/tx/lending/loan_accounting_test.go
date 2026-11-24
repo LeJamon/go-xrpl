@@ -64,6 +64,7 @@ func TestLoanOriginationMaximumUsesAccountingModel(t *testing.T) {
 func TestCreditLoanPayment(t *testing.T) {
 	iou := tx.Asset{Currency: "USD"}
 	xrp := tx.Asset{Currency: "XRP"}
+	mpt := tx.Asset{MPTIssuanceID: "000000010000000000000000000000000000000000000001"}
 	for _, tc := range []struct {
 		name                     string
 		asset                    tx.Asset
@@ -72,6 +73,10 @@ func TestCreditLoanPayment(t *testing.T) {
 		want                     ter.Result
 		wantAvailable, wantTotal string
 	}{
+		{"XRP total reaches maximum", xrp, "10", "99999999999999999", "1", "1", ter.TesSUCCESS, "11", "100000000000000000"},
+		{"XRP total overflow precedes unchanged available", xrp, "10", "100000000000000000", "0", "1", ter.TefEXCEPTION, "", ""},
+		{"XRP available overflow precedes excess available", xrp, "100000000000000000", "100000000000000000", "1", "0", ter.TefEXCEPTION, "", ""},
+		{"MPT totals above XRP maximum", mpt, "100000000000000000", "100000000000000000", "1", "1", ter.TesSUCCESS, "100000000000000001", "100000000000000001"},
 		{"available rounds back", iou, "10", "20", "1e-15", "0", ter.TecPRECISION_LOSS, "", ""},
 		{"positive delta rounds away", iou, "10", "20", "1", "1e-15", ter.TecPRECISION_LOSS, "", ""},
 		{"negative delta rounds away", iou, "10", "20", "1", "-1e-15", ter.TecPRECISION_LOSS, "", ""},

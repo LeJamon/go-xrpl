@@ -55,13 +55,15 @@ func adjustPseudoOwnerCount(ctx *tx.ApplyContext, accountID [20]byte, delta int3
 	return ter.TesSUCCESS
 }
 
+func exceedsXRPRange(n lmath.N) bool {
+	maximum := lmath.FromDropsScaled(int64(state.MaxNativeDrops), n.MantissaScale())
+	return n.Cmp(maximum) > 0 || n.Cmp(maximum.Negate()) < 0
+}
+
 func checkAssetValue(n lmath.N, asset tx.Asset) ter.Result {
 	rounded := n.RoundToAsset(assetIntegral(asset))
-	if asset.IsNative() {
-		maximum := lmath.FromInt(int64(state.MaxNativeDrops))
-		if rounded.Cmp(maximum) > 0 || rounded.Cmp(maximum.Negate()) < 0 {
-			return ter.TefEXCEPTION
-		}
+	if asset.IsNative() && exceedsXRPRange(rounded) {
+		return ter.TefEXCEPTION
 	}
 	if !rounded.Equal(n) {
 		return ter.TecPRECISION_LOSS
