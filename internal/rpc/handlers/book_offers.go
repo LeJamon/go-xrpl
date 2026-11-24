@@ -316,10 +316,6 @@ func canonCurrency(c string) string {
 	return c
 }
 
-// canonIssuerString returns the issuer string to pass downstream. For XRP
-// currency we forward an empty string regardless of what the user sent
-// (e.g. the canonical xrpAccountAddress); for IOU currency we forward what
-// the canonical classic address produced during issuer validation.
 func canonIssuerString(issuer, currency string) string {
 	if isNativeCurrency(currency) {
 		return ""

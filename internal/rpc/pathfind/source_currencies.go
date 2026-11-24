@@ -16,8 +16,6 @@ import (
 
 const maxSourceCurrencies = 18
 
-// ParseSourceCurrencies parses the optional source_currencies field shared by
-// the legacy HTTP and persistent WebSocket path-find requests.
 func ParseSourceCurrencies(raw json.RawMessage, srcAccount [20]byte, sendMax *tx.Amount) ([]payment.Issue, *rpcerrors.RpcError) {
 	var entries []json.RawMessage
 	if err := json.Unmarshal(raw, &entries); err != nil || len(entries) == 0 || len(entries) > maxSourceCurrencies {

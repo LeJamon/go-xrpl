@@ -246,7 +246,6 @@ func TestTxHistoryEmptyResult(t *testing.T) {
 	var resp map[string]any
 	json.Unmarshal(respJSON, &resp)
 
-	// rippled appends nothing to obj[txs], so it serializes as null.
 	txs, present := resp["txs"]
 	require.True(t, present, "txs must be present")
 	assert.Nil(t, txs, "txs should be null when no transactions exist")
