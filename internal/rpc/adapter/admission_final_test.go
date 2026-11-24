@@ -99,29 +99,48 @@ func TestAdapterSubmissionRejectsNonNativeFee(t *testing.T) {
 	svc := newAdmissionAdapterService(t)
 	privateKey, publicKey, err := ed25519.Algorithm{}.DeriveKeypair(bytes.Repeat([]byte{0x42}, 16), false)
 	require.NoError(t, err)
-	fields := map[string]any{
-		"TransactionType": "AccountSet",
-		"Account":         admissionAdapterSource,
-		"Sequence":        uint32(1),
-		"SigningPubKey":   publicKey,
-		"Fee": map[string]any{
-			"mpt_issuance_id": "000000010000000000000000000000000000000000000001",
-			"value":           "0",
+	for _, tc := range []struct {
+		name        string
+		fee         map[string]any
+		localReason string
+		result      ter.Result
+	}{
+		{
+			name:   "issued currency reaches fee preflight",
+			fee:    map[string]any{"currency": "USD", "issuer": admissionAdapterDestination, "value": "0"},
+			result: ter.TemBAD_FEE,
 		},
-	}
-	transaction, err := tx.ParseFromDecodedFields(fields)
-	require.NoError(t, err)
-	fields["TxnSignature"], err = txsign.SignTransaction(transaction, privateKey)
-	require.NoError(t, err)
-	blob, err := binarycodec.Encode(fields)
-	require.NoError(t, err)
+		{
+			name:        "MPT fails local checks",
+			fee:         map[string]any{"mpt_issuance_id": "000000010000000000000000000000000000000000000001", "value": "0"},
+			localReason: "Amount can not be MPT.",
+			result:      ter.TemMALFORMED,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fields := map[string]any{
+				"TransactionType": "AccountSet",
+				"Account":         admissionAdapterSource,
+				"Sequence":        uint32(1),
+				"SigningPubKey":   publicKey,
+				"Fee":             tc.fee,
+			}
+			transaction, err := tx.ParseFromDecodedFields(fields)
+			require.NoError(t, err)
+			require.Equal(t, tc.localReason, tx.TransactionLocalChecksFailureReason(transaction))
+			fields["TxnSignature"], err = txsign.SignTransaction(transaction, privateKey)
+			require.NoError(t, err)
+			blob, err := binarycodec.Encode(fields)
+			require.NoError(t, err)
 
-	result, err := NewLedgerServiceAdapter(svc).SubmitTransaction(nil, blob)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Equal(t, ter.TemBAD_FEE.String(), result.EngineResult)
-	require.Equal(t, int(ter.TemBAD_FEE), result.EngineResultCode)
-	require.False(t, result.Applied)
+			result, err := NewLedgerServiceAdapter(svc).SubmitTransaction(nil, blob)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, tc.result.String(), result.EngineResult)
+			require.Equal(t, int(tc.result), result.EngineResultCode)
+			require.False(t, result.Applied)
+		})
+	}
 }
 
 func TestAdapterSubmissionOverCapNativeAmountsReachEngineTER(t *testing.T) {
