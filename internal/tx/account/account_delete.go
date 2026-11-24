@@ -78,15 +78,7 @@ func (a *AccountDelete) validate(rules *amendment.Rules) error {
 	return nil
 }
 
-func (a *AccountDelete) CalculateBaseFee(view tx.ReadOnlyLedgerView, config tx.EngineConfig) (uint64, error) {
-	if view != nil {
-		data, err := view.Read(keylet.Fees())
-		if err == nil && data != nil {
-			if fs, err := state.ParseFeeSettings(data); err == nil {
-				return fs.GetReserveIncrement(), nil
-			}
-		}
-	}
+func (a *AccountDelete) CalculateBaseFee(_ tx.ReadOnlyLedgerView, config tx.EngineConfig) (uint64, error) {
 	return config.ReserveIncrement, nil
 }
 

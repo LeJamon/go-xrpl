@@ -4,10 +4,45 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/account"
+	"github.com/LeJamon/go-xrpl/internal/tx/escrow"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerstatefix"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCustomBaseFeesUseParentSchedule(t *testing.T) {
+	fees := drops.Fees{Base: 17, Reserve: 34_000_000, Increment: 5_000_000}
+	view, err := ledger.NewOpenWithHeader(header.LedgerHeader{}, shamap.New(shamap.TypeState), shamap.New(shamap.TypeTransaction), fees)
+	require.NoError(t, err)
+	data, err := binarycodec.EncodeBytes(map[string]any{
+		"LedgerEntryType": "FeeSettings", "Flags": uint32(0), "BaseFeeDrops": "23",
+	})
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Fees(), data))
+	config := tx.EngineConfig{BaseFee: uint64(fees.Base), ReserveIncrement: uint64(fees.Increment)}
+
+	for _, tc := range []struct {
+		txn  tx.Transaction
+		want uint64
+	}{
+		{account.NewAccountDelete("alice", "bob"), 5_000_000},
+		{ledgerstatefix.NewNFTokenPageLinkFix("alice", "bob"), 5_000_000},
+		{escrow.NewEscrowFinish("alice", "bob", 1), 17},
+	} {
+		got, err := sign.CalculateBaseFee(tc.txn, view, config)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, got, "%T", tc.txn)
+	}
+}
 
 // TestEstimateSigningBaseFee_Multisign verifies that the fee dispatch matches
 // rippled Transactor::calculateBaseFee (Transactor.cpp:229-245):
