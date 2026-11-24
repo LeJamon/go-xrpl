@@ -1,5 +1,5 @@
 {
-  "oracle": "rippled 3.4.1 (d147fccf54a500fce586522f28d6044c37fd8d29)",
+  "oracle": "standalone rippled 3.4.1 (internal/testutil/rippled/pin.env at capture)",
   "ledger_index": 4,
   "network_id": 10000,
   "reserve_base": 10000000,
