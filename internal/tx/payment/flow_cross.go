@@ -458,14 +458,10 @@ func zeroCrossAmount(amt tx.Amount) EitherAmount {
 // Matches rippled's accountFunds(psb, ...) in CreateOffer.cpp line 432.
 // BalanceHook subtracts DeferredCredits so self-crossing round-trips report zero.
 func AccountFundsInSandbox(sb *PaymentSandbox, accountID [20]byte, amount tx.Amount, fhZeroIfFrozen bool, reserveBase, reserveIncrement uint64, parentCloseTime uint32) (tx.Amount, ter.Result) {
-	if amount.IsMPT() {
+	if amount.IsMPT() || amount.IsNative() {
 		return accountFundsForCross(sb, accountID, amount, fhZeroIfFrozen, reserveBase, reserveIncrement, parentCloseTime)
 	}
 	rawBalance := mptutil.AccountFunds(sb, accountID, amount, fhZeroIfFrozen, reserveBase, reserveIncrement)
-
-	if amount.IsNative() {
-		return sb.BalanceHook(accountID, [20]byte{}, rawBalance), ter.TesSUCCESS
-	}
 
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {

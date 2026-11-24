@@ -256,6 +256,10 @@ type ownerCountsReadHookView interface {
 	OwnerCountsHook(account [20]byte, counts OwnerCounts) OwnerCounts
 }
 
+type balanceReadHookView interface {
+	BalanceHook(account, issuer [20]byte, amount Amount) Amount
+}
+
 func accountWithOwnerCountHook(view ReadOnlyLedgerView, accountID [20]byte, account *state.AccountRoot) state.AccountRoot {
 	result := *account
 	if hook, ok := view.(ownerCountsReadHookView); ok {
@@ -274,7 +278,7 @@ func accountWithOwnerCountHook(view ReadOnlyLedgerView, accountID [20]byte, acco
 // ownerCountAdj allows adjusting the owner count (e.g., +1 to account for a pending new object).
 func XRPLiquid(view ReadOnlyLedgerView, accountID [20]byte, ownerCountAdj int64, reserveBase, reserveIncrement uint64) Amount {
 	account, err := ReadAccountRoot(view, accountID)
-	if err != nil || account == nil {
+	if err != nil {
 		return NewXRPAmount(0)
 	}
 	return XRPLiquidOf(view, accountID, account, ownerCountAdj, reserveBase, reserveIncrement)
@@ -283,10 +287,17 @@ func XRPLiquid(view ReadOnlyLedgerView, accountID [20]byte, ownerCountAdj int64,
 // XRPLiquidOf is XRPLiquid for an AccountRoot the caller already read from
 // view; account is not modified.
 func XRPLiquidOf(view ReadOnlyLedgerView, accountID [20]byte, account *state.AccountRoot, ownerCountAdj int64, reserveBase, reserveIncrement uint64) Amount {
+	if account == nil {
+		return NewXRPAmount(0)
+	}
 	accountWithHook := accountWithOwnerCountHook(view, accountID, account)
 	ownerCount := accountWithHook.OwnerCount
+	balance := NewXRPAmount(int64(account.Balance))
+	if hook, ok := view.(balanceReadHookView); ok {
+		balance = hook.BalanceHook(accountID, [20]byte{}, balance)
+	}
 	if account.IsPseudoAccount() {
-		return NewXRPAmount(int64(account.Balance))
+		return balance
 	}
 	if ownerCountAdj > math.MaxInt || ownerCountAdj < math.MinInt {
 		return NewXRPAmount(0)
@@ -298,8 +309,8 @@ func XRPLiquidOf(view ReadOnlyLedgerView, accountID [20]byte, account *state.Acc
 	if !ok {
 		return NewXRPAmount(0)
 	}
-	if account.Balance > reserve {
-		return NewXRPAmount(int64(account.Balance - reserve))
+	if spendable := balance.Drops(); spendable > 0 && uint64(spendable) > reserve {
+		return NewXRPAmount(spendable - int64(reserve))
 	}
 	return NewXRPAmount(0)
 }

@@ -135,6 +135,9 @@ func TestXRPEndpointStep_xrpLiquid_DeferredCredit(t *testing.T) {
 	// The 40 XRP received earlier must not be re-spendable: 90 - 40 = 50 XRP.
 	require.Equal(t, int64(50_000_000), step.xrpLiquid(sbCredited),
 		"deferred-credit hook must subtract the 40 XRP received earlier in the payment")
+	funds, result := AccountFundsInSandbox(sbCredited, acct, tx.NewXRPAmount(1), true, 10_000_000, 2_000_000, 0)
+	require.Equal(t, ter.TesSUCCESS, result)
+	require.Equal(t, int64(50_000_000), funds.Drops())
 }
 
 func TestXRPEndpointStep_xrpLiquid_PseudoAccountReserveExemption(t *testing.T) {
