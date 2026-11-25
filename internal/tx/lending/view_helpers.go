@@ -5,6 +5,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 )
 
@@ -55,13 +56,17 @@ func associateBrokerAsset(b *loanBrokerData, integral bool, rules *amendment.Rul
 	b.CoverAvailable = associateNum(b.CoverAvailable, integral, true, rules)
 }
 
-// associateVaultAsset rounds the Vault's NUMBER accounting fields to the asset's
-// precision. AssetsTotal, AssetsAvailable, and LossUnrealized are soeDEFAULT;
-// AssetsMaximum is left untouched (LoanManage never changes it).
-func associateVaultAsset(v *vault.VaultLending, integral bool, rules *amendment.Rules) {
-	v.AssetsTotal = associateNum(v.AssetsTotal, integral, true, rules)
-	v.AssetsAvailable = associateNum(v.AssetsAvailable, integral, true, rules)
-	v.LossUnrealized = associateNum(v.LossUnrealized, integral, true, rules)
+func associateVaultAsset(v *vault.VaultLending, rules *amendment.Rules) ter.Result {
+	native := v.Asset.IsNative()
+	integral := native || v.Asset.IsMPT()
+	for _, field := range []*string{&v.AssetsTotal, &v.AssetsAvailable, &v.AssetsMaximum, &v.LossUnrealized} {
+		rounded := lendNumForRules(*field, rules).RoundToAsset(integral)
+		if native && exceedsXRPRange(rounded) {
+			return ter.TefEXCEPTION
+		}
+		*field = numStr(rounded)
+	}
+	return ter.TesSUCCESS
 }
 
 func associateLoanAsset(l *loanData, integral bool, rules *amendment.Rules) {

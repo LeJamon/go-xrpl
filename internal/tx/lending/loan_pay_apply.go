@@ -229,12 +229,14 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 	mAsset := mathAsset(asset)
 	integral := mAsset.Integral
 	loanScale := int(loan.LoanScale)
+	openingTotal := tx.NumberContextForRules(ctx.Rules()).ToAmount(number(vinfo.AssetsTotal), l.Amount, state.RoundToNearest)
+	vaultScale := openingTotal.Exponent()
 
 	// Where the broker's fee goes: to the owner while cover is above the minimum,
 	// otherwise back into the first-loss cover pool.
 	var minCover lmath.N
 	if ctx.Rules().FixCleanup3_2_0Enabled() {
-		minCover = minimumBrokerCover(number(b.DebtTotal), b.CoverRateMinimum, vaultScaleOfForRules(vinfo, integral, ctx.Rules()), integral)
+		minCover = minimumBrokerCover(number(b.DebtTotal), b.CoverRateMinimum, vaultScale, integral)
 	} else {
 		minCover = brokerCoverRateAtScale(number(b.DebtTotal), b.CoverRateMinimum, loanScale, integral)
 	}
@@ -250,13 +252,8 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Reverse any impairment before applying the payment.
 	if loan.Flags&LsfLoanImpaired != 0 {
-		if r := reverseImpairment(ctx, loan, vaultKey, vinfo, integral); r != ter.TesSUCCESS {
+		if r := reverseImpairment(ctx, loan, vinfo, vaultScale); r != ter.TesSUCCESS {
 			return r
-		}
-		// Re-read the vault totals after the loss reversal.
-		vinfo, verr = vault.ReadVaultLending(ctx.View, vaultKey)
-		if verr != nil || vinfo == nil {
-			return ter.TefBAD_LEDGER
 		}
 	}
 
@@ -282,7 +279,6 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	// Vault + broker accounting.
-	vaultScale := vaultScaleOfForRules(vinfo, integral, ctx.Rules())
 	accountingDeltas := loanPaymentDeltas(vinfo, parts)
 	rawToVault := parts.PrincipalPaid.Add(parts.InterestPaid)
 	toVaultRounded := lmath.RoundAssetDownward(mAsset, rawToVault, vaultScale)
@@ -297,12 +293,10 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 		return r
 	}
 
-	newAvailable := number(vinfo.AssetsAvailable).Add(toVaultRounded)
-	newTotal := number(vinfo.AssetsTotal).Add(accountingDeltas.assetsTotal)
-	if newAvailable.Cmp(newTotal) > 0 {
-		return ter.TecINTERNAL
+	if r := creditLoanPayment(vinfo, toVaultRounded, accountingDeltas.assetsTotal, ctx.Rules()); r != ter.TesSUCCESS {
+		return r
 	}
-	if r := vault.UpdateVaultTotals(ctx, vaultKey, numStr(newTotal), numStr(newAvailable), vinfo.LossUnrealized); r != ter.TesSUCCESS {
+	if r := vault.UpdateVaultTotals(ctx, vaultKey, vinfo.AssetsTotal, vinfo.AssetsAvailable, vinfo.LossUnrealized); r != ter.TesSUCCESS {
 		return r
 	}
 
@@ -336,20 +330,41 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 	return ter.TesSUCCESS
 }
 
+func creditLoanPayment(v *vault.VaultLending, paid, totalDelta lmath.N, rules *amendment.Rules) ter.Result {
+	availableBefore := lendNumForRules(v.AssetsAvailable, rules)
+	totalBefore := lendNumForRules(v.AssetsTotal, rules)
+	credited := *v
+	credited.AssetsAvailable = numStr(availableBefore.Add(paid))
+	credited.AssetsTotal = numStr(totalBefore.Add(totalDelta))
+	if r := associateVaultAsset(&credited, rules); r != ter.TesSUCCESS {
+		return r
+	}
+	availableAfter := lendNumForRules(credited.AssetsAvailable, rules)
+	totalAfter := lendNumForRules(credited.AssetsTotal, rules)
+	totalUnchanged := totalAfter.Equal(totalBefore)
+
+	switch {
+	case availableAfter.Equal(availableBefore), !totalDelta.IsZero() && totalUnchanged:
+		return ter.TecPRECISION_LOSS
+	case totalDelta.IsZero() && !totalUnchanged, availableAfter.Cmp(totalAfter) > 0:
+		return ter.TecINTERNAL
+	}
+
+	*v = credited
+	return ter.TesSUCCESS
+}
+
 // reverseImpairment clears an impaired loan's unrealized loss from the vault and
 // clears the flag, restoring the normal payment schedule (rippled unimpairLoan,
 // invoked at the top of LoanPay::doApply).
-func reverseImpairment(ctx *tx.ApplyContext, loan *loanData, vaultKey keylet.Keylet, v *vault.VaultLending, integral bool) ter.Result {
-	asset := lmath.Asset{Integral: integral}
-	scale := vaultScaleOfForRules(v, integral, ctx.Rules())
+func reverseImpairment(ctx *tx.ApplyContext, loan *loanData, v *vault.VaultLending, vaultScale int) ter.Result {
+	asset := mathAsset(v.Asset)
 	loss := loanVaultExposureForRules(v, loan, ctx.Rules())
 	if lendNumForRules(v.LossUnrealized, ctx.Rules()).Cmp(loss) < 0 {
 		return ter.TefBAD_LEDGER
 	}
-	newLoss := lmath.AdjustImprecise(asset, lendNumForRules(v.LossUnrealized, ctx.Rules()), loss.Negate(), scale)
-	if r := vault.UpdateVaultTotals(ctx, vaultKey, v.AssetsTotal, v.AssetsAvailable, numStr(newLoss)); r != ter.TesSUCCESS {
-		return r
-	}
+	newLoss := lmath.AdjustImprecise(asset, lendNumForRules(v.LossUnrealized, ctx.Rules()), loss.Negate(), vaultScale)
+	v.LossUnrealized = numStr(newLoss)
 	loan.Flags &^= LsfLoanImpaired
 	if !ctx.Rules().Enabled(amendment.FeatureFixCleanup3_4_0) {
 		prev := loan.PreviousPaymentDueDate

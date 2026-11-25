@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -33,6 +34,143 @@ func accountingLoanPay(t *testing.T, f *loanSetAssetFixture, loanID string, amou
 func assertAccountingEntriesEqual(t *testing.T, name string, want, got map[string]any) {
 	t.Helper()
 	require.Equal(t, want, got, "%s changed", name)
+}
+
+func requireLoanPayExceptionNoWrites(t *testing.T, env *jtx.TestEnv, borrower *jtx.Account, before map[[32]byte][]byte, balance uint64, sequence uint32, result jtx.TxResult) {
+	t.Helper()
+	require.Equal(t, "tefEXCEPTION", result.Code)
+	require.True(t, result.ApplyInvoked, "LoanPay Apply should be reached")
+	require.False(t, result.Applied)
+	require.Zero(t, result.Fee)
+	require.Nil(t, result.Metadata)
+	require.Equal(t, balance, env.Balance(borrower))
+	require.Equal(t, sequence, env.Seq(borrower))
+	require.Equal(t, before, loanSetLedgerState(t, env))
+}
+
+func TestLoanPayRoundedVaultBalancesRollBack(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, openingTotal, want string
+		cash, impaired                 bool
+	}{
+		{name: "fractional MPT total", kind: "MPT", openingTotal: "10000.25", want: "tecINTERNAL"},
+		{name: "fractional MPT total on impaired loan", kind: "MPT", openingTotal: "10000.25", want: "tecINTERNAL", impaired: true},
+		{name: "repayment rounds to zero", kind: "IOU", openingTotal: "1e20", want: "tecPRECISION_LOSS"},
+		{name: "cash interest rounds away", kind: "IOU", openingTotal: "1e17", want: "tecPRECISION_LOSS", cash: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newAccountingAssetFixture(t, tc.cash, true, tc.kind)
+			loanID, loanKey := createMatrixLoan(t, f, false)
+			f.fundHolding(f.borrower, 1_000)
+
+			if tc.impaired {
+				loan := decodeLendingEntry(t, f.env, loanKey)
+				due, ok := loan["NextPaymentDueDate"].(uint32)
+				if !ok {
+					t.Fatalf("Loan NextPaymentDueDate = %v, want uint32", loan["NextPaymentDueDate"])
+				}
+				f.env.CloseToParentCloseTime(due + 1)
+				manage := lending.NewLoanManage(f.owner.Address, loanID)
+				flags := lending.TfLoanImpair
+				manage.GetCommon().Flags = &flags
+				jtx.RequireTxSuccess(t, f.env.Submit(manage))
+				requireLoanFlags(t, decodeLendingEntry(t, f.env, loanKey), lending.LsfLoanImpaired, true)
+			}
+
+			// Seed a synthetic opening total. At 1e20 the IOU vault rounds the
+			// entire payment away. At 1e17 it retains principal but loses interest.
+			fields := decodeLendingEntry(t, f.env, f.vaultKey)
+			fields["AssetsTotal"] = tc.openingTotal
+			data, err := binarycodec.EncodeDecodedFields(fields)
+			require.NoError(t, err)
+			require.NoError(t, f.env.Ledger().Update(f.vaultKey, data))
+
+			before := loanSetLedgerState(t, f.env)
+			balance := f.env.Balance(f.borrower)
+			sequence := f.env.Seq(f.borrower)
+			loan := decodeLendingEntry(t, f.env, loanKey)
+			amount := matrixNumber(t, loan, "PeriodicPayment").ToInt64WithMode(state.RoundUpward)
+			payment := accountingLoanPay(t, f, loanID, f.amount(amount))
+			if tc.impaired {
+				flags := lending.TfLoanLatePayment
+				payment.GetCommon().Flags = &flags
+			}
+			result := f.env.SubmitSigned(payment)
+
+			jtx.RequireTxClaimed(t, result, tc.want)
+			require.Equal(t, uint64(20), result.Fee)
+			require.Equal(t, balance-result.Fee, f.env.Balance(f.borrower))
+			require.Equal(t, sequence+1, f.env.Seq(f.borrower))
+			require.NotNil(t, result.Metadata)
+			require.Equal(t, result.Code, result.Metadata.TransactionResult.String())
+			require.Len(t, result.Metadata.AffectedNodes, 1)
+			require.NotNil(t, loanSetMetadataNode(result, keylet.Account(f.borrower.AccountID())))
+			requireLoanSetLedgerRollback(t, f, before)
+		})
+	}
+}
+
+func TestLoanPayRejectsIOUAssetsMaximumBeforePrecisionLoss(t *testing.T) {
+	f := newAccountingAssetFixture(t, false, true, "IOU")
+	loanID, loanKey := createMatrixLoan(t, f, false)
+	f.fundHolding(f.borrower, 1_000)
+
+	fields := decodeLendingEntry(t, f.env, f.vaultKey)
+	fields["AssetsTotal"] = "1e20"
+	fields["AssetsMaximum"] = "1e96"
+	data, err := binarycodec.EncodeDecodedFields(fields)
+	require.NoError(t, err)
+	require.NoError(t, f.env.Ledger().Update(f.vaultKey, data))
+
+	before := loanSetLedgerState(t, f.env)
+	balance := f.env.Balance(f.borrower)
+	sequence := f.env.Seq(f.borrower)
+	loan := decodeLendingEntry(t, f.env, loanKey)
+	amount := matrixNumber(t, loan, "PeriodicPayment").ToInt64WithMode(state.RoundUpward)
+	result := f.env.SubmitSigned(accountingLoanPay(t, f, loanID, f.amount(amount)))
+
+	requireLoanPayExceptionNoWrites(t, f.env, f.borrower, before, balance, sequence, result)
+}
+
+func TestLoanPayRejectsOutOfRangeXRPAssetsTotalBeforePaymentFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		expired bool
+	}{
+		{name: "insufficient installment"},
+		{name: "expired payment", expired: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLossLifecycleFixture(t, false, true)
+			loan := decodeLendingEntry(t, f.env, f.loanKey)
+			amount := lossNumber(t, loan, "PeriodicPayment").ToInt64WithMode(state.RoundUpward)
+			if tc.expired {
+				due, ok := loan["NextPaymentDueDate"].(uint32)
+				if !ok {
+					t.Fatalf("Loan NextPaymentDueDate = %v, want uint32", loan["NextPaymentDueDate"])
+				}
+				f.env.CloseToParentCloseTime(due + 1)
+			} else {
+				amount--
+				require.Greater(t, amount, int64(0))
+			}
+
+			fields := decodeLendingEntry(t, f.env, f.vaultKey)
+			fields["AssetsTotal"] = "100000000000000001"
+			data, err := binarycodec.EncodeDecodedFields(fields)
+			require.NoError(t, err)
+			require.NoError(t, f.env.Ledger().Update(f.vaultKey, data))
+
+			before := loanSetLedgerState(t, f.env)
+			balance := f.env.Balance(f.borrower)
+			sequence := f.env.Seq(f.borrower)
+			payment := lending.NewLoanPay(f.borrower.Address, f.loanID, tx.NewXRPAmount(amount))
+			payment.GetCommon().Fee = "20"
+			result := f.env.SubmitSigned(payment)
+
+			requireLoanPayExceptionNoWrites(t, f.env, f.borrower, before, balance, sequence, result)
+		})
+	}
 }
 
 func TestLoanPayAssetPaymentRollbackAndAccounting(t *testing.T) {

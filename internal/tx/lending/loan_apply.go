@@ -289,7 +289,9 @@ func (l *LoanManage) associateEntities(ctx *tx.ApplyContext, loanKey, brokerKey,
 	if verr != nil || v == nil {
 		return ter.TefBAD_LEDGER
 	}
-	associateVaultAsset(v, integral, ctx.Rules())
+	if r := associateVaultAsset(v, ctx.Rules()); r != ter.TesSUCCESS {
+		return r
+	}
 	return vault.UpdateVaultTotals(ctx, vaultKey, v.AssetsTotal, v.AssetsAvailable, v.LossUnrealized)
 }
 
