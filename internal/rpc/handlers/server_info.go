@@ -335,7 +335,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	now := serverSystemTime(services)
 	serverInfo := services.Ledger().GetServerInfo()
 	configSnapshot := services.ServerInfoConfig()
-	baseFee, reserveBase, reserveIncrement := services.Ledger().GetCurrentFees()
+	selectedFees := serverInfo.SelectedLedgerFees
 
 	// Uptime in seconds
 	uptimeDuration := time.Since(serverStartTime)
@@ -557,15 +557,11 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	if haveLedger {
 		age, ageOK := ledgerAge(ledgerCloseTime, now)
 		if human {
-			baseFeeXRP := float64(baseFee) / 1_000_000.0
-			reserveBaseXRP := float64(reserveBase) / 1_000_000.0
-			reserveIncXRP := float64(reserveIncrement) / 1_000_000.0
-
 			ledger := map[string]any{
-				"base_fee_xrp":     baseFeeXRP,
+				"base_fee_xrp":     selectedFees.Base.DecimalXRP(),
 				"hash":             ledgerHash,
-				"reserve_base_xrp": reserveBaseXRP,
-				"reserve_inc_xrp":  reserveIncXRP,
+				"reserve_base_xrp": selectedFees.Reserve.DecimalXRP(),
+				"reserve_inc_xrp":  selectedFees.Increment.DecimalXRP(),
 				"seq":              ledgerSeq,
 			}
 			// rippled NetworkOPs.cpp:2946-2949: close_time_offset is
@@ -594,14 +590,15 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 			}
 			info[ledgerKey] = ledger
 		} else {
-			info[ledgerKey] = map[string]any{
-				"base_fee":     baseFee,
+			ledger := map[string]any{
+				"base_fee":     selectedFees.Base.JSONClipped(),
 				"close_time":   ledgerCloseTime,
 				"hash":         ledgerHash,
-				"reserve_base": reserveBase,
-				"reserve_inc":  reserveIncrement,
+				"reserve_base": selectedFees.Reserve.JSONClipped(),
+				"reserve_inc":  selectedFees.Increment.JSONClipped(),
 				"seq":          ledgerSeq,
 			}
+			info[ledgerKey] = ledger
 		}
 	}
 

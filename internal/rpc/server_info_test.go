@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/rpcerrors"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	rpcadapter "github.com/LeJamon/go-xrpl/internal/rpc/adapter"
@@ -48,6 +49,8 @@ type mockLedgerServiceServerInfo struct {
 	baseFee          uint64
 	reserveBase      uint64
 	reserveIncrement uint64
+	haveSelectedFees bool
+	selectedFees     drops.Fees
 }
 
 func newMockLedgerServiceServerInfo() *mockLedgerServiceServerInfo {
@@ -70,6 +73,14 @@ func (m *mockLedgerServiceServerInfo) GetCurrentFees() (baseFee, reserveBase, re
 }
 
 func (m *mockLedgerServiceServerInfo) GetServerInfo() types.LedgerServerInfo {
+	selectedFees := drops.Fees{
+		Base:      drops.XRPAmount(m.baseFee),
+		Reserve:   drops.XRPAmount(m.reserveBase),
+		Increment: drops.XRPAmount(m.reserveIncrement),
+	}
+	if m.haveSelectedFees {
+		selectedFees = m.selectedFees
+	}
 	return types.LedgerServerInfo{
 		Standalone:               m.standalone,
 		ServerState:              m.serverState,
@@ -81,6 +92,7 @@ func (m *mockLedgerServiceServerInfo) GetServerInfo() types.LedgerServerInfo {
 		ValidatedLedgerSeq:       m.validatedLedgerIndex,
 		ValidatedLedgerHash:      m.serverInfo.ValidatedLedgerHash,
 		ValidatedLedgerCloseTime: m.serverInfo.ValidatedLedgerCloseTime,
+		SelectedLedgerFees:       selectedFees,
 		CompleteLedgers:          m.serverInfo.CompleteLedgers,
 		HavePublished:            m.serverInfo.HavePublished,
 		PublishedLedgerSeq:       m.serverInfo.PublishedLedgerSeq,
@@ -1162,6 +1174,104 @@ func TestServerInfoFeeCalculations(t *testing.T) {
 			assert.InDelta(t, tc.expectedInc, reserveIncXRP, 0.0001)
 		})
 	}
+}
+
+func TestServerInfoFeesUseValidatedLedgerSchedule(t *testing.T) {
+	mock := newMockLedgerServiceServerInfo()
+	mock.baseFee = 901
+	mock.reserveBase = 902
+	mock.reserveIncrement = 903
+	mock.haveSelectedFees = true
+	mock.selectedFees = drops.Fees{Base: 11, Reserve: 22, Increment: 33}
+	mock.validatedLedgerIndex = 8
+	mock.closedLedgerIndex = 9
+	services := servicesForServerInfo(mock)
+	ctx := &types.RpcContext{
+		Context:  context.Background(),
+		Role:     types.RoleGuest,
+		Services: services,
+	}
+
+	human := callServerStatus(t, ctx, true)["validated_ledger"].(map[string]any)
+	assert.Equal(t, float64(11)/1_000_000, human["base_fee_xrp"])
+	assert.Equal(t, float64(22)/1_000_000, human["reserve_base_xrp"])
+	assert.Equal(t, float64(33)/1_000_000, human["reserve_inc_xrp"])
+
+	machine := callServerStatus(t, ctx, false)["validated_ledger"].(map[string]any)
+	assert.Equal(t, int32(11), machine["base_fee"])
+	assert.Equal(t, int32(22), machine["reserve_base"])
+	assert.Equal(t, int32(33), machine["reserve_inc"])
+}
+
+func TestServerInfoSelectedFeeJSONBounds(t *testing.T) {
+	tests := []struct {
+		name  string
+		value drops.XRPAmount
+		want  int32
+	}{
+		{name: "negative", value: -7, want: -7},
+		{name: "zero", value: 0, want: 0},
+		{name: "upper clipping", value: drops.XRPAmount(math.MaxInt32) + 1, want: math.MaxInt32},
+		{name: "lower clipping", value: drops.XRPAmount(math.MinInt32) - 1, want: math.MinInt32},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := newMockLedgerServiceServerInfo()
+			mock.haveSelectedFees = true
+			mock.selectedFees = drops.Fees{
+				Base:      test.value,
+				Reserve:   test.value,
+				Increment: test.value,
+			}
+			services := servicesForServerInfo(mock)
+			ctx := &types.RpcContext{
+				Context:  context.Background(),
+				Role:     types.RoleGuest,
+				Services: services,
+			}
+
+			human := callServerStatus(t, ctx, true)["validated_ledger"].(map[string]any)
+			wantXRP := float64(test.value) / 1_000_000
+			assert.Equal(t, wantXRP, human["base_fee_xrp"])
+			assert.Equal(t, wantXRP, human["reserve_base_xrp"])
+			assert.Equal(t, wantXRP, human["reserve_inc_xrp"])
+
+			machine := callServerStatus(t, ctx, false)["validated_ledger"].(map[string]any)
+			assert.Equal(t, test.want, machine["base_fee"])
+			assert.Equal(t, test.want, machine["reserve_base"])
+			assert.Equal(t, test.want, machine["reserve_inc"])
+		})
+	}
+}
+
+func TestServerInfoFeesUseClosedLedgerWhenUnvalidated(t *testing.T) {
+	mock := newMockLedgerServiceServerInfo()
+	mock.baseFee = 901
+	mock.reserveBase = 902
+	mock.reserveIncrement = 903
+	mock.haveSelectedFees = true
+	mock.selectedFees = drops.Fees{Base: -11, Reserve: 0, Increment: 33}
+	mock.closedLedgerIndex = 9
+	mock.validatedLedgerIndex = 0
+	services := servicesForServerInfo(mock)
+	ctx := &types.RpcContext{
+		Context:  context.Background(),
+		Role:     types.RoleGuest,
+		Services: services,
+	}
+
+	human := callServerStatus(t, ctx, true)
+	assert.NotContains(t, human, "validated_ledger")
+	closed := human["closed_ledger"].(map[string]any)
+	assert.Equal(t, float64(-11)/1_000_000, closed["base_fee_xrp"])
+	assert.Equal(t, float64(0), closed["reserve_base_xrp"])
+	assert.Equal(t, float64(33)/1_000_000, closed["reserve_inc_xrp"])
+
+	machine := callServerStatus(t, ctx, false)["closed_ledger"].(map[string]any)
+	assert.Equal(t, int32(-11), machine["base_fee"])
+	assert.Equal(t, int32(0), machine["reserve_base"])
+	assert.Equal(t, int32(33), machine["reserve_inc"])
 }
 
 // Server State Method Tests

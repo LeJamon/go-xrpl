@@ -1214,9 +1214,12 @@ type LedgerServerInfo struct {
 	ValidatedLedgerSeq       uint32
 	ValidatedLedgerHash      [32]byte
 	ValidatedLedgerCloseTime int64 // Ripple-epoch seconds; 0 when unknown.
-	CompleteLedgers          string
-	HavePublished            bool
-	PublishedLedgerSeq       uint32
+	// SelectedLedgerFees was captured from the ledger selected for the
+	// validated_ledger/closed_ledger response.
+	SelectedLedgerFees drops.Fees
+	CompleteLedgers    string
+	HavePublished      bool
+	PublishedLedgerSeq uint32
 	// HaveValidatedRange is true when the complete validated lookup range is
 	// available. Its maximum excludes ledgers with pending persistence.
 	HaveValidatedRange bool

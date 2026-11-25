@@ -168,6 +168,7 @@ func (a *ledgerAdapter) GetServerInfo() types.LedgerServerInfo {
 	if closed != nil {
 		info.ClosedLedgerSeq = closed.Sequence()
 		info.ClosedLedgerHash = closed.Hash()
+		info.SelectedLedgerFees = closed.Fees()
 		info.CompleteLedgers = a.completeLedgerRange(closed.Sequence())
 	}
 	if a.haveValidated() {

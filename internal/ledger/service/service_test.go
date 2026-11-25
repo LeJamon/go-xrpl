@@ -5,8 +5,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 func TestNewValidatesStartupConfiguration(t *testing.T) {
@@ -308,6 +312,46 @@ func TestGetServerInfo(t *testing.T) {
 	}
 
 	t.Logf("Server info: %+v", info)
+}
+
+func TestGetServerInfoSelectedLedgerFees(t *testing.T) {
+	newLedger := func(t *testing.T, seq uint32, fees drops.Fees) *ledger.Ledger {
+		t.Helper()
+		l, err := ledger.NewOpenWithHeader(
+			header.LedgerHeader{LedgerIndex: seq},
+			shamap.New(shamap.TypeState),
+			shamap.New(shamap.TypeTransaction),
+			fees,
+		)
+		if err != nil {
+			t.Fatalf("NewOpenWithHeader: %v", err)
+		}
+		return l
+	}
+
+	validatedFees := drops.Fees{Base: -11, Reserve: 0, Increment: 33}
+	closedFees := drops.Fees{Base: 44, Reserve: 55, Increment: 66}
+	svc, err := New(DefaultConfig())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	svc.mu.Lock()
+	svc.closedLedger = newLedger(t, 8, closedFees)
+	svc.validatedLedger = newLedger(t, 7, validatedFees)
+	svc.mu.Unlock()
+
+	info := svc.GetServerInfo()
+	if info.SelectedLedgerFees != validatedFees {
+		t.Fatalf("selected fees with validation = %+v, want %+v", info.SelectedLedgerFees, validatedFees)
+	}
+
+	svc.mu.Lock()
+	svc.validatedLedger = nil
+	svc.mu.Unlock()
+	info = svc.GetServerInfo()
+	if info.SelectedLedgerFees != closedFees {
+		t.Fatalf("selected fees without validation = %+v, want %+v", info.SelectedLedgerFees, closedFees)
+	}
 }
 
 func TestNotStandaloneError(t *testing.T) {

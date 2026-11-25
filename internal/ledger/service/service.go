@@ -2413,6 +2413,9 @@ func (s *Service) GetServerInfo() ServerInfo {
 		info.ValidatedLedgerSeq = s.validatedLedger.Sequence()
 		info.ValidatedLedgerHash = s.validatedLedger.Hash()
 		info.ValidatedLedgerCloseTime = protocol.RippleSeconds(s.validatedLedger.CloseTime())
+		info.SelectedLedgerFees = s.validatedLedger.Fees()
+	} else if s.closedLedger != nil {
+		info.SelectedLedgerFees = s.closedLedger.Fees()
 	}
 
 	serverStateFunc := s.serverStateFunc
@@ -2449,13 +2452,16 @@ type ServerInfo struct {
 	ValidatedLedgerSeq       uint32
 	ValidatedLedgerHash      [32]byte
 	ValidatedLedgerCloseTime int64 // Ripple-epoch seconds
-	CompleteLedgers          string
-	HavePublished            bool
-	PublishedLedgerSeq       uint32
-	HaveValidatedRange       bool
-	ValidatedRangeMin        uint32
-	ValidatedRangeMax        uint32
-	NetworkID                uint32
+	// SelectedLedgerFees belongs to the validated ledger, or the closed-ledger
+	// fallback when no ledger is validated.
+	SelectedLedgerFees drops.Fees
+	CompleteLedgers    string
+	HavePublished      bool
+	PublishedLedgerSeq uint32
+	HaveValidatedRange bool
+	ValidatedRangeMin  uint32
+	ValidatedRangeMax  uint32
+	NetworkID          uint32
 	// PersistFailures counts validated-ledger persists failed since the last
 	// success; LastFailedPersist is the most recent failed sequence.
 	PersistFailures   uint32

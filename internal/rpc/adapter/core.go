@@ -81,6 +81,7 @@ func (a *LedgerServiceAdapter) GetServerInfo() types.LedgerServerInfo {
 		ValidatedLedgerSeq:       info.ValidatedLedgerSeq,
 		ValidatedLedgerHash:      info.ValidatedLedgerHash,
 		ValidatedLedgerCloseTime: info.ValidatedLedgerCloseTime,
+		SelectedLedgerFees:       info.SelectedLedgerFees,
 		CompleteLedgers:          info.CompleteLedgers,
 		HavePublished:            info.HavePublished,
 		PublishedLedgerSeq:       info.PublishedLedgerSeq,
