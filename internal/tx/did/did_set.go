@@ -157,8 +157,7 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecEMPTY_DID
 	}
 
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-	if ctx.Account.Balance < reserve {
+	if !hasDIDCreateReserve(ctx) {
 		return ter.TecINSUFFICIENT_RESERVE
 	}
 
@@ -184,9 +183,18 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	ctx.Account.OwnerCount++
+	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)
 
 	return ter.TesSUCCESS
+}
+
+func hasDIDCreateReserve(ctx *tx.ApplyContext) bool {
+	if ctx.Rules().Enabled(amendment.FeatureSponsor) {
+		reserve, ok := tx.RequiredAccountReserve(ctx.Config, ctx.Account, 1, 0)
+		return ok && ctx.Account.Balance >= reserve
+	}
+	// Before Sponsor, reserve calculation uses the wrapping uint32 sum.
+	return ctx.Account.Balance >= ctx.AccountReserve(ctx.Account.OwnerCount+1)
 }
 
 func validateDIDField(value string, tooLong error) error {

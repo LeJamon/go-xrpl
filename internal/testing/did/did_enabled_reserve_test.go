@@ -3,11 +3,13 @@ package did_test
 import (
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/did"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
@@ -108,6 +110,54 @@ func TestEmptyDIDWithoutReserve(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, wantRoot, env.LastClosedLedger().Header().TxHash)
 	})
+}
+
+func TestDIDCreateAtMaxOwnerCount(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		sponsorEnabled  bool
+		sponsoredOwners uint32
+		postFeeBalance  uint64
+		wantCreated     bool
+	}{
+		{name: "legacy reserve", postFeeBalance: math.MaxUint32 - 1, wantCreated: true},
+		{name: "one drop short", sponsorEnabled: true, postFeeBalance: math.MaxUint32 - 1},
+		{name: "exact reserve", sponsorEnabled: true, postFeeBalance: math.MaxUint32, wantCreated: true},
+		{name: "one sponsored owner", sponsorEnabled: true, sponsoredOwners: 1, postFeeBalance: math.MaxUint32 - 1},
+		{name: "two sponsored owners", sponsorEnabled: true, sponsoredOwners: 2, postFeeBalance: math.MaxUint32 - 1, wantCreated: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := jtx.NewTestEnv(t)
+			if tc.sponsorEnabled {
+				env.EnableFeature("Sponsor")
+			} else {
+				env.DisableFeature("Sponsor")
+			}
+			env.SetReserves(0, 1)
+			owner := jtx.NewAccount("owner")
+			env.FundAmount(owner, tc.postFeeBalance+env.BaseFee())
+			env.Close()
+			env.SetOpenLedger(false)
+			account, err := state.ReadAccountRoot(env.Ledger(), owner.ID)
+			require.NoError(t, err)
+			require.NotNil(t, account)
+			account.OwnerCount = math.MaxUint32
+			account.SponsoredOwnerCount = tc.sponsoredOwners
+			entry, err := state.SerializeAccountRoot(account)
+			require.NoError(t, err)
+			require.NoError(t, env.Ledger().Update(keylet.Account(owner.ID), entry))
+
+			result := env.Submit(did.DIDSet(owner).URI("uri").Build())
+			if tc.wantCreated {
+				jtx.RequireTxSuccess(t, result)
+			} else {
+				jtx.RequireTxClaimed(t, result, jtx.TecINSUFFICIENT_RESERVE)
+			}
+			require.Equal(t, tc.wantCreated, env.LedgerEntryExists(keylet.DID(owner.ID)))
+			require.Equal(t, uint32(math.MaxUint32), env.OwnerCount(owner))
+			require.Equal(t, tc.postFeeBalance, env.Balance(owner))
+		})
+	}
 }
 
 func TestAccountReserve(t *testing.T) {
