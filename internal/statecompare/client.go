@@ -191,7 +191,7 @@ func (c *Client) Transactions(ctx context.Context, snapshot *LedgerSnapshot) ([]
 		return nil, errors.New("statecompare: nil ledger snapshot")
 	}
 	if !snapshot.hasBlob {
-		return nil, fmt.Errorf("ledger %d has no transaction blob: %w", snapshot.LedgerIndex, errNotFound)
+		return nil, fmt.Errorf("ledger %d has no transaction blob: %w", snapshot.LedgerIndex, ErrNotFound)
 	}
 	kind, _, err := parseBlobKey(snapshot.blobKey)
 	if err != nil {

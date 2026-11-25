@@ -105,7 +105,7 @@ func (l *localBlobStore) open(ctx context.Context, key string) (*blobObject, err
 	file, err := l.root.Open(key)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("blob %q: %w", key, errNotFound)
+			return nil, fmt.Errorf("blob %q: %w", key, ErrNotFound)
 		}
 		return nil, fmt.Errorf("opening blob %q: %w", key, err)
 	}
@@ -275,7 +275,7 @@ func (s *s3BlobStore) open(ctx context.Context, key string) (*blobObject, error)
 		}
 		return &blobObject{ReadCloser: resp.Body, size: resp.ContentLength}, nil
 	case http.StatusNotFound:
-		return nil, errors.Join(fmt.Errorf("blob %q: %w", key, errNotFound), resp.Body.Close())
+		return nil, errors.Join(fmt.Errorf("blob %q: %w", key, ErrNotFound), resp.Body.Close())
 	default:
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 512))
 		closeErr := resp.Body.Close()

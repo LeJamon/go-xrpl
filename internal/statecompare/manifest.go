@@ -8,7 +8,8 @@ import (
 	"math"
 )
 
-var errNotFound = errors.New("statecompare: ledger not found")
+// ErrNotFound indicates a ledger or archive blob is unavailable.
+var ErrNotFound = errors.New("statecompare: ledger not found")
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -98,7 +99,7 @@ func (m *sqlManifest) snapshot(ctx context.Context, requested uint32) (*LedgerSn
 		&blobOffset,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("ledger %d: %w", requested, errNotFound)
+		return nil, fmt.Errorf("ledger %d: %w", requested, ErrNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("querying ledger %d snapshot: %w", requested, err)
@@ -174,7 +175,7 @@ func (m *sqlManifest) checkpoint(ctx context.Context, requested uint32) (checkpo
 		&sizeBytes,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return checkpointManifest{}, fmt.Errorf("checkpoint %d: %w", requested, errNotFound)
+		return checkpointManifest{}, fmt.Errorf("checkpoint %d: %w", requested, ErrNotFound)
 	}
 	if err != nil {
 		return checkpointManifest{}, fmt.Errorf("querying checkpoint %d: %w", requested, err)

@@ -19,16 +19,9 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
-// replayHistoryClient is the subset of the state-compare client needed to
-// recover a fee schedule. It deliberately does not require state checkpoints:
-// a transaction pack and its ledger snapshot are sufficient to verify a prior
-// SetFee, even when the corresponding state pack was not archived.
 type replayHistoryClient interface {
 	Snapshot(context.Context, uint32) (*statecompare.LedgerSnapshot, error)
 	Transactions(context.Context, *statecompare.LedgerSnapshot) ([]statecompare.Transaction, error)
-}
-
-type replayGenesisStateClient interface {
 	StreamStateEntries(context.Context, *statecompare.LedgerSnapshot, func(statecompare.StateEntry) error) error
 }
 
@@ -65,7 +58,7 @@ func resolveReplaySeedFees(
 	inherited drops.Fees,
 	checkpointFees *drops.Fees,
 ) (drops.Fees, error) {
-	rules, err := loadRulesFromState(stateMap)
+	rules, err := ledger.LoadAmendmentsFromSHAMapContext(ctx, stateMap)
 	if err != nil {
 		return drops.Fees{}, err
 	}
@@ -81,12 +74,6 @@ func resolveReplaySeedFees(
 	}
 	if snapshot == nil {
 		return drops.Fees{}, errors.New("cannot recover partial FeeSettings without a seed snapshot")
-	}
-	if settings == nil {
-		if snapshot.LedgerIndex <= 1 {
-			return inherited, nil
-		}
-		return drops.Fees{}, fmt.Errorf("seed ledger %d has no FeeSettings entry and no inherited fee schedule", snapshot.LedgerIndex)
 	}
 	if snapshot.LedgerIndex <= 1 {
 		return settings.ApplyTo(inherited), nil
@@ -108,7 +95,7 @@ func recoverPriorFeeSchedule(
 	if client == nil {
 		return drops.Fees{}, errors.New("cannot recover partial FeeSettings without an archive client")
 	}
-	if settings.PreviousTxnLgrSeq != 0 || settings.PreviousTxnID != ([32]byte{}) {
+	if settings != nil && (settings.PreviousTxnLgrSeq != 0 || settings.PreviousTxnID != ([32]byte{})) {
 		if settings.PreviousTxnLgrSeq == 0 || settings.PreviousTxnID == ([32]byte{}) {
 			return drops.Fees{}, errors.New("partial FeeSettings has an incomplete PreviousTxnID/PreviousTxnLgrSeq history pointer")
 		}
@@ -183,7 +170,7 @@ func transactionsOrEmpty(ctx context.Context, client replayHistoryClient, snapsh
 			return nil, ctxErr
 		}
 	}
-	if err != nil && snapshot != nil && snapshot.TransactionCount == 0 && snapshot.TransactionHash == ([32]byte{}) {
+	if errors.Is(err, statecompare.ErrNotFound) && snapshot.TransactionCount == 0 && snapshot.TransactionHash == ([32]byte{}) {
 		// Empty ledgers may legitimately have no transaction pack. A non-empty
 		// transaction root or a non-empty manifest must still propagate the
 		// archive error to the caller.
@@ -193,12 +180,8 @@ func transactionsOrEmpty(ctx context.Context, client replayHistoryClient, snapsh
 }
 
 func genesisFeeSchedule(ctx context.Context, client replayHistoryClient, snapshot *statecompare.LedgerSnapshot) (drops.Fees, error) {
-	streamer, ok := client.(replayGenesisStateClient)
-	if !ok {
-		return drops.Fees{}, errors.New("verified FeeSettings history reached genesis without an available genesis state pack")
-	}
 	stateMap := shamap.New(shamap.TypeState)
-	if err := streamer.StreamStateEntries(ctx, snapshot, func(entry statecompare.StateEntry) error {
+	if err := client.StreamStateEntries(ctx, snapshot, func(entry statecompare.StateEntry) error {
 		return stateMap.Put(entry.Index, entry.Data)
 	}); err != nil {
 		return drops.Fees{}, fmt.Errorf("loading genesis FeeSettings state: %w", err)
@@ -206,7 +189,7 @@ func genesisFeeSchedule(ctx context.Context, client replayHistoryClient, snapsho
 	if err := verifyStateRoot(stateMap, snapshot.AccountHash, snapshot.LedgerIndex); err != nil {
 		return drops.Fees{}, fmt.Errorf("verifying genesis FeeSettings state: %w", err)
 	}
-	rules, err := loadRulesFromState(stateMap)
+	rules, err := ledger.LoadAmendmentsFromSHAMapContext(ctx, stateMap)
 	if err != nil {
 		return drops.Fees{}, fmt.Errorf("loading genesis amendment rules: %w", err)
 	}

@@ -23,10 +23,11 @@ import (
 )
 
 type replayFeeHistoryClient struct {
-	snapshots    map[uint32]*statecompare.LedgerSnapshot
-	transactions map[uint32][]statecompare.Transaction
-	snapshotErr  map[uint32]error
-	stateEntries map[uint32][]statecompare.StateEntry
+	snapshots      map[uint32]*statecompare.LedgerSnapshot
+	transactions   map[uint32][]statecompare.Transaction
+	snapshotErr    map[uint32]error
+	transactionErr error
+	stateEntries   map[uint32][]statecompare.StateEntry
 }
 
 func (c *replayFeeHistoryClient) Snapshot(_ context.Context, seq uint32) (*statecompare.LedgerSnapshot, error) {
@@ -37,7 +38,7 @@ func (c *replayFeeHistoryClient) Snapshot(_ context.Context, seq uint32) (*state
 }
 
 func (c *replayFeeHistoryClient) Transactions(_ context.Context, snapshot *statecompare.LedgerSnapshot) ([]statecompare.Transaction, error) {
-	return c.transactions[snapshot.LedgerIndex], nil
+	return c.transactions[snapshot.LedgerIndex], c.transactionErr
 }
 
 func (c *replayFeeHistoryClient) StreamStateEntries(_ context.Context, snapshot *statecompare.LedgerSnapshot, fn func(statecompare.StateEntry) error) error {
@@ -146,6 +147,34 @@ func TestResolveReplaySeedFeesAnchorsCustomGenesisSchedule(t *testing.T) {
 	}
 	if want := (drops.Fees{Base: 0, Reserve: 34, Increment: 56}); got != want {
 		t.Fatalf("resolved fees = %+v, want %+v", got, want)
+	}
+
+	got, err = resolveReplaySeedFees(context.Background(), client, client.snapshots[3], shamap.New(shamap.TypeState), drops.DefaultFees(), nil)
+	if err != nil || got != (drops.Fees{Base: 12, Reserve: 34, Increment: 56}) {
+		t.Fatalf("absent FeeSettings resolved to %+v, %v", got, err)
+	}
+
+}
+
+func TestFeeHistoryEmptyLedgerArchiveErrors(t *testing.T) {
+	invalid := errors.New("invalid ledger header")
+	for _, test := range []struct {
+		name             string
+		hash             [32]byte
+		count            uint32
+		readErr, wantErr error
+	}{
+		{"missing empty pack", [32]byte{}, 0, statecompare.ErrNotFound, nil},
+		{"missing nonempty pack", [32]byte{1}, 1, statecompare.ErrNotFound, statecompare.ErrNotFound},
+		{"invalid empty pack", [32]byte{}, 0, invalid, invalid},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &replayFeeHistoryClient{transactionErr: test.readErr}
+			_, err := transactionsOrEmpty(context.Background(), client, &statecompare.LedgerSnapshot{TransactionHash: test.hash, TransactionCount: test.count})
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("read transactions: got %v, want %v", err, test.wantErr)
+			}
+		})
 	}
 }
 

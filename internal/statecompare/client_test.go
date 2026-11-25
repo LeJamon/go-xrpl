@@ -49,7 +49,7 @@ func (s *memoryBlobStore) open(ctx context.Context, key string) (*blobObject, er
 	s.opens++
 	data, ok := s.objects[key]
 	if !ok {
-		return nil, errNotFound
+		return nil, ErrNotFound
 	}
 	return &blobObject{ReadCloser: io.NopCloser(bytes.NewReader(data)), size: int64(len(data))}, nil
 }
