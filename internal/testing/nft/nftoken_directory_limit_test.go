@@ -44,7 +44,8 @@ func TestNFTokenOfferBeyondLegacyDirectoryLimit(t *testing.T) {
 	env.EnableFeature("fixDirectoryLimit")
 	seller := jtx.NewAccount("seller")
 	buyer := jtx.NewAccount("buyer")
-	env.Fund(seller, buyer)
+	env.Fund(seller)
+	env.FundAmount(buyer, env.ReserveBase()+env.ReserveIncrement())
 	env.Close()
 
 	id := nft.GetNextNFTokenID(env, seller, 0, nftoken.NFTokenFlagTransferable, 0)
@@ -77,6 +78,7 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 		lowReserve     bool
 		mint           bool
 		corrupt        bool
+		missingPage    bool
 		want           ter.Result
 	}{
 		{name: "full owner directory", want: ter.TecDIR_FULL},
@@ -84,7 +86,9 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 		{name: "sell directory page overflow", tokenDirectory: true, fixLimit: true, want: ter.TecDIR_FULL},
 		{name: "reserve before directory", lowReserve: true, want: ter.TecINSUFFICIENT_RESERVE},
 		{name: "mint with full owner directory", mint: true, want: ter.TecDIR_FULL},
+		{name: "mint with full sell directory", mint: true, tokenDirectory: true, want: ter.TecDIR_FULL},
 		{name: "invalid owner directory", corrupt: true, want: ter.TefINTERNAL},
+		{name: "missing sell directory page", tokenDirectory: true, missingPage: true, want: ter.TefEXCEPTION},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := jtx.NewTestEnv(t)
@@ -130,6 +134,9 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 				require.NoError(t, env.Ledger().Insert(dirKey, accountData))
 			} else {
 				fillNFTOfferDirectory(t, env, dirKey, dir, lastPage)
+				if tc.missingPage {
+					require.NoError(t, env.Ledger().Erase(keylet.DirPage(dirKey.Key, lastPage)))
+				}
 			}
 
 			count := env.OwnerCount(alice)
@@ -140,11 +147,12 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 			offerKey := keylet.NFTokenOffer(alice.ID, wantSequence)
 			minted := env.MintedCount(alice)
 			entries := []keylet.Keylet{ownerDir, tokenDir, keylet.DirPage(dirKey.Key, lastPage), keylet.NFTokenPageMax(alice.ID)}
-			before := make([][]byte, len(entries))
-			for i, key := range entries {
+			before := make(map[keylet.Keylet][]byte, len(entries))
+			for _, key := range entries {
+				key.Type = entry.TypeAny
 				data, err := env.LedgerEntry(key)
 				require.NoError(t, err)
-				before[i] = bytes.Clone(data)
+				before[key] = bytes.Clone(data)
 			}
 
 			result := env.Submit(transaction)
@@ -160,6 +168,7 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 				wantSequence++
 			} else {
 				require.Zero(t, result.Fee)
+				require.Nil(t, result.Metadata)
 			}
 			env.Close()
 
@@ -168,10 +177,10 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 			jtx.RequireSequence(t, env, alice, wantSequence)
 			jtx.RequireOwnerCount(t, env, alice, count)
 			jtx.RequireMintedCount(t, env, alice, minted)
-			for i, key := range entries {
+			for key, want := range before {
 				data, err := env.LedgerEntry(key)
 				require.NoError(t, err)
-				require.Equalf(t, before[i], data, "ledger entry %x", key.Key)
+				require.Equalf(t, want, data, "ledger entry %x", key.Key)
 			}
 		})
 	}

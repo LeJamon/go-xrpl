@@ -2917,7 +2917,8 @@ func TestNFTokenMintOffer(t *testing.T) {
 			env.EnableFeature("NFTokenMintOffer")
 			alice := jtx.NewAccount("alice")
 			buyer := jtx.NewAccount("buyer")
-			env.Fund(alice, buyer)
+			env.FundAmount(alice, env.ReserveBase()+2*env.ReserveIncrement())
+			env.Fund(buyer)
 			env.Close()
 
 			offerKey := keylet.NFTokenOffer(alice.ID, env.Seq(alice))
