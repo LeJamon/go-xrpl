@@ -150,13 +150,9 @@ func (e *Engine) feePayerBalanceAndSpendable(payer feePayer, source *state.Accou
 		if !ok {
 			return 0, 0, ter.TefINTERNAL
 		}
-		if reserve > 0 {
-			reserveDrops := uint64(reserve)
-			if spendable > reserveDrops {
-				spendable -= reserveDrops
-			} else {
-				spendable = 0
-			}
+		spendable, ok = txcore.LiquidXRP(account.Balance, reserve)
+		if !ok {
+			return 0, 0, ter.TefINTERNAL
 		}
 	}
 	return account.Balance, spendable, ter.TesSUCCESS
@@ -175,6 +171,7 @@ func (e *Engine) payExternalFeeOnTable(
 	table *applystate.ApplyStateTable,
 	recovery bool,
 ) ter.Result {
+	st.externalFeeDebt = 0
 	if !st.hasExternalFeePayer() {
 		return ter.TesSUCCESS
 	}
@@ -209,7 +206,10 @@ func (e *Engine) payExternalFeeOnTable(
 		if err != nil {
 			return ter.TefINTERNAL
 		}
-		after := balance - fee
+		after := uint64(0)
+		if fee <= balance {
+			after = balance - fee
+		}
 		sponsorship.FeeAmount = after
 		sponsorship.HasFeeAmount = after != 0
 		updated, err := state.SerializeSponsorship(sponsorship)
@@ -230,7 +230,50 @@ func (e *Engine) payExternalFeeOnTable(
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	account.Balance = balance - fee
+	if fee <= balance {
+		account.Balance = balance - fee
+	} else {
+		// A negative reserve can authorize a fee larger than the stored balance.
+		// Rippled carries the resulting negative XRPAmount until any incoming
+		// credit settles it; AccountRoot.Balance is uint64 here, so retain the
+		// signed deficit separately while staging a zero balance.
+		account.Balance = 0
+		st.externalFeeDebt = fee - balance
+	}
+	updated, err := state.SerializeAccountRoot(account)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if err := table.Update(st.feePayer.keylet, updated); err != nil {
+		return ter.TefINTERNAL
+	}
+	return ter.TesSUCCESS
+}
+
+// settleExternalFeeDebt restores the signed sponsor balance after Apply has
+// had an opportunity to credit the fee payer. A remaining deficit is kept for
+// the invariant pass, which follows rippled's fatal second-invariant result
+// when no incoming value makes the signed balance non-negative.
+func (e *Engine) settleExternalFeeDebt(st *applyState, table *applystate.ApplyStateTable) ter.Result {
+	if st.externalFeeDebt == 0 {
+		return ter.TesSUCCESS
+	}
+	data, err := table.Read(st.feePayer.keylet)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if data == nil {
+		return ter.TesSUCCESS
+	}
+	account, err := state.ParseAccountRoot(data)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if account.Balance < st.externalFeeDebt {
+		return ter.TesSUCCESS
+	}
+	account.Balance -= st.externalFeeDebt
+	st.externalFeeDebt = 0
 	updated, err := state.SerializeAccountRoot(account)
 	if err != nil {
 		return ter.TefINTERNAL

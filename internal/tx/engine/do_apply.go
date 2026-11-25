@@ -31,18 +31,23 @@ type applyState struct {
 	originalAccountData []byte
 	fee                 uint64
 	// chargedFee is the fee actually deducted from the payer. It equals fee on
-	// the success path, but the tec/invariant recovery paths clamp it to the
-	// payer's balance (rippled Transactor::reset() — `if (fee > balance) fee =
-	// balance`). The caller in apply.go reads it back to destroy / report only
-	// the fee that was really charged.
-	chargedFee  uint64
-	isDelegated bool
-	feePayer    feePayer
-	isTicket    bool
-	txHash      [32]byte
-	metadata    *txcore.Metadata
-	table       *applystate.ApplyStateTable
-	ctx         context.Context
+	// the success path; recovery clamps it to the authorized spendable amount
+	// (rippled Transactor::reset() — `if (fee > spendable) fee = spendable`). A
+	// negative reserve can make the authorized amount exceed the stored balance;
+	// externalFeeDebt carries that transient signed difference.
+	chargedFee uint64
+	// externalFeeDebt carries the signed deficit when a co-signed sponsor's
+	// spendable allowance exceeds its serialized balance. The account image is
+	// clamped at zero while Apply runs; a destination credit can settle this
+	// debt before invariant checks.
+	externalFeeDebt uint64
+	isDelegated     bool
+	feePayer        feePayer
+	isTicket        bool
+	txHash          [32]byte
+	metadata        *txcore.Metadata
+	table           *applystate.ApplyStateTable
+	ctx             context.Context
 }
 
 // sourceFeeCharged is the fee deducted from the source account for this tx — the
@@ -204,6 +209,9 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 		if err := table.Update(accountKey, updatedData); err != nil {
 			return ter.TefINTERNAL, 0
 		}
+	}
+	if r := e.settleExternalFeeDebt(st, table); r != ter.TesSUCCESS {
+		return r, 0
 	}
 
 	// Run invariant checks BEFORE committing — entries are still inspectable in the table.
@@ -817,11 +825,17 @@ func (e *Engine) runInvariantsOnTable(st *applyState, result ter.Result, table *
 	invEntries := table.CollectEntries()
 	txDeclaredFee := parseTxDeclaredFee(st.tx, st.fee)
 	// The XRP-conservation checks compare the net balance delta against the fee
-	// ACTUALLY charged, which the tec/recovery paths clamp to the payer's balance
-	// (st.chargedFee). rippled passes the clamped fee from reset() into
-	// checkInvariants (Transactor.cpp:1195, 1222); passing the unclamped declared
-	// fee would make XRPNotCreated see a phantom imbalance when a fee was clamped.
+	// ACTUALLY charged (st.chargedFee). Rippled passes the fee selected by reset()
+	// into checkInvariants (Transactor.cpp:1195, 1222); passing the unclamped
+	// declared fee would make XRPNotCreated see a phantom imbalance when recovery
+	// caps the authorized allowance.
 	violation := invariants.CheckInvariants(wrapTxForInvariantsWithContext(st.tx, invariantsContextForApply(st, e.config.ParentCloseTime)), invariants.Result(result), st.chargedFee, txDeclaredFee, invEntries, invariants.WithParentCloseTime(table, e.config.ParentCloseTime), e.rules(), e.config.NumberContext())
+	if violation == nil && st.externalFeeDebt != 0 {
+		violation = &invariants.InvariantViolation{
+			Name:    "XRPBalanceChecks",
+			Message: fmt.Sprintf("external fee payer remains short by %d drops", st.externalFeeDebt),
+		}
+	}
 	if violation == nil && e.invariantViolationHook != nil {
 		violation = e.invariantViolationHook(result, table)
 	}
@@ -953,9 +967,15 @@ func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (
 	// If fee-only state also violates invariants, escalate to tefINVARIANT_FAILED
 	// and do NOT apply anything (transaction is completely rejected).
 	invEntries2 := invTecTable.CollectEntries()
-	// Use the clamped charged fee here too — writeRecoveryAccount above may have
-	// reduced st.chargedFee to the payer's balance.
+	// Use the selected charged fee here too — recovery above may have reduced
+	// st.chargedFee to the payer's authorized allowance.
 	violation2 := invariants.CheckInvariants(wrapTxForInvariantsWithContext(st.tx, invariantsContextForApply(st, e.config.ParentCloseTime)), invariants.Result(ter.TecINVARIANT_FAILED), st.chargedFee, txDeclaredFee, invEntries2, invariants.WithParentCloseTime(invTecTable, e.config.ParentCloseTime), e.rules(), e.config.NumberContext())
+	if violation2 == nil && st.externalFeeDebt != 0 {
+		violation2 = &invariants.InvariantViolation{
+			Name:    "XRPBalanceChecks",
+			Message: fmt.Sprintf("external fee payer remains short by %d drops", st.externalFeeDebt),
+		}
+	}
 	if violation2 == nil && e.invariantViolationHook != nil {
 		violation2 = e.invariantViolationHook(ter.TecINVARIANT_FAILED, invTecTable)
 	}
