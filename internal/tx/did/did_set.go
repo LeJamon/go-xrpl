@@ -146,31 +146,19 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TesSUCCESS
 	}
 
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-	if ctx.Account.Balance < reserve {
-		return ter.TecINSUFFICIENT_RESERVE
-	}
-
 	did := &state.DIDData{
-		Account:   ctx.AccountID,
-		OwnerNode: 0,
+		Account:     ctx.AccountID,
+		URI:         d.URI,
+		DIDDocument: d.DIDDocument,
+		Data:        d.Data,
 	}
-
-	if d.URI != "" {
-		did.URI = d.URI
-	}
-	if d.DIDDocument != "" {
-		did.DIDDocument = d.DIDDocument
-	}
-	if d.Data != "" {
-		did.Data = d.Data
-	}
-
-	// Check that at least one field is set (only when fixEmptyDID is enabled)
-	// Reference: rippled DID.cpp lines 163-169
 	if ctx.Rules().Enabled(amendment.FeatureFixEmptyDID) &&
 		did.URI == "" && did.DIDDocument == "" && did.Data == "" {
 		return ter.TecEMPTY_DID
+	}
+
+	if !hasDIDCreateReserve(ctx) {
+		return ter.TecINSUFFICIENT_RESERVE
 	}
 
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
@@ -195,9 +183,18 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	ctx.Account.OwnerCount++
+	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)
 
 	return ter.TesSUCCESS
+}
+
+func hasDIDCreateReserve(ctx *tx.ApplyContext) bool {
+	if ctx.Rules().Enabled(amendment.FeatureSponsor) {
+		reserve, ok := tx.RequiredAccountReserve(ctx.Config, ctx.Account, 1, 0)
+		return ok && ctx.Account.Balance >= reserve
+	}
+	// Before Sponsor, reserve calculation uses the wrapping uint32 sum.
+	return ctx.Account.Balance >= ctx.AccountReserve(ctx.Account.OwnerCount+1)
 }
 
 func validateDIDField(value string, tooLong error) error {
