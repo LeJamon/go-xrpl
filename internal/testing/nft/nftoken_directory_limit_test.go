@@ -82,14 +82,20 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 		buyOffer
 		mintOffer
 	)
+	type directoryFault int
+	const (
+		wrongRootType directoryFault = iota + 1
+		malformedRoot
+		malformedLastPage
+		missingLastPage
+	)
 	for _, tc := range []struct {
 		name           string
 		kind           offerKind
 		tokenDirectory bool
 		fixLimit       bool
 		lowReserve     bool
-		corrupt        bool
-		missingPage    bool
+		fault          directoryFault
 		want           ter.Result
 	}{
 		{name: "full owner directory", want: ter.TecDIR_FULL},
@@ -100,8 +106,10 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 		{name: "mint reserve before directory", kind: mintOffer, lowReserve: true, want: ter.TecINSUFFICIENT_RESERVE},
 		{name: "mint with full owner directory", kind: mintOffer, want: ter.TecDIR_FULL},
 		{name: "mint with full sell directory", kind: mintOffer, tokenDirectory: true, want: ter.TecDIR_FULL},
-		{name: "invalid owner directory", corrupt: true, want: ter.TefINTERNAL},
-		{name: "missing sell directory page", tokenDirectory: true, missingPage: true, want: ter.TefEXCEPTION},
+		{name: "wrong owner directory root type", fault: wrongRootType, want: ter.TefINTERNAL},
+		{name: "malformed owner directory root", fault: malformedRoot, want: ter.TefEXCEPTION},
+		{name: "malformed sell directory page", tokenDirectory: true, fault: malformedLastPage, want: ter.TefEXCEPTION},
+		{name: "missing sell directory page", tokenDirectory: true, fault: missingLastPage, want: ter.TefEXCEPTION},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := jtx.NewTestEnv(t)
@@ -156,15 +164,25 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 				dirKey = tokenDir
 				dir = state.DirectoryNode{NFTokenID: tokenID, Flags: tokenDirFlags}
 			}
-			if tc.corrupt {
+			fillNFTOfferDirectory(t, env, dirKey, dir, lastPage)
+			lastKey := keylet.DirPage(dirKey.Key, lastPage)
+			switch tc.fault {
+			case wrongRootType:
 				accountData, err := env.LedgerEntry(keylet.Account(alice.ID))
 				require.NoError(t, err)
-				require.NoError(t, env.Ledger().Insert(dirKey, accountData))
-			} else {
-				fillNFTOfferDirectory(t, env, dirKey, dir, lastPage)
-				if tc.missingPage {
-					require.NoError(t, env.Ledger().Erase(keylet.DirPage(dirKey.Key, lastPage)))
+				require.NoError(t, env.Ledger().Update(dirKey, accountData))
+			case malformedRoot, malformedLastPage:
+				key := dirKey
+				if tc.fault == malformedLastPage {
+					key = lastKey
 				}
+				data, err := env.LedgerEntry(key)
+				require.NoError(t, err)
+				require.Greater(t, len(data), 3)
+				// Keep only LedgerEntryType so the typed lookup succeeds and decoding fails.
+				require.NoError(t, env.Ledger().Update(key, data[:3]))
+			case missingLastPage:
+				require.NoError(t, env.Ledger().Erase(lastKey))
 			}
 
 			count := env.OwnerCount(alice)
@@ -174,7 +192,7 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 			wantBalance, wantSequence := env.Balance(alice), env.Seq(alice)
 			offerKey := keylet.NFTokenOffer(alice.ID, wantSequence)
 			minted := env.MintedCount(alice)
-			entries := []keylet.Keylet{ownerDir, tokenDir, keylet.DirPage(dirKey.Key, lastPage), keylet.NFTokenPageMax(alice.ID)}
+			entries := []keylet.Keylet{ownerDir, tokenDir, lastKey, keylet.NFTokenPageMax(alice.ID)}
 			before := make(map[keylet.Keylet][]byte, len(entries))
 			for _, key := range entries {
 				key.Type = entry.TypeAny

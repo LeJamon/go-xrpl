@@ -565,9 +565,12 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, preserve
 	if err != nil {
 		return nil, err
 	}
+	if rootData == nil {
+		return nil, errors.New("directory root exists but cannot be read as a DirectoryNode")
+	}
 	root, err := ParseDirectoryNode(rootData)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: parse root: %w", ErrMalformedDirectory, err)
 	}
 
 	// Get the last page number from root's IndexPrevious
@@ -588,7 +591,7 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, preserve
 		}
 		node, err = ParseDirectoryNode(pageData)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: parse last page: %w", ErrMalformedDirectory, err)
 		}
 	}
 

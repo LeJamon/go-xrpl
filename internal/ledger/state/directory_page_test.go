@@ -261,6 +261,8 @@ func TestDirInsert_PreserveOrderAppends(t *testing.T) {
 		_, err := DirInsert(v, dir, itemKeyN(n), true, nil)
 		require.NoErrorf(t, err, "insert %d", n)
 	}
+	_, err := DirInsert(v, dir, itemKeyN(order[0]), true, nil)
+	require.ErrorIs(t, err, ErrMalformedDirectory)
 
 	root := v.page(t, dir, 0)
 	require.Len(t, root.Indexes, len(order))
