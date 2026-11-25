@@ -312,12 +312,12 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		if usesSponsor {
 			ownerDelta = 0
 		}
-		sourceReserve, ok := tx.RequiredAccountReserve(ctx.Config, ctx.Account, ownerDelta, 0)
+		sourceReserve, ok := tx.RequiredAccountReserveAmount(ctx.Config, ctx.Account, ownerDelta, 0)
 		if !ok {
 			return ter.TefINTERNAL
 		}
 		amount := uint64(drops)
-		if ctx.Account.Balance < amount || ctx.Account.Balance-amount < sourceReserve {
+		if !tx.BalanceCoversAmountAndReserve(ctx.Account.Balance, amount, sourceReserve) {
 			ctx.Log.Warn("escrow create: unfunded",
 				"balance", ctx.Account.Balance,
 				"amount", amount,

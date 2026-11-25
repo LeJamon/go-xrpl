@@ -863,6 +863,7 @@ func (b *Batch) applyAllOrNothing(
 		Account:                ctx.Account,
 		AccountID:              ctx.AccountID,
 		Common:                 ctx.Common,
+		SourceFeeCharged:       ctx.SourceFeeCharged,
 		Config:                 ctx.Config,
 		TxHash:                 ctx.TxHash,
 		TransactionIndex:       ctx.TransactionIndex,

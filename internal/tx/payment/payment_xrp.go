@@ -4,6 +4,7 @@ import (
 	"math"
 	"strconv"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
@@ -15,11 +16,11 @@ import (
 // Reference: rippled/src/xrpld/app/tx/detail/Payment.cpp doApply() for XRP direct payments
 func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 	// Get the amount in drops
-	drops := p.Amount.Drops()
-	if drops <= 0 {
+	amount := p.Amount.Drops()
+	if amount <= 0 {
 		return ter.TemBAD_AMOUNT
 	}
-	amountDrops := uint64(drops)
+	amountDrops := uint64(amount)
 
 	// Parse the fee from the transaction
 	feeDrops, err := strconv.ParseUint(p.Fee, 10, 64)
@@ -45,13 +46,27 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 	// when the source account is the fee payer. With an external delegate or
 	// sponsor, the source need only keep its plain reserve.
 	// Reference: rippled Payment.cpp doApply() (fix: decouple reserve from fee).
+	sourcePaysFee := ctx.SourcePaysFee()
 	minRequired := reserve
-	if ctx.SourceFeeCharged != 0 {
-		minRequired = max(feeDrops, reserve)
+	if sourcePaysFee {
+		if feeDrops > math.MaxInt64 {
+			return ter.TecINTERNAL
+		}
+		if fee := drops.XRPAmount(feeDrops); fee > minRequired {
+			minRequired = fee
+		}
 	}
 
-	if priorBalance < amountDrops+minRequired {
-		return ter.TecUNFUNDED_PAYMENT
+	invariantFailure := false
+	if sourcePaysFee {
+		if !tx.BalanceCoversAmountAndReserve(priorBalance, amountDrops, minRequired) {
+			return ter.TecUNFUNDED_PAYMENT
+		}
+	} else {
+		if !tx.BalanceMeetsAmountAndReserve(priorBalance, amountDrops, reserve) {
+			return ter.TecUNFUNDED_PAYMENT
+		}
+		invariantFailure = priorBalance < amountDrops
 	}
 
 	// Get destination account
@@ -89,11 +104,14 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 		// XRP payments have a wedge-prevention exemption: if BOTH the payment amount
 		// AND destination balance are <= base reserve, deposit preauth is NOT
 		// checked at all (expired credentials are left untouched too).
-		dstReserve := ctx.Config.ReserveBase
-		if amountDrops > dstReserve || destAccount.Balance > dstReserve {
+		dstReserve := ctx.Config.Fees().Reserve
+		if tx.BalanceGreaterThan(amountDrops, dstReserve) || tx.BalanceGreaterThan(destAccount.Balance, dstReserve) {
 			if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, ctx.AccountID, destAccountID, destAccount); result != ter.TesSUCCESS {
 				return result
 			}
+		}
+		if invariantFailure {
+			return ter.TecINVARIANT_FAILED
 		}
 
 		// Credit destination
@@ -127,8 +145,11 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 
 	// A normally-created account must fund its own base reserve. A sponsored
 	// account may start with a single drop because the source funds that reserve.
-	if amountDrops < ctx.Config.ReserveBase && !sponsorCreated {
+	if tx.BalanceLessThan(amountDrops, ctx.Config.Fees().Reserve) && !sponsorCreated {
 		return ter.TecNO_DST_INSUF_XRP
+	}
+	if invariantFailure {
+		return ter.TecINVARIANT_FAILED
 	}
 
 	// Create new account. New accounts start with sequence equal to the current
@@ -169,7 +190,7 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 // effectiveAccountReserve mirrors accountReserve(AccountRoot): owner increments
 // paid by another sponsor are removed, owner/account units paid by this account
 // are added, and a sponsored account does not fund its own base reserve.
-func effectiveAccountReserve(config tx.EngineConfig, account *state.AccountRoot, accountDelta uint32) (uint64, bool) {
+func effectiveAccountReserve(config tx.EngineConfig, account *state.AccountRoot, accountDelta uint32) (drops.XRPAmount, bool) {
 	if account == nil || account.SponsoredOwnerCount > account.OwnerCount {
 		return 0, false
 	}
@@ -182,5 +203,5 @@ func effectiveAccountReserve(config tx.EngineConfig, account *state.AccountRoot,
 	if owners > math.MaxUint32 || accounts > math.MaxUint32 {
 		return 0, false
 	}
-	return config.AccountReserveWithCounts(uint32(owners), uint32(accounts)), true
+	return config.AccountReserveWithCountsAmount(uint32(owners), uint32(accounts))
 }

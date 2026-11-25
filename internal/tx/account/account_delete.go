@@ -79,7 +79,11 @@ func (a *AccountDelete) validate(rules *amendment.Rules) error {
 }
 
 func (a *AccountDelete) CalculateBaseFee(_ tx.ReadOnlyLedgerView, config tx.EngineConfig) (uint64, error) {
-	return config.ReserveIncrement, nil
+	increment := config.Fees().Increment
+	if increment <= 0 {
+		return 0, nil
+	}
+	return uint64(increment), nil
 }
 
 func (a *AccountDelete) Flatten() (map[string]any, error) { return tx.ReflectFlatten(a) }

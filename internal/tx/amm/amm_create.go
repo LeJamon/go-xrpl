@@ -94,7 +94,11 @@ func (a *AMMCreate) Flatten() (map[string]any, error) {
 // AMMCreate requires one owner reserve as the fee (not the standard base fee).
 // Reference: rippled AMMCreate.cpp calculateBaseFee — returns view.fees().increment
 func (a *AMMCreate) CalculateBaseFee(_ tx.ReadOnlyLedgerView, config tx.EngineConfig) (uint64, error) {
-	return config.ReserveIncrement, nil
+	increment := config.Fees().Increment
+	if increment <= 0 {
+		return 0, nil
+	}
+	return uint64(increment), nil
 }
 
 func (a *AMMCreate) RequiredAmendments() [][32]byte {
@@ -157,11 +161,15 @@ func (a *AMMCreate) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig)
 	if insufficientLPTokenReserve(view, account, config) {
 		return TecINSUF_RESERVE_LINE
 	}
-	reserveNeeded, ok := tx.AccountReserveForView(view, config, account, tx.ConfineOwnerCount(account.OwnerCount, 1))
+	reserveNeeded, ok := tx.AccountReserveAmountForView(view, config, account, tx.ConfineOwnerCount(account.OwnerCount, 1))
 	if !ok {
 		return ter.TefINTERNAL
 	}
-	xrpLiquid := int64(account.Balance) - int64(reserveNeeded)
+	xrpLiquidAmount, ok := tx.LiquidXRP(account.Balance, reserveNeeded)
+	if !ok {
+		return ter.TefINTERNAL
+	}
+	xrpLiquid := int64(xrpLiquidAmount)
 	insufficient, result := insufficientBalance(view, accountID, a.Amount, xrpLiquid)
 	if result != ter.TesSUCCESS {
 		return result

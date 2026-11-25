@@ -204,8 +204,11 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 			ownerCount = sbAccount.OwnerCount
 		}
 	}
-	reserve := ctx.AccountReserve(ownerCount + 1)
-	if mPriorBalance < reserve {
+	reserve, ok := ctx.AccountReserveAmount(ownerCount + 1)
+	if !ok {
+		return ter.TefINTERNAL, true
+	}
+	if !tx.BalanceAtLeast(mPriorBalance, reserve) {
 		if !crossed {
 			return ter.TecINSUF_RESERVE_OFFER, true
 		}

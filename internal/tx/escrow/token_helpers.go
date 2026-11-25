@@ -447,7 +447,7 @@ func escrowUnlockIOU(
 	senderID, receiverID [20]byte,
 	createAsset bool,
 	bumpDestOwnerCount bool,
-	reserveBase, reserveIncrement uint64,
+	config tx.EngineConfig,
 	numberContext state.NumberContext,
 ) ter.Result {
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
@@ -486,8 +486,14 @@ func escrowUnlockIOU(
 		reserveResult := ter.TesSUCCESS
 		if ctx != nil && destID == ctx.AccountID && bumpDestOwnerCount {
 			reserveResult = ctx.CheckReserveFor(destID, ctx.Account, destBalance, 1, 0, ter.TecNO_LINE_INSUF_RESERVE)
-		} else if destBalance < reserveBase+uint64(destOwnerCount+1)*reserveIncrement {
-			reserveResult = ter.TecNO_LINE_INSUF_RESERVE
+		} else {
+			reserve, ok := config.AccountReserveWithCountsAmount(destOwnerCount+1, 1)
+			if !ok {
+				return ter.TefINTERNAL
+			}
+			if !tx.BalanceAtLeast(destBalance, reserve) {
+				reserveResult = ter.TecNO_LINE_INSUF_RESERVE
+			}
 		}
 		if reserveResult != ter.TesSUCCESS {
 			return ter.TecNO_LINE_INSUF_RESERVE
@@ -579,7 +585,7 @@ func escrowUnlockMPT(
 	destOwnerCount uint32,
 	destID [20]byte,
 	bumpDestOwnerCount bool,
-	reserveBase, reserveIncrement uint64,
+	config tx.EngineConfig,
 ) ter.Result {
 	issuanceKey, err := mptIssuanceKeyFromHex(mptHexID)
 	if err != nil {
@@ -619,8 +625,14 @@ func escrowUnlockMPT(
 			reserveResult := ter.TesSUCCESS
 			if ctx != nil && destID == ctx.AccountID && bumpDestOwnerCount {
 				reserveResult = ctx.CheckReserveFor(destID, ctx.Account, destBalance, 1, 0, ter.TecINSUFFICIENT_RESERVE)
-			} else if destBalance < reserveBase+uint64(destOwnerCount+1)*reserveIncrement {
-				reserveResult = ter.TecINSUFFICIENT_RESERVE
+			} else {
+				reserve, ok := config.AccountReserveWithCountsAmount(destOwnerCount+1, 1)
+				if !ok {
+					return ter.TefINTERNAL
+				}
+				if !tx.BalanceAtLeast(destBalance, reserve) {
+					reserveResult = ter.TecINSUFFICIENT_RESERVE
+				}
 			}
 			if reserveResult != ter.TesSUCCESS {
 				return ter.TecINSUFFICIENT_RESERVE

@@ -62,11 +62,11 @@ func (x *XChainCreateBridge) Preclaim(view tx.ReadOnlyLedgerView, config tx.Engi
 	if account == nil {
 		return ter.TerNO_ACCOUNT
 	}
-	reserve, ok := tx.AccountReserveForView(view, config, account, tx.ConfineOwnerCount(account.OwnerCount, 1))
+	reserve, ok := tx.AccountReserveAmountForView(view, config, account, tx.ConfineOwnerCount(account.OwnerCount, 1))
 	if !ok {
 		return ter.TecINTERNAL
 	}
-	if account.Balance < reserve {
+	if !tx.BalanceAtLeast(account.Balance, reserve) {
 		return ter.TecINSUFFICIENT_RESERVE
 	}
 	return ter.TesSUCCESS
@@ -211,11 +211,11 @@ func (x *XChainCreateClaimID) Preclaim(view tx.ReadOnlyLedgerView, config tx.Eng
 	if account == nil {
 		return ter.TerNO_ACCOUNT
 	}
-	reserve, ok := tx.AccountReserveForView(view, config, account, tx.ConfineOwnerCount(account.OwnerCount, 1))
+	reserve, ok := tx.AccountReserveAmountForView(view, config, account, tx.ConfineOwnerCount(account.OwnerCount, 1))
 	if !ok {
 		return ter.TecINTERNAL
 	}
-	if account.Balance < reserve {
+	if !tx.BalanceAtLeast(account.Balance, reserve) {
 		return ter.TecINSUFFICIENT_RESERVE
 	}
 	return ter.TesSUCCESS

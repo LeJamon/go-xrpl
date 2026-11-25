@@ -62,11 +62,12 @@ func matchesAsset(amt *tx.Amount, asset tx.Asset) bool {
 // the pre-fee balance, matching rippled's preclaim.
 // Reference: rippled AMMCreate.cpp:145-159, AMMDeposit.cpp:353-362
 func insufficientLPTokenReserve(view tx.ReadOnlyLedgerView, account *state.AccountRoot, config tx.EngineConfig) bool {
-	reserve, ok := tx.AccountReserveForView(view, config, account, tx.ConfineOwnerCount(account.OwnerCount, 1))
+	reserve, ok := tx.AccountReserveAmountForView(view, config, account, tx.ConfineOwnerCount(account.OwnerCount, 1))
 	if !ok {
 		return true
 	}
-	return int64(account.Balance)-int64(reserve) <= 0
+	liquid, ok := tx.LiquidXRP(account.Balance, reserve)
+	return !ok || liquid == 0
 }
 
 // mapAmountsToAssetOrder returns (amt1, amt2) reordered so amt1 carries the

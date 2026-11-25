@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"math/bits"
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/drops"
@@ -328,11 +329,13 @@ func XRPLiquidOf(view ReadOnlyLedgerView, accountID [20]byte, account *state.Acc
 
 func checkedFeeReserve(fees drops.Fees, ownerCount, accountCount uint32) (drops.XRPAmount, bool) {
 	if fees.Reserve >= 0 && fees.Increment >= 0 {
-		reserve, ok := checkedAccountReserve(EngineConfig{
-			ReserveBase:      uint64(fees.Reserve),
-			ReserveIncrement: uint64(fees.Increment),
-		}, ownerCount, accountCount)
-		if !ok || reserve > uint64(math.MaxInt64) {
+		ownerHigh, ownerReserve := bits.Mul64(uint64(ownerCount), uint64(fees.Increment))
+		accountHigh, accountReserve := bits.Mul64(uint64(accountCount), uint64(fees.Reserve))
+		if ownerHigh != 0 || accountHigh != 0 {
+			return 0, false
+		}
+		reserve, carry := bits.Add64(ownerReserve, accountReserve, 0)
+		if carry != 0 || reserve > uint64(math.MaxInt64) {
 			return 0, false
 		}
 		return drops.XRPAmount(reserve), true
@@ -355,6 +358,72 @@ func liquidXRP(balance int64, reserve drops.XRPAmount) (int64, bool) {
 		return 0, false
 	}
 	return balance - int64(reserve), true
+}
+
+// BalanceAtLeast reports whether an unsigned ledger balance covers a signed
+// XRP requirement. Ledger balances are serialized as uint64, while modern
+// fee/reserve fields are signed XRPAmount values.
+func BalanceAtLeast(balance uint64, requirement drops.XRPAmount) bool {
+	return requirement <= 0 || balance >= uint64(requirement)
+}
+
+// BalanceGreaterThan reports whether an unsigned ledger balance is greater
+// than a signed XRP threshold.
+func BalanceGreaterThan(balance uint64, threshold drops.XRPAmount) bool {
+	return threshold < 0 || balance > uint64(threshold)
+}
+
+// BalanceLessThan reports whether an unsigned ledger balance is below a
+// signed XRP threshold.
+func BalanceLessThan(balance uint64, threshold drops.XRPAmount) bool {
+	return threshold > 0 && balance < uint64(threshold)
+}
+
+// BalanceCoversAmountAndReserve reports whether balance can pay amount while
+// retaining a signed reserve. It avoids converting the uint64 balance to a
+// signed value until the result is known to fit.
+func BalanceCoversAmountAndReserve(balance, amount uint64, reserve drops.XRPAmount) bool {
+	// A negative reserve lowers the retained floor; it must not authorize
+	// spending more XRP than the account actually holds.
+	if balance < amount {
+		return false
+	}
+	if reserve >= 0 {
+		reserveUnsigned := uint64(reserve)
+		return amount <= math.MaxUint64-reserveUnsigned && balance >= amount+reserveUnsigned
+	}
+	return true
+}
+
+// BalanceMeetsAmountAndReserve reports whether a balance satisfies the signed
+// amount-plus-reserve precondition. Unlike BalanceCoversAmountAndReserve, it
+// intentionally does not require balance to cover amount by itself: rippled
+// lets an externally paid-fee payment pass this precondition when a negative
+// reserve makes the signed requirement non-positive, then catches a negative
+// source balance in its invariant pass.
+func BalanceMeetsAmountAndReserve(balance, amount uint64, reserve drops.XRPAmount) bool {
+	if reserve >= 0 {
+		reserveUnsigned := uint64(reserve)
+		return amount <= math.MaxUint64-reserveUnsigned && balance >= amount+reserveUnsigned
+	}
+	absReserve := uint64(-(reserve + 1)) + 1
+	if amount <= absReserve {
+		return true
+	}
+	return balance >= amount-absReserve
+}
+
+// LiquidXRP returns the zero-clamped spendable XRP after retaining reserve.
+// It is the unsigned-balance boundary counterpart to XRPLiquid.
+func LiquidXRP(balance uint64, reserve drops.XRPAmount) (uint64, bool) {
+	if balance > uint64(math.MaxInt64) {
+		return 0, false
+	}
+	liquid, ok := liquidXRP(int64(balance), reserve)
+	if !ok || liquid < 0 {
+		return 0, false
+	}
+	return uint64(liquid), true
 }
 
 // AccountFundsNoFreezeStrict returns owner funds without applying freeze

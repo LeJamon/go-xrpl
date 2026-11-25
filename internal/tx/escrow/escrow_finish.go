@@ -428,8 +428,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 				destAccount.OwnerCount,
 				escrowEntry.DestinationID,
 				true, // finish bumps the destination account's OwnerCount
-				ctx.Config.ReserveBase,
-				ctx.Config.ReserveIncrement,
+				ctx.Config,
 			); result != ter.TesSUCCESS {
 				return result
 			}
@@ -448,8 +447,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 				escrowEntry.DestinationID,
 				createAsset,
 				true, // finish bumps the destination account's OwnerCount
-				ctx.Config.ReserveBase,
-				ctx.Config.ReserveIncrement,
+				ctx.Config,
 				ctx.NumberContext(),
 			); result != ter.TesSUCCESS {
 				return result

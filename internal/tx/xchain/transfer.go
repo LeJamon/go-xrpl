@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
@@ -129,12 +130,12 @@ func transferXRPOnView(
 	canCreateDestination bool,
 	allowFeeDip bool,
 ) ter.Result {
-	drops := amount.Drops()
+	amountDrops := amount.Drops()
 	source, err := state.ReadAccountRoot(view, sourceID)
 	if err != nil || source == nil {
 		return ter.TecINTERNAL
 	}
-	reserve, ok := tx.AccountReserveForView(view, ctx.Config, source, source.OwnerCount)
+	reserve, ok := tx.AccountReserveAmountForView(view, ctx.Config, source, source.OwnerCount)
 	if !ok {
 		return ter.TecINTERNAL
 	}
@@ -142,13 +143,18 @@ func transferXRPOnView(
 	if allowFeeDip && sourceID == ctx.AccountID {
 		available = ctx.PriorBalance()
 	}
-	if drops >= 0 {
-		value := uint64(drops)
-		if value > math.MaxUint64-reserve || available < value+reserve {
+	if amountDrops >= 0 {
+		value := uint64(amountDrops)
+		if !tx.BalanceCoversAmountAndReserve(available, value, reserve) {
 			return ter.TecUNFUNDED_PAYMENT
 		}
-	} else if reserve > uint64(-drops) && available < reserve-uint64(-drops) {
-		return ter.TecUNFUNDED_PAYMENT
+	} else {
+		debit := uint64(-(amountDrops + 1)) + 1
+		if debit < uint64(math.MaxInt64) {
+			if !tx.BalanceAtLeast(available, reserve-drops.XRPAmount(debit)) {
+				return ter.TecUNFUNDED_PAYMENT
+			}
+		}
 	}
 
 	destinationAccount, err := state.ReadAccountRoot(view, destinationID)
@@ -160,13 +166,13 @@ func transferXRPOnView(
 		if !canCreateDestination {
 			return ter.TecNO_DST
 		}
-		if drops < 0 || uint64(drops) < ctx.Config.ReserveBase {
+		if amountDrops < 0 || tx.BalanceLessThan(uint64(amountDrops), ctx.Config.Fees().Reserve) {
 			return ter.TecNO_DST_INSUF_XRP
 		}
 		destinationAccount = &state.AccountRoot{
 			Account: destination, Sequence: ctx.Config.LedgerSequence,
 		}
-		destinationAccount.Balance = uint64(drops)
+		destinationAccount.Balance = uint64(amountDrops)
 		data, err := state.SerializeAccountRoot(destinationAccount)
 		if err != nil {
 			return ter.TecINTERNAL
@@ -175,7 +181,7 @@ func transferXRPOnView(
 			return ter.TecINTERNAL
 		}
 	} else {
-		if result := adjustXRPBalances(source, destinationAccount, drops); result != ter.TesSUCCESS {
+		if result := adjustXRPBalances(source, destinationAccount, amountDrops); result != ter.TesSUCCESS {
 			return result
 		}
 		sourceAdjusted = true
@@ -188,7 +194,7 @@ func transferXRPOnView(
 		}
 	}
 	if !sourceAdjusted {
-		source.Balance -= uint64(drops)
+		source.Balance -= uint64(amountDrops)
 	}
 	data, err := state.SerializeAccountRoot(source)
 	if err != nil {

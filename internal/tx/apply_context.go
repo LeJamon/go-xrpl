@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -102,15 +103,30 @@ func (ctx *ApplyContext) AccountReserve(ownerCount uint32) uint64 {
 	return ctx.AccountReserveFor(ctx.Account, ownerCount)
 }
 
+// AccountReserveAmount returns the signed reserve required for the source
+// account at ownerCount. Reserve fields in modern fee schedules are signed.
+func (ctx *ApplyContext) AccountReserveAmount(ownerCount uint32) (drops.XRPAmount, bool) {
+	return ctx.AccountReserveAmountFor(ctx.Account, ownerCount)
+}
+
 // AccountReserveFor returns the reserve carried by account at the supplied raw
 // OwnerCount. Under Sponsor, sponsored objects are removed and sponsored
 // obligations are added to the reserve-bearing count.
 func (ctx *ApplyContext) AccountReserveFor(account *state.AccountRoot, ownerCount uint32) uint64 {
-	reserve, ok := AccountReserveForView(ctx.View, ctx.Config, account, ownerCount)
+	reserve, ok := ctx.AccountReserveAmountFor(account, ownerCount)
 	if !ok {
 		return math.MaxUint64
 	}
-	return reserve
+	if reserve < 0 {
+		return 0
+	}
+	return uint64(reserve)
+}
+
+// AccountReserveAmountFor returns the signed reserve carried by account at the
+// supplied raw owner count.
+func (ctx *ApplyContext) AccountReserveAmountFor(account *state.AccountRoot, ownerCount uint32) (drops.XRPAmount, bool) {
+	return AccountReserveAmountForView(ctx.View, ctx.Config, account, ownerCount)
 }
 
 // ReserveForNewObject calculates the reserve required for creating a new ledger object.
@@ -190,6 +206,26 @@ func (ctx *ApplyContext) PriorBalance() uint64 {
 	return ctx.Account.Balance + ctx.SourceFeeCharged
 }
 
+// SourcePaysFee reports whether the source account is the fee payer. Fee-payer
+// identity is determined from the transaction's delegate and sponsor fields,
+// rather than from the amount charged: a source-paid transaction may have a
+// zero fee.
+func (ctx *ApplyContext) SourcePaysFee() bool {
+	if ctx == nil {
+		return false
+	}
+	if ctx.Common == nil {
+		return true
+	}
+	if ctx.Common.Delegate != "" {
+		return false
+	}
+	if ctx.Common.Sponsor == "" || ctx.Common.SponsorFlags == nil {
+		return true
+	}
+	return *ctx.Common.SponsorFlags&SpfSponsorFee == 0
+}
+
 // PreclaimAccount returns the source account before transaction application.
 // Direct callers without PreclaimView must supply the original ownership state
 // in Account; only the source fee is restored in that case.
@@ -214,7 +250,8 @@ func (ctx *ApplyContext) PreclaimAccount() (*state.AccountRoot, ter.Result) {
 // allowing it to dip into the reserve to pay the fee. Returns
 // TecINSUFFICIENT_RESERVE if the prior balance is below the reserve.
 func (ctx *ApplyContext) CheckReserveWithFee(ownerCountAfter uint32) ter.Result {
-	if ctx.PriorBalance() < ctx.AccountReserve(ownerCountAfter) {
+	reserve, ok := ctx.AccountReserveAmount(ownerCountAfter)
+	if !ok || !BalanceAtLeast(ctx.PriorBalance(), reserve) {
 		return ter.TecINSUFFICIENT_RESERVE
 	}
 	return ter.TesSUCCESS

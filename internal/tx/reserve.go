@@ -1,6 +1,9 @@
 package tx
 
-import "github.com/LeJamon/go-xrpl/internal/tx/ter"
+import (
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+)
 
 // The reserve calculations live on EngineConfig as the single source of truth.
 // Both Engine and ApplyContext expose the same helpers as thin delegations so
@@ -10,7 +13,21 @@ import "github.com/LeJamon/go-xrpl/internal/tx/ter"
 // given owner count: ReserveBase + (ownerCount * ReserveIncrement). This matches
 // rippled's accountReserve(ownerCount).
 func (c EngineConfig) AccountReserve(ownerCount uint32) uint64 {
-	return c.ReserveBase + (uint64(ownerCount) * c.ReserveIncrement)
+	reserve, ok := c.AccountReserveAmount(ownerCount)
+	if !ok {
+		return ^uint64(0)
+	}
+	if reserve < 0 {
+		return 0
+	}
+	return uint64(reserve)
+}
+
+// AccountReserveAmount returns the signed reserve required for ownerCount.
+// Modern XRPFees schedules may contain negative reserve fields; callers doing
+// protocol comparisons should use this form rather than AccountReserve.
+func (c EngineConfig) AccountReserveAmount(ownerCount uint32) (drops.XRPAmount, bool) {
+	return checkedFeeReserve(c.Fees(), ownerCount, 1)
 }
 
 // AccountReserveWithCounts calculates the reserve for an account that funds
@@ -18,7 +35,20 @@ func (c EngineConfig) AccountReserve(ownerCount uint32) uint64 {
 // this form because a sponsored account funds no base reserve of its own while
 // a sponsor may fund several accounts.
 func (c EngineConfig) AccountReserveWithCounts(ownerCount, accountCount uint32) uint64 {
-	return (uint64(accountCount) * c.ReserveBase) + (uint64(ownerCount) * c.ReserveIncrement)
+	reserve, ok := c.AccountReserveWithCountsAmount(ownerCount, accountCount)
+	if !ok {
+		return ^uint64(0)
+	}
+	if reserve < 0 {
+		return 0
+	}
+	return uint64(reserve)
+}
+
+// AccountReserveWithCountsAmount is the signed form of
+// AccountReserveWithCounts.
+func (c EngineConfig) AccountReserveWithCountsAmount(ownerCount, accountCount uint32) (drops.XRPAmount, bool) {
+	return checkedFeeReserve(c.Fees(), ownerCount, accountCount)
 }
 
 // ReserveForNewObject calculates the reserve required for creating a new ledger
@@ -29,17 +59,30 @@ func (c EngineConfig) AccountReserveWithCounts(ownerCount, accountCount uint32) 
 //	    (uOwnerCount < 2) ? XRPAmount(beast::zero)
 //	                      : view().fees().accountReserve(uOwnerCount + 1));
 func (c EngineConfig) ReserveForNewObject(currentOwnerCount uint32) uint64 {
-	if currentOwnerCount < 2 {
+	reserve, ok := c.ReserveForNewObjectAmount(currentOwnerCount)
+	if !ok {
+		return ^uint64(0)
+	}
+	if reserve < 0 {
 		return 0
 	}
-	return c.AccountReserve(ConfineOwnerCount(currentOwnerCount, 1))
+	return uint64(reserve)
+}
+
+// ReserveForNewObjectAmount is the signed form of ReserveForNewObject.
+func (c EngineConfig) ReserveForNewObjectAmount(currentOwnerCount uint32) (drops.XRPAmount, bool) {
+	if currentOwnerCount < 2 {
+		return 0, true
+	}
+	return c.AccountReserveAmount(ConfineOwnerCount(currentOwnerCount, 1))
 }
 
 // CanCreateNewObject reports whether priorBalance (balance before fee deduction)
 // covers the reserve for creating a new ledger object.
 // Reference: rippled SetTrust.cpp:681,710 - mPriorBalance < reserveCreate
 func (c EngineConfig) CanCreateNewObject(priorBalance uint64, currentOwnerCount uint32) bool {
-	return priorBalance >= c.ReserveForNewObject(currentOwnerCount)
+	reserve, ok := c.ReserveForNewObjectAmount(currentOwnerCount)
+	return ok && BalanceAtLeast(priorBalance, reserve)
 }
 
 // CheckReserveIncrease validates that an account can afford the reserve increase

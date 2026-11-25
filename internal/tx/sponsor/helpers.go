@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -135,12 +136,12 @@ func effectiveAccountCount(account *state.AccountRoot, delta uint32) uint32 {
 	return uint32(total)
 }
 
-func reserveRequired(config tx.EngineConfig, account *state.AccountRoot, ownerDelta, accountDelta uint32) (uint64, bool) {
+func reserveRequired(config tx.EngineConfig, account *state.AccountRoot, ownerDelta, accountDelta uint32) (drops.XRPAmount, bool) {
 	owners, ok := effectiveOwnerCount(account, ownerDelta)
 	if !ok {
 		return 0, false
 	}
-	return config.AccountReserveWithCounts(owners, effectiveAccountCount(account, accountDelta)), true
+	return config.AccountReserveWithCountsAmount(owners, effectiveAccountCount(account, accountDelta))
 }
 
 func checkAccountReserve(config tx.EngineConfig, account *state.AccountRoot, balance uint64, ownerDelta, accountDelta uint32, failure ter.Result) ter.Result {
@@ -148,7 +149,7 @@ func checkAccountReserve(config tx.EngineConfig, account *state.AccountRoot, bal
 	if !ok {
 		return ter.TecINTERNAL
 	}
-	if balance < reserve {
+	if !tx.BalanceAtLeast(balance, reserve) {
 		return failure
 	}
 	return ter.TesSUCCESS

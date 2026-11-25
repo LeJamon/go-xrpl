@@ -255,7 +255,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 				// reserve/bump (owner count 0); the amendment uses the creator's
 				// account entry so the returned MPToken's reserve is charged to it.
 				rules.Enabled(amendment.FeatureFixCleanup3_2_0),
-				ctx.Config.ReserveBase, ctx.Config.ReserveIncrement,
+				ctx.Config,
 			); result != ter.TesSUCCESS {
 				return result
 			}
@@ -283,7 +283,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 				// account entry so a newly-created trust line's reserve is charged
 				// to it.
 				rules.Enabled(amendment.FeatureFixCleanup3_2_0),
-				ctx.Config.ReserveBase, ctx.Config.ReserveIncrement,
+				ctx.Config,
 				ctx.NumberContext(),
 			); result != ter.TesSUCCESS {
 				return result

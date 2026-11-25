@@ -3,6 +3,7 @@ package engine
 import (
 	"math"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
@@ -87,7 +88,7 @@ func (e *Engine) getFeePayer(common *txcore.Common) (feePayer, ter.Result) {
 	}, ter.TesSUCCESS
 }
 
-func (e *Engine) accountReserve(account *state.AccountRoot) (uint64, bool) {
+func (e *Engine) accountReserve(account *state.AccountRoot) (drops.XRPAmount, bool) {
 	if account == nil || account.SponsoredOwnerCount > account.OwnerCount {
 		return 0, false
 	}
@@ -100,7 +101,7 @@ func (e *Engine) accountReserve(account *state.AccountRoot) (uint64, bool) {
 	if owners > math.MaxUint32 || accounts > math.MaxUint32 {
 		return 0, false
 	}
-	return e.config.AccountReserveWithCounts(uint32(owners), uint32(accounts)), true
+	return e.config.AccountReserveWithCountsAmount(uint32(owners), uint32(accounts))
 }
 
 // feePayerBalanceAndSpendable returns the payer's stored balance and the
@@ -149,10 +150,13 @@ func (e *Engine) feePayerBalanceAndSpendable(payer feePayer, source *state.Accou
 		if !ok {
 			return 0, 0, ter.TefINTERNAL
 		}
-		if spendable > reserve {
-			spendable -= reserve
-		} else {
-			spendable = 0
+		if reserve > 0 {
+			reserveDrops := uint64(reserve)
+			if spendable > reserveDrops {
+				spendable -= reserveDrops
+			} else {
+				spendable = 0
+			}
 		}
 	}
 	return account.Balance, spendable, ter.TesSUCCESS

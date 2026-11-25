@@ -3,9 +3,9 @@ package tx
 import (
 	"fmt"
 	"math"
-	"math/bits"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -48,26 +48,36 @@ func reserveAccountCount(account *state.AccountRoot, accountDelta int) uint32 {
 // RequiredAccountReserve returns the reserve carried by account after applying
 // the supplied owner- and account-count deltas.
 func RequiredAccountReserve(config EngineConfig, account *state.AccountRoot, ownerDelta, accountDelta int) (uint64, bool) {
+	reserve, ok := RequiredAccountReserveAmount(config, account, ownerDelta, accountDelta)
+	if !ok || reserve < 0 {
+		return 0, ok
+	}
+	return uint64(reserve), true
+}
+
+// RequiredAccountReserveAmount returns the signed reserve carried by account
+// after applying the supplied owner- and account-count deltas.
+func RequiredAccountReserveAmount(config EngineConfig, account *state.AccountRoot, ownerDelta, accountDelta int) (drops.XRPAmount, bool) {
 	owners, ok := reserveOwnerCount(account, ownerDelta)
 	if !ok {
 		return 0, false
 	}
-	return checkedAccountReserve(config, owners, reserveAccountCount(account, accountDelta))
-}
-
-func checkedAccountReserve(config EngineConfig, ownerCount, accountCount uint32) (uint64, bool) {
-	ownerHigh, ownerReserve := bits.Mul64(uint64(ownerCount), config.ReserveIncrement)
-	accountHigh, accountReserve := bits.Mul64(uint64(accountCount), config.ReserveBase)
-	if ownerHigh != 0 || accountHigh != 0 {
-		return 0, false
-	}
-	reserve, carry := bits.Add64(ownerReserve, accountReserve, 0)
-	return reserve, carry == 0
+	return checkedFeeReserve(config.Fees(), owners, reserveAccountCount(account, accountDelta))
 }
 
 // AccountReserveForView returns account's reserve at the supplied raw owner
 // count, using the view's amendment rules.
 func AccountReserveForView(view ReadOnlyLedgerView, config EngineConfig, account *state.AccountRoot, ownerCount uint32) (uint64, bool) {
+	reserve, ok := AccountReserveAmountForView(view, config, account, ownerCount)
+	if !ok || reserve < 0 {
+		return 0, ok
+	}
+	return uint64(reserve), true
+}
+
+// AccountReserveAmountForView returns the signed reserve at the supplied raw
+// owner count, using the view's amendment rules.
+func AccountReserveAmountForView(view ReadOnlyLedgerView, config EngineConfig, account *state.AccountRoot, ownerCount uint32) (drops.XRPAmount, bool) {
 	if account == nil {
 		return 0, false
 	}
@@ -76,13 +86,13 @@ func AccountReserveForView(view ReadOnlyLedgerView, config EngineConfig, account
 		rules = view.Rules()
 	}
 	if rules == nil || !rules.Enabled(amendment.FeatureSponsor) {
-		return checkedAccountReserve(config, ownerCount, 1)
+		return checkedFeeReserve(config.Fees(), ownerCount, 1)
 	}
 	delta := int64(ownerCount) - int64(account.OwnerCount)
 	if delta > math.MaxInt || delta < math.MinInt {
 		return 0, false
 	}
-	return RequiredAccountReserve(config, account, int(delta), 0)
+	return RequiredAccountReserveAmount(config, account, int(delta), 0)
 }
 
 func (ctx *ApplyContext) reserveSponsorFor(accountID [20]byte, account *state.AccountRoot) (*state.AccountRoot, [20]byte, ter.Result) {
@@ -143,7 +153,11 @@ func (ctx *ApplyContext) CheckReserveFor(
 		if accountDelta != 0 {
 			accountCount = uint32(int64(accountCount) + int64(accountDelta))
 		}
-		if balance < ctx.Config.AccountReserveWithCounts(ownerCount, accountCount) {
+		reserve, ok := ctx.Config.AccountReserveWithCountsAmount(ownerCount, accountCount)
+		if !ok {
+			return ter.TecINTERNAL
+		}
+		if !BalanceAtLeast(balance, reserve) {
 			return failure
 		}
 		return ter.TesSUCCESS
@@ -167,11 +181,11 @@ func (ctx *ApplyContext) CheckReserveFor(
 			}
 		}
 	}
-	reserve, ok := RequiredAccountReserve(ctx.Config, reserveAccount, ownerDelta, accountDelta)
+	reserve, ok := RequiredAccountReserveAmount(ctx.Config, reserveAccount, ownerDelta, accountDelta)
 	if !ok {
 		return ter.TecINTERNAL
 	}
-	if reserveBalance < reserve {
+	if !BalanceAtLeast(reserveBalance, reserve) {
 		return failure
 	}
 	return ter.TesSUCCESS

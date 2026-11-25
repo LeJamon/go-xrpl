@@ -868,8 +868,8 @@ func (x *XChainAddAccountCreateAttestation) Apply(ctx *tx.ApplyContext) ter.Resu
 		if err != nil || door == nil {
 			return ter.TecINTERNAL
 		}
-		reserve, ok := tx.AccountReserveForView(outer, ctx.Config, door, tx.ConfineOwnerCount(door.OwnerCount, 1))
-		if !ok || door.Balance < reserve {
+		reserve, ok := tx.AccountReserveAmountForView(outer, ctx.Config, door, tx.ConfineOwnerCount(door.OwnerCount, 1))
+		if !ok || !tx.BalanceAtLeast(door.Balance, reserve) {
 			return ter.TecINSUFFICIENT_RESERVE
 		}
 	}

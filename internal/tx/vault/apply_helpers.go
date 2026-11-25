@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
@@ -620,19 +621,19 @@ func spendableAsset(view tx.ReadOnlyLedgerView, config tx.EngineConfig, accountI
 		if err != nil || ar == nil {
 			return zero(), err
 		}
-		reserve := uint64(0)
+		reserve := drops.XRPAmount(0)
 		if !ar.IsPseudoAccount() {
 			var ok bool
-			reserve, ok = tx.AccountReserveForView(view, config, ar, ar.OwnerCount)
+			reserve, ok = tx.AccountReserveAmountForView(view, config, ar, ar.OwnerCount)
 			if !ok {
 				return zero(), fmt.Errorf("invalid reserve counters")
 			}
 		}
-		liquid := int64(ar.Balance) - int64(reserve)
-		if liquid < 0 {
-			liquid = 0
+		liquid, ok := tx.LiquidXRP(ar.Balance, reserve)
+		if !ok {
+			return zero(), fmt.Errorf("invalid reserve arithmetic")
 		}
-		return state.NewXRPLNumberScaled(liquid, 0, scale, state.RoundToNearest), nil
+		return state.NewXRPLNumberScaled(int64(liquid), 0, scale, state.RoundToNearest), nil
 	}
 
 	if asset.IsMPT() {

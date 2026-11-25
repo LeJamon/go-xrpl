@@ -454,10 +454,13 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 				if result != ter.TesSUCCESS {
 					return result
 				}
-				reserve := ctx.AccountReserveFor(account, account.OwnerCount)
-				var liquid uint64
-				if account.Balance > reserve {
-					liquid = account.Balance - reserve
+				reserve, ok := ctx.AccountReserveAmountFor(account, account.OwnerCount)
+				if !ok {
+					return ter.TefINTERNAL
+				}
+				liquid, ok := tx.LiquidXRP(account.Balance, reserve)
+				if !ok {
+					return ter.TefINTERNAL
 				}
 				if liquid < uint64(needed.Drops()) {
 					return ter.TecINSUFFICIENT_FUNDS

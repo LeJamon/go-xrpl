@@ -383,7 +383,7 @@ func (p *Payment) PreclaimWithError(view tx.ReadOnlyLedgerView, config tx.Engine
 				}
 			}
 			// The delivered amount must cover the account reserve.
-			if uint64(p.Amount.Drops()) < config.ReserveBase &&
+			if tx.BalanceLessThan(uint64(p.Amount.Drops()), config.Fees().Reserve) &&
 				p.GetFlags()&PaymentFlagSponsorCreatedAccount == 0 {
 				return ter.TecNO_DST_INSUF_XRP, nil
 			}

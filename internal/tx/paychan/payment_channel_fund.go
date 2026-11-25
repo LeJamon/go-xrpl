@@ -181,11 +181,19 @@ func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) ter.Result {
 	if result := ctx.CheckReserveFor(ctx.AccountID, ctx.Account, ctx.Account.Balance, 0, 0, ter.TecINSUFFICIENT_RESERVE); result != ter.TesSUCCESS {
 		return result
 	}
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount)
-	if ctx.Account.Balance < reserve || ctx.Account.Balance-reserve < amount {
+	reserve, ok := ctx.AccountReserveAmount(ctx.Account.OwnerCount)
+	if !ok {
+		return ter.TefINTERNAL
+	}
+	liquid, ok := tx.LiquidXRP(ctx.Account.Balance, reserve)
+	if !ok {
+		return ter.TefINTERNAL
+	}
+	if liquid < amount {
 		ctx.Log.Warn("payment channel fund: unfunded",
 			"balance", ctx.Account.Balance,
-			"needed", reserve+amount,
+			"amount", amount,
+			"reserve", reserve,
 		)
 		return ter.TecUNFUNDED
 	}

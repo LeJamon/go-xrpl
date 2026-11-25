@@ -145,11 +145,11 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		if usesSponsor {
 			ownerDelta = 0
 		}
-		sourceReserve, ok := tx.RequiredAccountReserve(ctx.Config, account, ownerDelta, 0)
+		sourceReserve, ok := tx.RequiredAccountReserveAmount(ctx.Config, account, ownerDelta, 0)
 		if !ok {
 			return ter.TefINTERNAL
 		}
-		if priorBalance < amount || priorBalance-amount < sourceReserve {
+		if !tx.BalanceCoversAmountAndReserve(priorBalance, amount, sourceReserve) {
 			ctx.Log.Warn("payment channel create: unfunded", "balance", priorBalance, "amount", amount)
 			return ter.TecUNFUNDED
 		}

@@ -307,12 +307,15 @@ func (a *AMMDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig
 				if !lptExists {
 					extraOwner = 1
 				}
-				reserve, ok := tx.AccountReserveForView(view, config, account, tx.ConfineOwnerCount(account.OwnerCount, int(extraOwner)))
+				reserve, ok := tx.AccountReserveAmountForView(view, config, account, tx.ConfineOwnerCount(account.OwnerCount, int(extraOwner)))
 				if !ok {
 					return ter.TefINTERNAL
 				}
-				xrpLiquid := int64(account.Balance) - int64(reserve)
-				if xrpLiquid < amt.Drops() {
+				xrpLiquid, ok := tx.LiquidXRP(account.Balance, reserve)
+				if !ok {
+					return ter.TefINTERNAL
+				}
+				if xrpLiquid < uint64(amt.Drops()) {
 					if lptExists {
 						return TecUNFUNDED_AMM
 					}
@@ -1011,9 +1014,15 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 		if !lptExists {
 			ownerCountAdj = 1
 		}
-		reserve := ctx.AccountReserve(ctx.Account.OwnerCount + ownerCountAdj)
-		xrpLiquid := int64(ctx.Account.Balance) - int64(reserve)
-		if xrpLiquid < totalXRPNeeded {
+		reserve, ok := ctx.AccountReserveAmount(ctx.Account.OwnerCount + ownerCountAdj)
+		if !ok {
+			return ter.TefINTERNAL
+		}
+		xrpLiquid, ok := tx.LiquidXRP(ctx.Account.Balance, reserve)
+		if !ok {
+			return ter.TefINTERNAL
+		}
+		if xrpLiquid < uint64(totalXRPNeeded) {
 			return TecUNFUNDED_AMM
 		}
 	}

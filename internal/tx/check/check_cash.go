@@ -243,19 +243,29 @@ func checkCashSourceFunds(view tx.ReadOnlyLedgerView, config tx.EngineConfig, so
 		if err != nil {
 			return ter.TefINTERNAL
 		}
-		reserve, ok := tx.AccountReserveForView(view, config, sourceAccount, sourceAccount.OwnerCount)
+		reserve, ok := tx.AccountReserveAmountForView(view, config, sourceAccount, sourceAccount.OwnerCount)
 		if !ok {
 			return ter.TefINTERNAL
 		}
-		var available uint64
-		if sourceAccount.Balance > reserve {
-			available = sourceAccount.Balance - reserve
+		available, ok := tx.LiquidXRP(sourceAccount.Balance, reserve)
+		if !ok {
+			return ter.TefINTERNAL
 		}
 		if sponsor == "" {
-			if ^uint64(0)-available < config.ReserveIncrement {
+			increment := config.Fees().Increment
+			if increment > 0 && available > ^uint64(0)-uint64(increment) {
 				return ter.TefINTERNAL
 			}
-			available += config.ReserveIncrement
+			if increment >= 0 {
+				available += uint64(increment)
+			} else {
+				decrement := uint64(-(increment + 1)) + 1
+				if decrement >= available {
+					available = 0
+				} else {
+					available -= decrement
+				}
+			}
 		}
 		if value.Drops() < 0 || uint64(value.Drops()) > available {
 			return ter.TecPATH_PARTIAL
@@ -629,9 +639,13 @@ func xrpLiquidAfterCheck(creator *state.AccountRoot, ctx *tx.ApplyContext, spons
 	if !sponsored && ownerCount > 0 {
 		ownerCount--
 	}
-	reserve := ctx.AccountReserveFor(creator, ownerCount)
-	if creator.Balance > reserve {
-		return creator.Balance - reserve
+	reserve, ok := ctx.AccountReserveAmountFor(creator, ownerCount)
+	if !ok {
+		return 0
+	}
+	liquid, ok := tx.LiquidXRP(creator.Balance, reserve)
+	if ok {
+		return liquid
 	}
 	return 0
 }
