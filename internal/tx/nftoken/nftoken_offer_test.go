@@ -22,7 +22,7 @@ func TestOfferDirectoryResults(t *testing.T) {
 		{state.ErrMalformedDirectory, ter.TefEXCEPTION},
 		{errors.New("storage error"), ter.TefINTERNAL},
 	} {
-		if got := offerDirInsertError(ctx, "insert offer", tc.err); got != tc.want {
+		if got := offerInsertError(ctx, "insert offer", tc.err); got != tc.want {
 			t.Errorf("%v: got %v, want %v", tc.err, got, tc.want)
 		}
 	}

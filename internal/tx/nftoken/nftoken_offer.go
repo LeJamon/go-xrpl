@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -212,7 +213,7 @@ func tokenOfferCreateApply(
 		dir.Owner = accountID
 	})
 	if err != nil {
-		return offerDirInsertError(ctx, "insert NFTokenOffer in owner directory", err)
+		return offerInsertError(ctx, "insert NFTokenOffer in owner directory", err)
 	}
 
 	var tokenDirKey keylet.Keylet
@@ -230,7 +231,7 @@ func tokenOfferCreateApply(
 		dir.NFTokenID = tokenID
 	})
 	if err != nil {
-		return offerDirInsertError(ctx, "insert NFTokenOffer in token directory", err)
+		return offerInsertError(ctx, "insert NFTokenOffer in token directory", err)
 	}
 
 	offerData, err := serializeNFTokenOfferRaw(
@@ -244,7 +245,7 @@ func tokenOfferCreateApply(
 	}
 
 	if err := ctx.View.Insert(offerKey, offerData); err != nil {
-		return ctx.Internal("insert NFTokenOffer", err)
+		return offerInsertError(ctx, "insert NFTokenOffer", err)
 	}
 
 	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)
@@ -252,11 +253,11 @@ func tokenOfferCreateApply(
 	return ter.TesSUCCESS
 }
 
-func offerDirInsertError(ctx *tx.ApplyContext, op string, err error) ter.Result {
+func offerInsertError(ctx *tx.ApplyContext, op string, err error) ter.Result {
 	if errors.Is(err, state.ErrDirFull) {
 		return ter.TecDIR_FULL
 	}
-	if errors.Is(err, state.ErrMalformedDirectory) {
+	if errors.Is(err, state.ErrMalformedDirectory) || errors.Is(err, ledger.ErrEntryExists) {
 		return ter.TefEXCEPTION
 	}
 	return ctx.Internal(op, err)

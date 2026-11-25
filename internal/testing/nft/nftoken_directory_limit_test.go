@@ -89,6 +89,8 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 		malformedRoot
 		malformedLastPage
 		missingLastPage
+		occupiedNextPage
+		occupiedOffer
 	)
 	for _, tc := range []struct {
 		name           string
@@ -111,6 +113,8 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 		{name: "malformed owner directory root", fault: malformedRoot, want: ter.TefEXCEPTION},
 		{name: "malformed sell directory page", tokenDirectory: true, fault: malformedLastPage, want: ter.TefEXCEPTION},
 		{name: "missing sell directory page", tokenDirectory: true, fault: missingLastPage, want: ter.TefEXCEPTION},
+		{name: "occupied next sell directory page", tokenDirectory: true, fault: occupiedNextPage, want: ter.TefEXCEPTION},
+		{name: "occupied offer key", tokenDirectory: true, fault: occupiedOffer, want: ter.TefEXCEPTION},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := jtx.NewTestEnv(t)
@@ -120,6 +124,9 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 				lastPage = math.MaxUint64
 			} else {
 				env.DisableFeature("fixDirectoryLimit")
+			}
+			if tc.fault == occupiedNextPage || tc.fault == occupiedOffer {
+				lastPage = 1
 			}
 			alice := jtx.NewAccount("alice")
 			env.Fund(alice)
@@ -167,6 +174,8 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 			}
 			fillNFTOfferDirectory(t, env, dirKey, dir, lastPage)
 			lastKey := keylet.DirPage(dirKey.Key, lastPage)
+			nextKey := keylet.DirPage(dirKey.Key, lastPage+1)
+			offerKey := keylet.NFTokenOffer(alice.ID, env.Seq(alice))
 			switch tc.fault {
 			case wrongRootType:
 				accountData, err := env.LedgerEntry(keylet.Account(alice.ID))
@@ -186,6 +195,14 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 				require.NoError(t, env.Ledger().Update(key, truncated))
 			case missingLastPage:
 				require.NoError(t, env.Ledger().Erase(lastKey))
+			case occupiedNextPage, occupiedOffer:
+				key := nextKey
+				if tc.fault == occupiedOffer {
+					key = offerKey
+				}
+				data, err := env.LedgerEntry(lastKey)
+				require.NoError(t, err)
+				require.NoError(t, env.Ledger().Insert(key, data))
 			}
 
 			count := env.OwnerCount(alice)
@@ -193,9 +210,8 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 				setXRPBalance(t, env, alice, env.ReserveBase()+uint64(count+1)*env.ReserveIncrement()-1)
 			}
 			wantBalance, wantSequence := env.Balance(alice), env.Seq(alice)
-			offerKey := keylet.NFTokenOffer(alice.ID, wantSequence)
 			minted := env.MintedCount(alice)
-			entries := []keylet.Keylet{ownerDir, tokenDir, lastKey, keylet.NFTokenPageMax(alice.ID)}
+			entries := []keylet.Keylet{ownerDir, tokenDir, lastKey, nextKey, offerKey, keylet.NFTokenPageMax(alice.ID)}
 			before := make(map[keylet.Keylet][]byte, len(entries))
 			for _, key := range entries {
 				key.Type = entry.TypeAny
@@ -221,7 +237,6 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 			}
 			env.Close()
 
-			jtx.RequireLedgerEntryNotExists(t, env, offerKey)
 			jtx.RequireBalance(t, env, alice, wantBalance)
 			jtx.RequireSequence(t, env, alice, wantSequence)
 			jtx.RequireOwnerCount(t, env, alice, count)
