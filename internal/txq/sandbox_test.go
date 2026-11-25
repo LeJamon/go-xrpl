@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
@@ -65,11 +66,10 @@ func (c *mockClearCtx) TicketExists([20]byte, uint32) (bool, error) { return tru
 func (c *mockClearCtx) GetAccountBalance([20]byte) (uint64, error) {
 	return 0, nil
 }
-func (c *mockClearCtx) GetAccountReserve(uint32) uint64 { return 0 }
+func (c *mockClearCtx) Fees() drops.Fees { return drops.Fees{Base: 10} }
 func (c *mockClearCtx) GetBaseFees(tx.Transaction) (uint64, uint64, error) {
 	return 10, 10, nil
 }
-func (c *mockClearCtx) GetReferenceFee() uint64   { return 10 }
 func (c *mockClearCtx) GetTxInLedger() uint32     { return 0 }
 func (c *mockClearCtx) GetLedgerSequence() uint32 { return 0 }
 func (c *mockClearCtx) ApplyTransaction(tx.Transaction) (ter.Result, bool) {

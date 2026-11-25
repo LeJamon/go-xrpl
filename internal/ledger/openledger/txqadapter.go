@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -126,16 +127,8 @@ func (a *TxqAdapter) GetAccountBalance(accountID [20]byte) (uint64, error) {
 	return ar.Balance, nil
 }
 
-// GetAccountReserve returns the reserve requirement for an account at the
-// given ownerCount: reserveBase + ownerCount * reserveIncrement.
-//
-// Rippled: View::accountReserve in View.h:285.
-func (a *TxqAdapter) GetAccountReserve(ownerCount uint32) uint64 {
-	return a.cfg.ReserveBase + uint64(ownerCount)*a.cfg.ReserveIncrement
-}
-
-func (a *TxqAdapter) GetReferenceFee() uint64 {
-	return a.cfg.BaseFee
+func (a *TxqAdapter) Fees() drops.Fees {
+	return a.view.Fees()
 }
 
 func (a *TxqAdapter) GetBaseFees(transaction tx.Transaction) (fee, defaultFee uint64, err error) {

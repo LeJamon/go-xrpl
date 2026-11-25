@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -31,15 +32,11 @@ type ApplyContext interface {
 	// It returns 0 without an error if the account doesn't exist.
 	GetAccountBalance(account [20]byte) (uint64, error)
 
-	// GetAccountReserve returns the reserve requirement for an account.
-	GetAccountReserve(ownerCount uint32) uint64
+	Fees() drops.Fees
 
 	// GetBaseFees returns the contextual minimum fee and the ordinary fee used
 	// to normalize a contextually free transaction's fee level.
 	GetBaseFees(txn tx.Transaction) (baseFee, defaultBaseFee uint64, err error)
-
-	// GetReferenceFee returns the ledger's base reference fee.
-	GetReferenceFee() uint64
 
 	// GetTxInLedger returns the number of transactions in the open ledger.
 	GetTxInLedger() uint32
@@ -434,21 +431,20 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 			// The new tx's fee is NOT added here; it is accounted for by the
 			// preclaim against the adjusted view, not the balance gate below.
 
-			var reserve uint64
-			var referenceFee uint64
+			var fees drops.Fees
 			q.withStateUnlocked(func() {
-				reserve = ctx.GetAccountReserve(0)
-				referenceFee = ctx.GetReferenceFee()
+				fees = ctx.Fees()
 			})
-			if totalFee >= balance || (reserve > 10*referenceFee && totalFee >= reserve) {
+			if totalFee >= balance || (fees.Reserve > 10*fees.Base && drops.XRPAmount(totalFee) >= fees.Reserve) {
 				return ApplyResult{Result: ter.TelCAN_NOT_QUEUE_BALANCE, Applied: false}
 			}
 
 			// Bump the preclaim view to reflect the in-flight chain
 			// (TxQ.cpp:1137-1152): balance -= potentialTotalSpend, and the
 			// sequence becomes the tx's own (seq) or the next queuable seq (ticket).
-			minBalReserve := min(reserve, balance)
-			spendableAboveReserve := min(potentialSpend, balance-minBalReserve)
+			xrpBalance := drops.XRPAmount(balance)
+			available := xrpBalance - min(fees.Reserve, xrpBalance)
+			spendableAboveReserve := min(potentialSpend, uint64(available))
 			potentialTotalSpend := totalFee + spendableAboveReserve
 			if potentialTotalSpend <= balance {
 				preclaimBalance = balance - potentialTotalSpend

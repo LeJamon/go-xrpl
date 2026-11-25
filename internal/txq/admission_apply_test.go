@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -71,7 +72,7 @@ type stubApplyCtx struct {
 	sequenceErr  error
 	balance      uint64
 	balanceErr   error
-	reserve      uint64
+	reserve      drops.XRPAmount
 	exists       bool
 	existsErr    error
 	tickets      map[uint32]bool
@@ -84,12 +85,13 @@ type stubApplyCtx struct {
 	ledgerSeq    uint32
 	flags        tx.ApplyFlags
 
-	preflight ter.Result
-	preclaim  ter.Result
-	applyRes  ter.Result
-	applied   bool
-	applyFn   func(tx.Transaction) (ter.Result, bool)
-	readFn    func()
+	preflight       ter.Result
+	preclaimBalance uint64
+	preclaim        ter.Result
+	applyRes        ter.Result
+	applied         bool
+	applyFn         func(tx.Transaction) (ter.Result, bool)
+	readFn          func()
 }
 
 func (c *stubApplyCtx) observeRead() {
@@ -114,9 +116,9 @@ func (c *stubApplyCtx) GetAccountBalance([20]byte) (uint64, error) {
 	c.observeRead()
 	return c.balance, c.balanceErr
 }
-func (c *stubApplyCtx) GetAccountReserve(uint32) uint64 {
+func (c *stubApplyCtx) Fees() drops.Fees {
 	c.observeRead()
-	return c.reserve
+	return drops.Fees{Base: drops.XRPAmount(c.baseFee), Reserve: c.reserve}
 }
 func (c *stubApplyCtx) GetBaseFees(tx.Transaction) (uint64, uint64, error) {
 	c.observeRead()
@@ -129,10 +131,6 @@ func (c *stubApplyCtx) GetBaseFees(tx.Transaction) (uint64, uint64, error) {
 		return c.baseFee, c.baseFee, c.baseFeeErrs[index]
 	}
 	return c.baseFee, c.baseFee, c.baseFeeErr
-}
-func (c *stubApplyCtx) GetReferenceFee() uint64 {
-	c.observeRead()
-	return c.baseFee
 }
 func (c *stubApplyCtx) GetTxInLedger() uint32 {
 	c.observeRead()
@@ -154,8 +152,9 @@ func (c *stubApplyCtx) PreflightTransaction(tx.Transaction) ter.Result {
 	c.observeRead()
 	return c.preflight
 }
-func (c *stubApplyCtx) PreclaimTransaction(tx.Transaction, [20]byte, uint64, uint32) ter.Result {
+func (c *stubApplyCtx) PreclaimTransaction(_ tx.Transaction, _ [20]byte, balance uint64, _ uint32) ter.Result {
 	c.observeRead()
+	c.preclaimBalance = balance
 	return c.preclaim
 }
 
@@ -210,6 +209,30 @@ func addQueued(q *TxQ, aq *AccountQueue, seq, followingSeq uint32) *Candidate {
 	aq.Add(c)
 	q.insertByFee(c)
 	return c
+}
+
+func TestApplyQueuedSpendWithSignedReserve(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		reserve     drops.XRPAmount
+		wantBalance uint64
+	}{
+		{"positive", 90, 80},
+		{"zero", 0, 40},
+		{"negative", -10, 40},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := mustNew(makeAdmissionConfig())
+			acct := [20]byte{9}
+			aq := NewAccountQueue(acct)
+			q.byAccount[acct] = aq
+			addQueued(q, aq, 5, 6).Consequences.PotentialSpend = 50
+			ctx := &stubApplyCtx{seq: 5, balance: 100, reserve: tc.reserve, exists: true, baseFee: 10, txInLedger: 100}
+			result := q.Apply(ctx, &seqTx{seq: 6, fee: "10"}, [32]byte{2}, acct)
+			require.Equal(t, ter.TerQUEUED, result.Result)
+			require.Equal(t, tc.wantBalance, ctx.preclaimBalance)
+		})
+	}
 }
 
 func TestAcceptDropsTefCategory(t *testing.T) {
