@@ -92,7 +92,7 @@ func (ws *WebSocketServer) executePathFindClose(wsConn *websocketConnection, _ *
 		return nil, rpcerrors.RpcErrorNoPathRequest()
 	}
 
-	return session.Close(), nil
+	return pathFindCommandResult(session.Close())
 }
 
 // executePathFindStatus returns the current status of the active pathfinding session.
@@ -105,7 +105,18 @@ func (ws *WebSocketServer) executePathFindStatus(wsConn *websocketConnection, _ 
 		return nil, rpcerrors.RpcErrorNoPathRequest()
 	}
 
-	return session.Status(), nil
+	return pathFindCommandResult(session.Status())
+}
+
+func pathFindCommandResult(event *PathFindEvent) (any, *rpcerrors.RpcError) {
+	if event.Error == "" {
+		return event, nil
+	}
+	err := rpcerrors.NewRpcError(event.ErrorCode, event.Error, event.Error, event.ErrorMessage)
+	if event.Closed {
+		err = err.WithExtra(map[string]any{"closed": true})
+	}
+	return nil, err
 }
 
 // UpdatePathFindSessions snapshots active sessions and queues one bounded,

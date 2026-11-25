@@ -193,3 +193,44 @@ func TestPathFindRefreshReserveErrorWireAndRecovery(t *testing.T) {
 	require.NotContains(t, recoveredEvent, "error")
 	require.Equal(t, 2, computes)
 }
+
+func TestPathFindCommandsAfterRefreshError(t *testing.T) {
+	ws, conn, ctx, view, source, destination := newPathFindReserveHarness(t)
+	params := pathFindReserveCreateParams(pathFindSessionAccountAddress(source),
+		pathFindSessionAccountAddress(destination), int64(view.fees.Reserve))
+	session, rpcErr := ParseAndCreateSession(params, "original")
+	require.Nil(t, rpcErr)
+	ws.bindPathFindRefreshManager(conn)
+	conn.installPathFindSession(session)
+	view.fees.Reserve++
+	ws.queuePathFindSessions(func() (types.LedgerStateView, error) { return view, nil }, conn)
+	select {
+	case pushed := <-conn.Outbound():
+		require.JSONEq(t, `{"type":"path_find","error":"dstAmtMalformed","error_code":51,"error_message":"Destination amount/currency/issuer is malformed."}`, string(pushed))
+	case <-time.After(time.Second):
+		t.Fatal("missing path_find refresh error")
+	}
+
+	for _, subcommand := range []string{"status", "close"} {
+		cmd := specialDispatchCommand("path_find")
+		cmd.Request["subcommand"] = subcommand
+		params, err := json.Marshal(cmd.Request)
+		require.NoError(t, err)
+		cmd.Params = params
+		ws.handleSpecialCommand(conn, ctx, cmd, ws.executePathFind)
+
+		want := map[string]any{
+			"type": "response", "status": "error", "id": cmd.ID, "request": cmd.Request,
+			"error": "dstAmtMalformed", "error_code": 51,
+			"error_message": "Destination amount/currency/issuer is malformed.",
+		}
+		if subcommand == "close" {
+			want["closed"] = true
+		}
+		body, err := json.Marshal(want)
+		require.NoError(t, err)
+		require.JSONEq(t, string(body), string(<-conn.Outbound()))
+	}
+	_, active := conn.snapshotPathFindUpdate()
+	require.False(t, active)
+}
