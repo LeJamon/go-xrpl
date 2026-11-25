@@ -182,9 +182,7 @@ func (s *SetFee) parseFields() (parsedFeeFields, error) {
 }
 
 // FeeSchedule returns the complete fee schedule carried by this SetFee.
-// SetFee transactions emitted by consensus always carry every active field;
-// rejecting partial field sets here prevents offline replay from inventing
-// omitted values while retaining the parser's signed-value handling.
+// Consensus fee updates include every active field.
 func (s *SetFee) FeeSchedule() (drops.Fees, error) {
 	parsed, err := s.parsedOrError()
 	if err != nil {
@@ -322,7 +320,6 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) ter.Result {
 	return ter.TesSUCCESS
 }
 
-// parseDropsAmount parses a signed decimal drops amount string.
 func parseDropsAmount(s string) (drops.XRPAmount, error) {
 	v, err := strconv.ParseInt(s, 10, 64)
 	return drops.XRPAmount(v), err

@@ -573,8 +573,6 @@ func loadInitialState(ctx context.Context, client *statecompare.Client, ledgerIn
 		return nil, nil, drops.Fees{}, err
 	}
 
-	// Seed fees from the verified state. A partial FeeSettings entry inherits
-	// from a successful SetFee recovered from the verified transaction history.
 	fees, err := resolveReplaySeedFees(ctx, client, snapshot, stateMap, drops.DefaultFees(), nil)
 	if err != nil {
 		return nil, nil, drops.Fees{}, err

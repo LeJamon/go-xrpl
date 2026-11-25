@@ -35,8 +35,7 @@ func checkpointPath(dir string, seq uint32) string {
 }
 
 // writeCheckpoint writes a checksummed checkpoint through one ordered state
-// traversal and publishes it durably with a same-directory atomic rename. The
-// fees is the effective schedule after this ledger.
+// traversal and publishes it durably with a same-directory atomic rename.
 func writeCheckpoint(ctx context.Context, dir string, seq uint32, stateMap *shamap.SHAMap, fees drops.Fees) (err error) {
 	if stateMap == nil {
 		return errors.New("checkpoint state map is nil")

@@ -233,10 +233,6 @@ func (e *Engine) payExternalFeeOnTable(
 	if fee <= balance {
 		account.Balance = balance - fee
 	} else {
-		// A negative reserve can authorize a fee larger than the stored balance.
-		// Rippled carries the resulting negative XRPAmount until any incoming
-		// credit settles it; AccountRoot.Balance is uint64 here, so retain the
-		// signed deficit separately while staging a zero balance.
 		account.Balance = 0
 		st.externalFeeDebt = fee - balance
 	}

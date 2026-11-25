@@ -32,9 +32,7 @@ type applyState struct {
 	fee                 uint64
 	// chargedFee is the fee actually deducted from the payer. It equals fee on
 	// the success path; recovery clamps it to the authorized spendable amount
-	// (rippled Transactor::reset() — `if (fee > spendable) fee = spendable`). A
-	// negative reserve can make the authorized amount exceed the stored balance;
-	// externalFeeDebt carries that transient signed difference.
+	// (rippled Transactor::reset() — `if (fee > spendable) fee = spendable`).
 	chargedFee uint64
 	// externalFeeDebt carries the signed deficit when a co-signed sponsor's
 	// spendable allowance exceeds its serialized balance. The account image is
@@ -967,8 +965,6 @@ func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (
 	// If fee-only state also violates invariants, escalate to tefINVARIANT_FAILED
 	// and do NOT apply anything (transaction is completely rejected).
 	invEntries2 := invTecTable.CollectEntries()
-	// Use the selected charged fee here too — recovery above may have reduced
-	// st.chargedFee to the payer's authorized allowance.
 	violation2 := invariants.CheckInvariants(wrapTxForInvariantsWithContext(st.tx, invariantsContextForApply(st, e.config.ParentCloseTime)), invariants.Result(ter.TecINVARIANT_FAILED), st.chargedFee, txDeclaredFee, invEntries2, invariants.WithParentCloseTime(invTecTable, e.config.ParentCloseTime), e.rules(), e.config.NumberContext())
 	if violation2 == nil && st.externalFeeDebt != 0 {
 		violation2 = &invariants.InvariantViolation{

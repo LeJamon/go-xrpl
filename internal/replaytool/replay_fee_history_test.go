@@ -69,8 +69,6 @@ func TestResolveReplaySeedFeesInheritsVerifiedSetFeeHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveReplaySeedFees: %v", err)
 	}
-	// BaseFeeDrops is explicitly zero in the seed; it must not be replaced by
-	// the historical -15 value. The omitted fields inherit signs and values.
 	if want := (drops.Fees{Base: 0, Reserve: -7, Increment: 20}); got != want {
 		t.Fatalf("resolved fees = %+v, want %+v", got, want)
 	}
@@ -149,7 +147,6 @@ func TestResolveReplaySeedFeesAnchorsCustomGenesisSchedule(t *testing.T) {
 		snapshotErr:  make(map[uint32]error),
 		stateEntries: map[uint32][]statecompare.StateEntry{1: genesisEntries},
 	}
-	// The parent links above are intentionally arranged as 3 -> 2 -> 1.
 	client.snapshots[3].ParentHash = client.snapshots[2].LedgerHash
 
 	got, err := resolveReplaySeedFees(context.Background(), client, client.snapshots[3], stateMap, drops.DefaultFees(), nil)

@@ -170,9 +170,7 @@ func transactionsOrEmpty(ctx context.Context, client replayHistoryClient, snapsh
 		}
 	}
 	if errors.Is(err, statecompare.ErrNotFound) && snapshot.TransactionCount == 0 && snapshot.TransactionHash == ([32]byte{}) {
-		// Empty ledgers may legitimately have no transaction pack. A non-empty
-		// transaction root or a non-empty manifest must still propagate the
-		// archive error to the caller.
+		// The archive can omit the transaction pack for an empty ledger.
 		return nil, nil
 	}
 	return transactions, err

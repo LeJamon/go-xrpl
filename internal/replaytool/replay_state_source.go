@@ -117,8 +117,6 @@ func (s *nodestoreStateSource) Load(ctx context.Context, ledgerIndex uint32) (*s
 	}
 
 	// Targeted lookup; lazily fetches only the FeeSettings path, not the tree.
-	// A partial entry inherits from verified SetFee history without requiring a
-	// predecessor state pack.
 	fees, err := resolveReplaySeedFees(ctx, s.client, snapshot, stateMap, drops.DefaultFees(), nil)
 	if err != nil {
 		return nil, nil, drops.Fees{}, err
