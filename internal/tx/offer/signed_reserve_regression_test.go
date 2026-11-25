@@ -43,7 +43,7 @@ func TestOfferCreateSignedReserveControlsPlacement(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			view := newOfferMPTLedgerView()
-			account := &state.AccountRoot{Account: ownerAddress, Balance: 1, Sequence: 1}
+			account := &state.AccountRoot{Account: ownerAddress, Balance: 11, Sequence: 1}
 			accountData, err := state.SerializeAccountRoot(account)
 			require.NoError(t, err)
 			require.NoError(t, view.Insert(keylet.Account(owner), accountData))
@@ -60,9 +60,10 @@ func TestOfferCreateSignedReserveControlsPlacement(t *testing.T) {
 				AccountID: owner,
 				Common:    offer.GetCommon(),
 				Config: tx.EngineConfig{
-					ReserveBase:    uint64(drops.XRPAmount(test.reserve)),
-					LedgerSequence: 2,
-					Rules:          amendment.EmptyRules(),
+					ReserveBase:      uint64(drops.XRPAmount(test.reserve)),
+					ReserveIncrement: 2,
+					LedgerSequence:   2,
+					Rules:            amendment.EmptyRules(),
 				},
 				Log: xrpllog.Discard(),
 				Ctx: context.Background(),
@@ -74,7 +75,7 @@ func TestOfferCreateSignedReserveControlsPlacement(t *testing.T) {
 			exists, err := view.Exists(keylet.Offer(owner, 1))
 			require.NoError(t, err)
 			require.Equal(t, test.wantOffer, exists)
-			require.Equal(t, uint64(1), ctx.Account.Balance)
+			require.Equal(t, uint64(11), ctx.Account.Balance)
 		})
 	}
 }
