@@ -41,6 +41,7 @@ type DirectoryNode struct {
 	DomainID          string // Hash256 (uppercase hex)
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	LedgerIndex       string // Hash256 (uppercase hex)
 	Sponsor           string // AccountID (base58)
 }
 
@@ -67,6 +68,7 @@ const (
 	directorynodeBitDomainID
 	directorynodeBitPreviousTxnID
 	directorynodeBitPreviousTxnLgrSeq
+	directorynodeBitLedgerIndex
 	directorynodeBitSponsor
 )
 
@@ -187,6 +189,13 @@ func (d *DirectoryNode) SetPreviousTxnLgrSeq(value uint32) {
 	d.PreviousTxnLgrSeq = value
 	d.dirty = true
 	d.present |= directorynodeBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (d *DirectoryNode) SetLedgerIndex(value string) {
+	d.LedgerIndex = value
+	d.dirty = true
+	d.present |= directorynodeBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -677,6 +686,37 @@ func (d *DirectoryNode) SetPreviousTxnLgrSeqValue(value uint32) {
 	d.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (d *DirectoryNode) HasLedgerIndex() bool {
+	return d != nil && d.present&directorynodeBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (d *DirectoryNode) ClearLedgerIndex() {
+	if d == nil {
+		return
+	}
+	d.LedgerIndex = ""
+	d.present &^= directorynodeBitLedgerIndex
+	d.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (d *DirectoryNode) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if d == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(d.LedgerIndex, "DirectoryNode.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (d *DirectoryNode) SetLedgerIndexValue(value [32]byte) {
+	d.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (d *DirectoryNode) HasSponsor() bool {
 	return d != nil && d.present&directorynodeBitSponsor != 0
@@ -830,6 +870,9 @@ func (d *DirectoryNode) decode(data []byte, legacy bool) error {
 			case 5:
 				d.PreviousTxnID = val
 				d.present |= directorynodeBitPreviousTxnID
+			case 6:
+				d.LedgerIndex = val
+				d.present |= directorynodeBitLedgerIndex
 			case 8:
 				d.RootIndex = val
 				d.present |= directorynodeBitRootIndex
@@ -962,6 +1005,9 @@ func (d *DirectoryNode) emitAll(out map[string]any, skipDefault bool) {
 	if d.present&directorynodeBitDomainID != 0 && !(skipDefault && isZeroHexString(d.DomainID)) {
 		out["DomainID"] = d.DomainID
 	}
+	if d.present&directorynodeBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(d.LedgerIndex)) {
+		out["LedgerIndex"] = d.LedgerIndex
+	}
 	if d.present&directorynodeBitSponsor != 0 && !(skipDefault && d.Sponsor == "") {
 		out["Sponsor"] = d.Sponsor
 	}
@@ -1002,6 +1048,7 @@ func (d *DirectoryNode) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "ExchangeRate", prv.ExchangeRate, d.ExchangeRate, prv.present&directorynodeBitExchangeRate, d.present&directorynodeBitExchangeRate)
 	emitIfChangedString(out, "NFTokenID", prv.NFTokenID, d.NFTokenID, prv.present&directorynodeBitNFTokenID, d.present&directorynodeBitNFTokenID)
 	emitIfChangedString(out, "DomainID", prv.DomainID, d.DomainID, prv.present&directorynodeBitDomainID, d.present&directorynodeBitDomainID)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, d.LedgerIndex, prv.present&directorynodeBitLedgerIndex, d.present&directorynodeBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, d.Sponsor, prv.present&directorynodeBitSponsor, d.present&directorynodeBitSponsor)
 }
 
@@ -1049,6 +1096,9 @@ func (d *DirectoryNode) EmitChangeOrigFields(out map[string]any) {
 	}
 	if d.present&directorynodeBitDomainID != 0 {
 		out["DomainID"] = d.DomainID
+	}
+	if d.present&directorynodeBitLedgerIndex != 0 {
+		out["LedgerIndex"] = d.LedgerIndex
 	}
 	if d.present&directorynodeBitSponsor != 0 {
 		out["Sponsor"] = d.Sponsor
@@ -1145,6 +1195,9 @@ func (d *DirectoryNode) ToMap() map[string]any {
 	if d.present&directorynodeBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = d.PreviousTxnLgrSeq
 	}
+	if d.present&directorynodeBitLedgerIndex != 0 {
+		out["LedgerIndex"] = d.LedgerIndex
+	}
 	if d.present&directorynodeBitSponsor != 0 {
 		out["Sponsor"] = d.Sponsor
 	}
@@ -1207,6 +1260,11 @@ func (d *DirectoryNode) appendBinary(dst []byte) ([]byte, error) {
 	}
 	if d.present&directorynodeBitPreviousTxnID != 0 {
 		if dst, err = appendHash(append(dst, 0x55), d.PreviousTxnID, 32); err != nil {
+			return nil, err
+		}
+	}
+	if d.present&directorynodeBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), d.LedgerIndex, 32); err != nil {
 			return nil, err
 		}
 	}
@@ -1295,6 +1353,9 @@ func (d *DirectoryNode) encodedSizeHint() int {
 	if d.present&directorynodeBitPreviousTxnID != 0 {
 		size += 33
 	}
+	if d.present&directorynodeBitLedgerIndex != 0 {
+		size += 33
+	}
 	if d.present&directorynodeBitRootIndex != 0 {
 		size += 33
 	}
@@ -1348,6 +1409,9 @@ func (d *DirectoryNode) hasXAddress() bool {
 		return true
 	}
 	if d.present&directorynodeBitPreviousTxnID != 0 && isXAddress(d.PreviousTxnID) {
+		return true
+	}
+	if d.present&directorynodeBitLedgerIndex != 0 && isXAddress(d.LedgerIndex) {
 		return true
 	}
 	if d.present&directorynodeBitRootIndex != 0 && isXAddress(d.RootIndex) {

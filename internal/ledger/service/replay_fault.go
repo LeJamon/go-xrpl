@@ -750,7 +750,11 @@ func (s *Service) revalidateReplayFault(ctx context.Context, id string, onStarte
 			return err
 		}
 		defer replay.ReleaseMemory()
-		if _, err := replay.ApplyContext(ctx, s.EngineConfigForReplay(parent)); err != nil {
+		cfg, configErr := s.EngineConfigForReplay(ctx, parent)
+		if configErr != nil {
+			return configErr
+		}
+		if _, err := replay.ApplyContext(ctx, cfg); err != nil {
 			return fmt.Errorf("failed transition still disagrees: %w", err)
 		}
 		if err := ctx.Err(); err != nil {

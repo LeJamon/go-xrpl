@@ -34,6 +34,7 @@ type FeeSettings struct {
 	Flags                 uint32
 	PreviousTxnID         string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq     uint32
+	LedgerIndex           string // Hash256 (uppercase hex)
 	Sponsor               string // AccountID (base58)
 }
 
@@ -53,6 +54,7 @@ const (
 	feesettingsBitFlags
 	feesettingsBitPreviousTxnID
 	feesettingsBitPreviousTxnLgrSeq
+	feesettingsBitLedgerIndex
 	feesettingsBitSponsor
 )
 
@@ -124,6 +126,13 @@ func (f *FeeSettings) SetPreviousTxnLgrSeq(value uint32) {
 	f.PreviousTxnLgrSeq = value
 	f.dirty = true
 	f.present |= feesettingsBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (f *FeeSettings) SetLedgerIndex(value string) {
+	f.LedgerIndex = value
+	f.dirty = true
+	f.present |= feesettingsBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -421,6 +430,37 @@ func (f *FeeSettings) SetPreviousTxnLgrSeqValue(value uint32) {
 	f.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (f *FeeSettings) HasLedgerIndex() bool {
+	return f != nil && f.present&feesettingsBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (f *FeeSettings) ClearLedgerIndex() {
+	if f == nil {
+		return
+	}
+	f.LedgerIndex = ""
+	f.present &^= feesettingsBitLedgerIndex
+	f.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (f *FeeSettings) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if f == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(f.LedgerIndex, "FeeSettings.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (f *FeeSettings) SetLedgerIndexValue(value [32]byte) {
+	f.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (f *FeeSettings) HasSponsor() bool {
 	return f != nil && f.present&feesettingsBitSponsor != 0
@@ -557,6 +597,9 @@ func (f *FeeSettings) decode(data []byte, legacy bool) error {
 			case 5:
 				f.PreviousTxnID = val
 				f.present |= feesettingsBitPreviousTxnID
+			case 6:
+				f.LedgerIndex = val
+				f.present |= feesettingsBitLedgerIndex
 			default:
 				return newErrUnknownField("FeeSettings", typeCode, fieldCode)
 			}
@@ -632,6 +675,9 @@ func (f *FeeSettings) emitAll(out map[string]any, skipDefault bool) {
 	if f.present&feesettingsBitFlags != 0 && !(skipDefault && f.Flags == 0) {
 		out["Flags"] = f.Flags
 	}
+	if f.present&feesettingsBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(f.LedgerIndex)) {
+		out["LedgerIndex"] = f.LedgerIndex
+	}
 	if f.present&feesettingsBitSponsor != 0 && !(skipDefault && f.Sponsor == "") {
 		out["Sponsor"] = f.Sponsor
 	}
@@ -664,6 +710,7 @@ func (f *FeeSettings) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedAmount(out, "ReserveBaseDrops", prv.ReserveBaseDrops, f.ReserveBaseDrops, prv.present&feesettingsBitReserveBaseDrops, f.present&feesettingsBitReserveBaseDrops)
 	emitIfChangedAmount(out, "ReserveIncrementDrops", prv.ReserveIncrementDrops, f.ReserveIncrementDrops, prv.present&feesettingsBitReserveIncrementDrops, f.present&feesettingsBitReserveIncrementDrops)
 	emitIfChangedUint32(out, "Flags", prv.Flags, f.Flags, prv.present&feesettingsBitFlags, f.present&feesettingsBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, f.LedgerIndex, prv.present&feesettingsBitLedgerIndex, f.present&feesettingsBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, f.Sponsor, prv.present&feesettingsBitSponsor, f.present&feesettingsBitSponsor)
 }
 
@@ -696,6 +743,9 @@ func (f *FeeSettings) EmitChangeOrigFields(out map[string]any) {
 	}
 	if f.present&feesettingsBitFlags != 0 {
 		out["Flags"] = f.Flags
+	}
+	if f.present&feesettingsBitLedgerIndex != 0 {
+		out["LedgerIndex"] = f.LedgerIndex
 	}
 	if f.present&feesettingsBitSponsor != 0 {
 		out["Sponsor"] = f.Sponsor
@@ -771,6 +821,9 @@ func (f *FeeSettings) ToMap() map[string]any {
 	if f.present&feesettingsBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = f.PreviousTxnLgrSeq
 	}
+	if f.present&feesettingsBitLedgerIndex != 0 {
+		out["LedgerIndex"] = f.LedgerIndex
+	}
 	if f.present&feesettingsBitSponsor != 0 {
 		out["Sponsor"] = f.Sponsor
 	}
@@ -835,6 +888,11 @@ func (f *FeeSettings) appendBinary(dst []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if f.present&feesettingsBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), f.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if f.present&feesettingsBitBaseFeeDrops != 0 {
 		if dst, err = appendAmount(append(dst, 0x60, 0x16), f.BaseFeeDrops); err != nil {
 			return nil, err
@@ -883,6 +941,9 @@ func (f *FeeSettings) encodedSizeHint() int {
 	if f.present&feesettingsBitPreviousTxnID != 0 {
 		size += 33
 	}
+	if f.present&feesettingsBitLedgerIndex != 0 {
+		size += 33
+	}
 	if f.present&feesettingsBitBaseFeeDrops != 0 {
 		size += 2 + amountEncodedLen(f.BaseFeeDrops)
 	}
@@ -906,6 +967,9 @@ func (f *FeeSettings) hasXAddress() bool {
 		return true
 	}
 	if f.present&feesettingsBitPreviousTxnID != 0 && isXAddress(f.PreviousTxnID) {
+		return true
+	}
+	if f.present&feesettingsBitLedgerIndex != 0 && isXAddress(f.LedgerIndex) {
 		return true
 	}
 	if f.present&feesettingsBitBaseFeeDrops != 0 && isXAddressValue(f.BaseFeeDrops) {

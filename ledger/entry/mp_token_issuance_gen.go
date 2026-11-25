@@ -42,6 +42,7 @@ type MPTokenIssuance struct {
 	Flags                         uint32
 	PreviousTxnID                 string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq             uint32
+	LedgerIndex                   string // Hash256 (uppercase hex)
 	Sponsor                       string // AccountID (base58)
 }
 
@@ -69,6 +70,7 @@ const (
 	mptokenissuanceBitFlags
 	mptokenissuanceBitPreviousTxnID
 	mptokenissuanceBitPreviousTxnLgrSeq
+	mptokenissuanceBitLedgerIndex
 	mptokenissuanceBitSponsor
 )
 
@@ -212,6 +214,13 @@ func (m *MPTokenIssuance) SetPreviousTxnLgrSeq(value uint32) {
 	m.PreviousTxnLgrSeq = value
 	m.dirty = true
 	m.present |= mptokenissuanceBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (m *MPTokenIssuance) SetLedgerIndex(value string) {
+	m.LedgerIndex = value
+	m.dirty = true
+	m.present |= mptokenissuanceBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -670,6 +679,37 @@ func (m *MPTokenIssuance) SetPreviousTxnLgrSeqValue(value uint32) {
 	m.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (m *MPTokenIssuance) HasLedgerIndex() bool {
+	return m != nil && m.present&mptokenissuanceBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (m *MPTokenIssuance) ClearLedgerIndex() {
+	if m == nil {
+		return
+	}
+	m.LedgerIndex = ""
+	m.present &^= mptokenissuanceBitLedgerIndex
+	m.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (m *MPTokenIssuance) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if m == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(m.LedgerIndex, "MPTokenIssuance.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (m *MPTokenIssuance) SetLedgerIndexValue(value [32]byte) {
+	m.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (m *MPTokenIssuance) HasSponsor() bool {
 	return m != nil && m.present&mptokenissuanceBitSponsor != 0
@@ -876,6 +916,9 @@ func (m *MPTokenIssuance) decode(data []byte, legacy bool) error {
 			case 5:
 				m.PreviousTxnID = val
 				m.present |= mptokenissuanceBitPreviousTxnID
+			case 6:
+				m.LedgerIndex = val
+				m.present |= mptokenissuanceBitLedgerIndex
 			case 34:
 				m.DomainID = val
 				m.present |= mptokenissuanceBitDomainID
@@ -997,6 +1040,9 @@ func (m *MPTokenIssuance) emitAll(out map[string]any, skipDefault bool) {
 	if m.present&mptokenissuanceBitFlags != 0 && !(skipDefault && m.Flags == 0) {
 		out["Flags"] = m.Flags
 	}
+	if m.present&mptokenissuanceBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(m.LedgerIndex)) {
+		out["LedgerIndex"] = m.LedgerIndex
+	}
 	if m.present&mptokenissuanceBitSponsor != 0 && !(skipDefault && m.Sponsor == "") {
 		out["Sponsor"] = m.Sponsor
 	}
@@ -1037,6 +1083,7 @@ func (m *MPTokenIssuance) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "AuditorEncryptionKey", prv.AuditorEncryptionKey, m.AuditorEncryptionKey, prv.present&mptokenissuanceBitAuditorEncryptionKey, m.present&mptokenissuanceBitAuditorEncryptionKey)
 	emitIfChangedString(out, "ConfidentialOutstandingAmount", prv.ConfidentialOutstandingAmount, m.ConfidentialOutstandingAmount, prv.present&mptokenissuanceBitConfidentialOutstandingAmount, m.present&mptokenissuanceBitConfidentialOutstandingAmount)
 	emitIfChangedUint32(out, "Flags", prv.Flags, m.Flags, prv.present&mptokenissuanceBitFlags, m.present&mptokenissuanceBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, m.LedgerIndex, prv.present&mptokenissuanceBitLedgerIndex, m.present&mptokenissuanceBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, m.Sponsor, prv.present&mptokenissuanceBitSponsor, m.present&mptokenissuanceBitSponsor)
 }
 
@@ -1093,6 +1140,9 @@ func (m *MPTokenIssuance) EmitChangeOrigFields(out map[string]any) {
 	}
 	if m.present&mptokenissuanceBitFlags != 0 {
 		out["Flags"] = m.Flags
+	}
+	if m.present&mptokenissuanceBitLedgerIndex != 0 {
+		out["LedgerIndex"] = m.LedgerIndex
 	}
 	if m.present&mptokenissuanceBitSponsor != 0 {
 		out["Sponsor"] = m.Sponsor
@@ -1191,6 +1241,9 @@ func (m *MPTokenIssuance) ToMap() map[string]any {
 	}
 	if m.present&mptokenissuanceBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = m.PreviousTxnLgrSeq
+	}
+	if m.present&mptokenissuanceBitLedgerIndex != 0 {
+		out["LedgerIndex"] = m.LedgerIndex
 	}
 	if m.present&mptokenissuanceBitSponsor != 0 {
 		out["Sponsor"] = m.Sponsor
@@ -1301,6 +1354,11 @@ func (m *MPTokenIssuance) appendBinary(dst []byte) ([]byte, error) {
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if m.present&mptokenissuanceBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), m.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if m.present&mptokenissuanceBitDomainID != 0 {
 		if dst, err = appendHash(append(dst, 0x50, 0x22), m.DomainID, 32); err != nil {
 			return nil, err
@@ -1375,6 +1433,9 @@ func (m *MPTokenIssuance) encodedSizeHint() int {
 	if m.present&mptokenissuanceBitConfidentialOutstandingAmount != 0 {
 		size += 10
 	}
+	if m.present&mptokenissuanceBitLedgerIndex != 0 {
+		size += 33
+	}
 	if m.present&mptokenissuanceBitDomainID != 0 {
 		size += 34
 	}
@@ -1422,6 +1483,9 @@ func (m *MPTokenIssuance) hasXAddress() bool {
 		return true
 	}
 	if m.present&mptokenissuanceBitPreviousTxnID != 0 && isXAddress(m.PreviousTxnID) {
+		return true
+	}
+	if m.present&mptokenissuanceBitLedgerIndex != 0 && isXAddress(m.LedgerIndex) {
 		return true
 	}
 	if m.present&mptokenissuanceBitDomainID != 0 && isXAddress(m.DomainID) {

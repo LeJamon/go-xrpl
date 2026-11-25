@@ -2,6 +2,7 @@ package entry
 
 import (
 	"bytes"
+	"encoding/hex"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -48,6 +49,39 @@ func TestRoundTrip_TypedSLE(t *testing.T) {
 	}
 }
 
+func TestFeeSettingsLedgerIndexWireFixtures(t *testing.T) {
+	const index = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+	for _, tc := range []struct {
+		name  string
+		wire  string
+		index string
+	}{
+		{"absent", "1100732200000000", ""},
+		{"present", "110073220000000056" + index, index},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wire, err := hex.DecodeString(tc.wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var settings FeeSettings
+			if err := settings.Decode(wire); err != nil {
+				t.Fatal(err)
+			}
+			if settings.HasLedgerIndex() != (tc.index != "") || settings.LedgerIndex != tc.index {
+				t.Fatalf("LedgerIndex = %q (present %v), want %q", settings.LedgerIndex, settings.HasLedgerIndex(), tc.index)
+			}
+			encoded, err := settings.Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(encoded, wire) {
+				t.Fatalf("encoded %X, want %X", encoded, wire)
+			}
+		})
+	}
+}
+
 var roundTripCases = []struct {
 	name string
 	json map[string]any
@@ -55,6 +89,7 @@ var roundTripCases = []struct {
 	{
 		name: "AccountRoot_XRP_Amount",
 		json: map[string]any{
+			"LedgerIndex":       "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
 			"LedgerEntryType":   "AccountRoot",
 			"Account":           "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			"Balance":           "1000000",

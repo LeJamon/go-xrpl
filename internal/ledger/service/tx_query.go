@@ -22,6 +22,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
@@ -387,20 +388,41 @@ func readFeesFromLedgerContext(ctx context.Context, l *ledger.Ledger) (baseFee, 
 	}
 	fees = l.Fees()
 
-	data, err := l.ReadContext(ctx, keylet.Fees())
+	data, err := l.ReadContext(ctx, keylet.Keylet{Key: keylet.Fees().Key})
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	if data == nil {
-		return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
-	}
-
-	feeSettings, err := state.ParseFeeSettings(data)
+	feeSettings, err := decodeFeeSettingsAtKey(data)
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("parse FeeSettings: %w", err)
 	}
-	fees = mergeFeeSettings(fees, feeSettings)
+	if feeSettings != nil {
+		// Open views inherit fees from the closed parent but may use rules from an older validated ledger.
+		allowModern := l.IsOpen() || l.Rules().XRPFeesEnabled()
+		fees, err = mergeFeeSettings(fees, feeSettings, allowModern)
+		if err != nil {
+			return 0, 0, 0, err
+		}
+	}
 	return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
+}
+
+func decodeFeeSettingsAtKey(data []byte) (*state.FeeSettings, error) {
+	if data == nil {
+		return nil, nil
+	}
+	typ, err := state.DecodeType(data)
+	if err != nil {
+		return nil, err
+	}
+	if typ == entry.TypeFeeSettings {
+		return state.ParseFeeSettings(data)
+	}
+	other := entry.New(typ)
+	if other == nil {
+		return nil, fmt.Errorf("unsupported ledger entry type %d", typ)
+	}
+	return nil, other.Decode(data)
 }
 
 // FeesFromLedger returns the fee and reserve settings carried by a specific
@@ -589,32 +611,6 @@ func mulDivU64(a, b, c uint64) (uint64, bool) {
 		return 0, false
 	}
 	return lo / c, true
-}
-
-// EngineConfigForReplay returns the shared (non-per-ledger) engine
-// configuration for replaying a closed ledger anchored on `parent`.
-// Fees come from the parent's FeeSettings SLE — replay must use the
-// fees that were active when the original txs ran. NetworkID and
-// Logger come from the service config.
-//
-// The caller is expected to override the per-ledger fields
-// (LedgerSequence, ParentCloseTime, ParentHash, Rules, ApplyFlags,
-// OpenLedger) from the target header before passing this config to the
-// engine. ReplayDelta.Apply() does this automatically.
-//
-// Reference: rippled BuildLedger.cpp uses the parent's view to source
-// fees; per-ledger values are stamped from the closed-ledger info.
-func (s *Service) EngineConfigForReplay(parent *ledger.Ledger) tx.EngineConfig {
-	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(parent)
-	return tx.EngineConfig{
-		BaseFee:                   baseFee,
-		ReserveBase:               reserveBase,
-		ReserveIncrement:          reserveIncrement,
-		NetworkID:                 s.config.NetworkID,
-		SkipSignatureVerification: false, // replay re-checks signatures
-		Logger:                    s.config.Logger,
-		Rules:                     rulesFromLedger(parent, s.logger),
-	}
 }
 
 // TransactionResult contains a transaction and its metadata

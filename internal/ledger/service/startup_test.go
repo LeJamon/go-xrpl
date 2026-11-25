@@ -12,9 +12,11 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/ledger/localtxs"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
@@ -626,6 +628,88 @@ func TestService_StartupReplayConsensusRetriesAfterOpenViewFailure(t *testing.T)
 	require.Nil(t, svc.startupReplay)
 }
 
+func TestService_StartupReplaySettingsReadFaultRetriesWithoutBlocking(t *testing.T) {
+	for _, standalone := range []bool{true, false} {
+		name := "consensus"
+		if standalone {
+			name = "standalone"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			db, rm := newStartupTestStorage(t, ctx)
+			genesisConfig := genesis.DefaultConfig()
+			genesisConfig.Amendments = [][32]byte{amendment.FeatureXRPFees}
+			_, target, _ := persistStartupReplayChainWithConfig(t, ctx, db, rm, Config{
+				GenesisConfig: genesisConfig,
+				Startup:       StartupConfig{Mode: StartupFresh},
+			})
+			targetHash := target.Hash()
+
+			svc, err := New(Config{
+				Standalone:    standalone,
+				Startup:       StartupConfig{Mode: StartupReplay, Ledger: fmt.Sprintf("%X", targetHash)},
+				GenesisConfig: genesisConfig,
+				NodeStore:     db,
+				SHAMapFamily:  backend.New(db),
+				RelationalDB:  rm,
+			})
+			require.NoError(t, err)
+			require.NoError(t, svc.Start())
+			t.Cleanup(svc.Stop)
+
+			parent := svc.GetClosedLedger()
+			require.True(t, parent.Rules().Enabled(amendment.FeatureXRPFees))
+			feeKey := keylet.Fees()
+			feeData, err := parent.Read(feeKey)
+			require.NoError(t, err)
+			require.NotEmpty(t, feeData)
+			family := backend.New(db)
+			fault := &oneShotSettingsReadError{
+				Family: family,
+				leaf:   sha512half.Sum(protocol.HashPrefixLeafNode().Bytes(), feeData, feeKey.Key[:]),
+				err:    errors.New("transient startup replay fee settings read"),
+			}
+
+			// Startup loading reads the fee leaf while constructing the closed
+			// ledger, so bind an equivalent cold parent before exercising the
+			// production close entry point.
+			stateMap, err := shamap.NewFromRootHashContext(ctx, shamap.TypeState, parent.Header().AccountHash, family)
+			require.NoError(t, err)
+			require.Zero(t, parent.Header().TxHash)
+			txMap := shamap.New(shamap.TypeTransaction)
+			cold, err := ledger.NewClosedFromHeaderContext(ctx, parent.Header(), stateMap, txMap, parent.Fees())
+			require.NoError(t, err)
+			cold.SetStateMapFamily(fault)
+			replay, err := inbound.NewStoredLedgerReplay(cold, target, nil)
+			require.NoError(t, err)
+			svc.mu.Lock()
+			oldReplay := svc.startupReplay
+			svc.closedLedger = cold
+			svc.startupReplay = replay
+			svc.mu.Unlock()
+			oldReplay.ReleaseMemory()
+
+			closeLedger := func() (uint32, error) {
+				if standalone {
+					return svc.AcceptLedger(ctx)
+				}
+				return svc.AcceptConsensusResult(ctx, cold, nil, nil, target.CloseTime(), true)
+			}
+			_, err = closeLedger()
+			require.ErrorIs(t, err, fault.err)
+			require.Same(t, cold, svc.GetClosedLedger())
+			require.NotNil(t, svc.startupReplay)
+			require.False(t, svc.ReplayBlocked())
+
+			_, err = closeLedger()
+			require.NoError(t, err)
+			require.Equal(t, targetHash, svc.GetClosedLedger().Hash())
+			require.Nil(t, svc.startupReplay)
+			require.False(t, svc.ReplayBlocked())
+		})
+	}
+}
+
 func TestService_StartupReplayCancelsAfterPreferredLedgerSwitch(t *testing.T) {
 	ctx := context.Background()
 	db, rm := newStartupTestStorage(t, ctx)
@@ -713,14 +797,22 @@ func persistStartupReplayChain(
 	db nodestore.Database,
 	rm *sqlitedb.RepositoryManager,
 ) (*ledger.Ledger, *ledger.Ledger, [32]byte) {
+	return persistStartupReplayChainWithConfig(t, ctx, db, rm, Config{GenesisConfig: genesis.DefaultConfig()})
+}
+
+func persistStartupReplayChainWithConfig(
+	t *testing.T,
+	ctx context.Context,
+	db nodestore.Database,
+	rm *sqlitedb.RepositoryManager,
+	cfg Config,
+) (*ledger.Ledger, *ledger.Ledger, [32]byte) {
 	t.Helper()
-	writer, err := New(Config{
-		Standalone:    true,
-		GenesisConfig: genesis.DefaultConfig(),
-		NodeStore:     db,
-		SHAMapFamily:  backend.New(db),
-		RelationalDB:  rm,
-	})
+	cfg.Standalone = true
+	cfg.NodeStore = db
+	cfg.SHAMapFamily = backend.New(db)
+	cfg.RelationalDB = rm
+	writer, err := New(cfg)
 	require.NoError(t, err)
 	require.NoError(t, writer.Start())
 	parent := writer.GetClosedLedger()

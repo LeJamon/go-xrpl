@@ -142,8 +142,13 @@ func (s *Service) acceptConsensusResult(
 	if replay != nil {
 		replayParent := replay.Parent()
 		if replayParent != nil && replayParent.Sequence() == expectedClosed.Sequence() && replayParent.Hash() == expectedClosed.Hash() {
+			cfg, configErr := s.EngineConfigForReplay(ctx, replayParent)
+			if configErr != nil {
+				s.recordExecutionStateFailure(ctx, expectedClosed, configErr)
+				return 0, configErr
+			}
 			replayed = true
-			closed, err = s.applyReplay(ctx, replay, s.EngineConfigForReplay(expectedClosed), false, false)
+			closed, err = s.applyReplay(ctx, replay, cfg, false, false)
 			if err != nil {
 				return 0, fmt.Errorf("apply startup replay: %w", err)
 			}

@@ -35,7 +35,7 @@ func TestReplayDiagnosticRetainsMemoryUntilShutdown(t *testing.T) {
 	defer replay.ReleaseMemory()
 	charge := budget.Snapshot().Used
 	require.Positive(t, charge)
-	cfg := svc.EngineConfigForReplay(parent)
+	cfg := mustReplayEngineConfig(t, svc, parent)
 	evidence := replayEvidenceFor(replay, cfg, true)
 	id, err := svc.replayFaults.BeginReplay(replayfault.Fault{ParentHash: parent.Hash(), TargetHash: target.Hash(), Sequence: target.Sequence()})
 	require.NoError(t, err)
@@ -63,7 +63,7 @@ func TestRejectedReplayDiagnosticReleasesLease(t *testing.T) {
 	defer replay.ReleaseMemory()
 	_, err = svc.admitReplayRecoveryJob(func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() })
 	require.NoError(t, err)
-	cfg := svc.EngineConfigForReplay(parent)
+	cfg := mustReplayEngineConfig(t, svc, parent)
 	id, err := svc.replayFaults.BeginReplay(replayfault.Fault{ParentHash: parent.Hash(), TargetHash: target.Hash(), Sequence: target.Sequence()})
 	require.NoError(t, err)
 	svc.recordReplayFailure(t.Context(), id, replay, cfg, replayEvidenceFor(replay, cfg, true), errors.New("diagnostic test failure"), false)

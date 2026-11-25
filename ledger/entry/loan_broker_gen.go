@@ -42,6 +42,7 @@ type LoanBroker struct {
 	Flags                uint32
 	PreviousTxnID        string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq    uint32
+	LedgerIndex          string // Hash256 (uppercase hex)
 	Sponsor              string // AccountID (base58)
 }
 
@@ -69,6 +70,7 @@ const (
 	loanbrokerBitFlags
 	loanbrokerBitPreviousTxnID
 	loanbrokerBitPreviousTxnLgrSeq
+	loanbrokerBitLedgerIndex
 	loanbrokerBitSponsor
 )
 
@@ -228,6 +230,13 @@ func (l *LoanBroker) SetPreviousTxnLgrSeq(value uint32) {
 	l.PreviousTxnLgrSeq = value
 	l.dirty = true
 	l.present |= loanbrokerBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (l *LoanBroker) SetLedgerIndex(value string) {
+	l.LedgerIndex = value
+	l.dirty = true
+	l.present |= loanbrokerBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -675,6 +684,37 @@ func (l *LoanBroker) SetPreviousTxnLgrSeqValue(value uint32) {
 	l.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (l *LoanBroker) HasLedgerIndex() bool {
+	return l != nil && l.present&loanbrokerBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (l *LoanBroker) ClearLedgerIndex() {
+	if l == nil {
+		return
+	}
+	l.LedgerIndex = ""
+	l.present &^= loanbrokerBitLedgerIndex
+	l.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (l *LoanBroker) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if l == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(l.LedgerIndex, "LoanBroker.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (l *LoanBroker) SetLedgerIndexValue(value [32]byte) {
+	l.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (l *LoanBroker) HasSponsor() bool {
 	return l != nil && l.present&loanbrokerBitSponsor != 0
@@ -899,6 +939,9 @@ func (l *LoanBroker) decode(data []byte, legacy bool) error {
 			case 5:
 				l.PreviousTxnID = val
 				l.present |= loanbrokerBitPreviousTxnID
+			case 6:
+				l.LedgerIndex = val
+				l.present |= loanbrokerBitLedgerIndex
 			case 35:
 				l.VaultID = val
 				l.present |= loanbrokerBitVaultID
@@ -1019,6 +1062,9 @@ func (l *LoanBroker) emitAll(out map[string]any, skipDefault bool) {
 	if l.present&loanbrokerBitFlags != 0 && !(skipDefault && l.Flags == 0) {
 		out["Flags"] = l.Flags
 	}
+	if l.present&loanbrokerBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(l.LedgerIndex)) {
+		out["LedgerIndex"] = l.LedgerIndex
+	}
 	if l.present&loanbrokerBitSponsor != 0 && !(skipDefault && l.Sponsor == "") {
 		out["Sponsor"] = l.Sponsor
 	}
@@ -1059,6 +1105,7 @@ func (l *LoanBroker) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "CoverRateMinimum", prv.CoverRateMinimum, l.CoverRateMinimum, prv.present&loanbrokerBitCoverRateMinimum, l.present&loanbrokerBitCoverRateMinimum)
 	emitIfChangedUint32(out, "CoverRateLiquidation", prv.CoverRateLiquidation, l.CoverRateLiquidation, prv.present&loanbrokerBitCoverRateLiquidation, l.present&loanbrokerBitCoverRateLiquidation)
 	emitIfChangedUint32(out, "Flags", prv.Flags, l.Flags, prv.present&loanbrokerBitFlags, l.present&loanbrokerBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, l.LedgerIndex, prv.present&loanbrokerBitLedgerIndex, l.present&loanbrokerBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, l.Sponsor, prv.present&loanbrokerBitSponsor, l.present&loanbrokerBitSponsor)
 }
 
@@ -1115,6 +1162,9 @@ func (l *LoanBroker) EmitChangeOrigFields(out map[string]any) {
 	}
 	if l.present&loanbrokerBitFlags != 0 {
 		out["Flags"] = l.Flags
+	}
+	if l.present&loanbrokerBitLedgerIndex != 0 {
+		out["LedgerIndex"] = l.LedgerIndex
 	}
 	if l.present&loanbrokerBitSponsor != 0 {
 		out["Sponsor"] = l.Sponsor
@@ -1214,6 +1264,9 @@ func (l *LoanBroker) ToMap() map[string]any {
 	if l.present&loanbrokerBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = l.PreviousTxnLgrSeq
 	}
+	if l.present&loanbrokerBitLedgerIndex != 0 {
+		out["LedgerIndex"] = l.LedgerIndex
+	}
 	if l.present&loanbrokerBitSponsor != 0 {
 		out["Sponsor"] = l.Sponsor
 	}
@@ -1304,6 +1357,11 @@ func (l *LoanBroker) appendBinary(dst []byte) ([]byte, error) {
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if l.present&loanbrokerBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), l.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if l.present&loanbrokerBitVaultID != 0 {
 		if dst, err = appendHash(append(dst, 0x50, 0x23), l.VaultID, 32); err != nil {
 			return nil, err
@@ -1378,6 +1436,9 @@ func (l *LoanBroker) encodedSizeHint() int {
 	if l.present&loanbrokerBitVaultNode != 0 {
 		size += 10
 	}
+	if l.present&loanbrokerBitLedgerIndex != 0 {
+		size += 33
+	}
 	if l.present&loanbrokerBitVaultID != 0 {
 		size += 34
 	}
@@ -1416,6 +1477,9 @@ func (l *LoanBroker) hasXAddress() bool {
 		return true
 	}
 	if l.present&loanbrokerBitPreviousTxnID != 0 && isXAddress(l.PreviousTxnID) {
+		return true
+	}
+	if l.present&loanbrokerBitLedgerIndex != 0 && isXAddress(l.LedgerIndex) {
 		return true
 	}
 	if l.present&loanbrokerBitVaultID != 0 && isXAddress(l.VaultID) {

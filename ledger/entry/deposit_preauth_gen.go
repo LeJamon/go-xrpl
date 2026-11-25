@@ -31,6 +31,7 @@ type DepositPreauth struct {
 	Flags                uint32
 	PreviousTxnID        string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq    uint32
+	LedgerIndex          string // Hash256 (uppercase hex)
 	Sponsor              string // AccountID (base58)
 }
 
@@ -47,6 +48,7 @@ const (
 	depositpreauthBitFlags
 	depositpreauthBitPreviousTxnID
 	depositpreauthBitPreviousTxnLgrSeq
+	depositpreauthBitLedgerIndex
 	depositpreauthBitSponsor
 )
 
@@ -97,6 +99,13 @@ func (d *DepositPreauth) SetPreviousTxnLgrSeq(value uint32) {
 	d.PreviousTxnLgrSeq = value
 	d.dirty = true
 	d.present |= depositpreauthBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (d *DepositPreauth) SetLedgerIndex(value string) {
+	d.LedgerIndex = value
+	d.dirty = true
+	d.present |= depositpreauthBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -270,6 +279,37 @@ func (d *DepositPreauth) SetPreviousTxnLgrSeqValue(value uint32) {
 	d.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (d *DepositPreauth) HasLedgerIndex() bool {
+	return d != nil && d.present&depositpreauthBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (d *DepositPreauth) ClearLedgerIndex() {
+	if d == nil {
+		return
+	}
+	d.LedgerIndex = ""
+	d.present &^= depositpreauthBitLedgerIndex
+	d.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (d *DepositPreauth) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if d == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(d.LedgerIndex, "DepositPreauth.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (d *DepositPreauth) SetLedgerIndexValue(value [32]byte) {
+	d.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (d *DepositPreauth) HasSponsor() bool {
 	return d != nil && d.present&depositpreauthBitSponsor != 0
@@ -415,6 +455,9 @@ func (d *DepositPreauth) decode(data []byte, legacy bool) error {
 			case 5:
 				d.PreviousTxnID = val
 				d.present |= depositpreauthBitPreviousTxnID
+			case 6:
+				d.LedgerIndex = val
+				d.present |= depositpreauthBitLedgerIndex
 			default:
 				return newErrUnknownField("DepositPreauth", typeCode, fieldCode)
 			}
@@ -481,6 +524,9 @@ func (d *DepositPreauth) emitAll(out map[string]any, skipDefault bool) {
 	if d.present&depositpreauthBitFlags != 0 && !(skipDefault && d.Flags == 0) {
 		out["Flags"] = d.Flags
 	}
+	if d.present&depositpreauthBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(d.LedgerIndex)) {
+		out["LedgerIndex"] = d.LedgerIndex
+	}
 	if d.present&depositpreauthBitSponsor != 0 && !(skipDefault && d.Sponsor == "") {
 		out["Sponsor"] = d.Sponsor
 	}
@@ -510,6 +556,7 @@ func (d *DepositPreauth) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, d.OwnerNode, prv.present&depositpreauthBitOwnerNode, d.present&depositpreauthBitOwnerNode)
 	emitIfChangedDeep(out, "AuthorizeCredentials", prv.AuthorizeCredentials, d.AuthorizeCredentials, prv.present&depositpreauthBitAuthorizeCredentials, d.present&depositpreauthBitAuthorizeCredentials)
 	emitIfChangedUint32(out, "Flags", prv.Flags, d.Flags, prv.present&depositpreauthBitFlags, d.present&depositpreauthBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, d.LedgerIndex, prv.present&depositpreauthBitLedgerIndex, d.present&depositpreauthBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, d.Sponsor, prv.present&depositpreauthBitSponsor, d.present&depositpreauthBitSponsor)
 }
 
@@ -533,6 +580,9 @@ func (d *DepositPreauth) EmitChangeOrigFields(out map[string]any) {
 	}
 	if d.present&depositpreauthBitFlags != 0 {
 		out["Flags"] = d.Flags
+	}
+	if d.present&depositpreauthBitLedgerIndex != 0 {
+		out["LedgerIndex"] = d.LedgerIndex
 	}
 	if d.present&depositpreauthBitSponsor != 0 {
 		out["Sponsor"] = d.Sponsor
@@ -599,6 +649,9 @@ func (d *DepositPreauth) ToMap() map[string]any {
 	if d.present&depositpreauthBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = d.PreviousTxnLgrSeq
 	}
+	if d.present&depositpreauthBitLedgerIndex != 0 {
+		out["LedgerIndex"] = d.LedgerIndex
+	}
 	if d.present&depositpreauthBitSponsor != 0 {
 		out["Sponsor"] = d.Sponsor
 	}
@@ -664,6 +717,11 @@ func (d *DepositPreauth) appendBinary(dst []byte) ([]byte, error) {
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if d.present&depositpreauthBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), d.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if d.present&depositpreauthBitAccount != 0 {
 		if dst, err = appendAccountID(append(dst, 0x81), d.Account); err != nil {
 			return nil, err
@@ -697,6 +755,9 @@ func (d *DepositPreauth) encodedSizeHint() int {
 	if d.present&depositpreauthBitOwnerNode != 0 {
 		size += 9
 	}
+	if d.present&depositpreauthBitLedgerIndex != 0 {
+		size += 33
+	}
 	if d.present&depositpreauthBitAccount != 0 {
 		size += 1 + accountIDEncodedLen(d.Account)
 	}
@@ -717,6 +778,9 @@ func (d *DepositPreauth) hasXAddress() bool {
 		return true
 	}
 	if d.present&depositpreauthBitPreviousTxnID != 0 && isXAddress(d.PreviousTxnID) {
+		return true
+	}
+	if d.present&depositpreauthBitLedgerIndex != 0 && isXAddress(d.LedgerIndex) {
 		return true
 	}
 	if d.present&depositpreauthBitAccount != 0 && isXAddress(d.Account) {

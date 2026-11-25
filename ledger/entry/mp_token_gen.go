@@ -38,6 +38,7 @@ type MPToken struct {
 	IssuerEncryptedBalance      string // Blob (uppercase hex)
 	AuditorEncryptedBalance     string // Blob (uppercase hex)
 	HolderEncryptionKey         string // Blob (uppercase hex)
+	LedgerIndex                 string // Hash256 (uppercase hex)
 	Sponsor                     string // AccountID (base58)
 }
 
@@ -61,6 +62,7 @@ const (
 	mptokenBitIssuerEncryptedBalance
 	mptokenBitAuditorEncryptedBalance
 	mptokenBitHolderEncryptionKey
+	mptokenBitLedgerIndex
 	mptokenBitSponsor
 )
 
@@ -168,6 +170,13 @@ func (m *MPToken) SetHolderEncryptionKey(value string) {
 	m.HolderEncryptionKey = value
 	m.dirty = true
 	m.present |= mptokenBitHolderEncryptionKey
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (m *MPToken) SetLedgerIndex(value string) {
+	m.LedgerIndex = value
+	m.dirty = true
+	m.present |= mptokenBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -520,6 +529,37 @@ func (m *MPToken) SetHolderEncryptionKeyValue(value []byte) {
 	m.SetHolderEncryptionKey(blobValueToString(value))
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (m *MPToken) HasLedgerIndex() bool {
+	return m != nil && m.present&mptokenBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (m *MPToken) ClearLedgerIndex() {
+	if m == nil {
+		return
+	}
+	m.LedgerIndex = ""
+	m.present &^= mptokenBitLedgerIndex
+	m.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (m *MPToken) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if m == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(m.LedgerIndex, "MPToken.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (m *MPToken) SetLedgerIndexValue(value [32]byte) {
+	m.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (m *MPToken) HasSponsor() bool {
 	return m != nil && m.present&mptokenBitSponsor != 0
@@ -694,6 +734,9 @@ func (m *MPToken) decode(data []byte, legacy bool) error {
 			case 5:
 				m.PreviousTxnID = val
 				m.present |= mptokenBitPreviousTxnID
+			case 6:
+				m.LedgerIndex = val
+				m.present |= mptokenBitLedgerIndex
 			default:
 				return newErrUnknownField("MPToken", typeCode, fieldCode)
 			}
@@ -802,6 +845,9 @@ func (m *MPToken) emitAll(out map[string]any, skipDefault bool) {
 	if m.present&mptokenBitHolderEncryptionKey != 0 && !(skipDefault && m.HolderEncryptionKey == "") {
 		out["HolderEncryptionKey"] = m.HolderEncryptionKey
 	}
+	if m.present&mptokenBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(m.LedgerIndex)) {
+		out["LedgerIndex"] = m.LedgerIndex
+	}
 	if m.present&mptokenBitSponsor != 0 && !(skipDefault && m.Sponsor == "") {
 		out["Sponsor"] = m.Sponsor
 	}
@@ -838,6 +884,7 @@ func (m *MPToken) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "IssuerEncryptedBalance", prv.IssuerEncryptedBalance, m.IssuerEncryptedBalance, prv.present&mptokenBitIssuerEncryptedBalance, m.present&mptokenBitIssuerEncryptedBalance)
 	emitIfChangedString(out, "AuditorEncryptedBalance", prv.AuditorEncryptedBalance, m.AuditorEncryptedBalance, prv.present&mptokenBitAuditorEncryptedBalance, m.present&mptokenBitAuditorEncryptedBalance)
 	emitIfChangedString(out, "HolderEncryptionKey", prv.HolderEncryptionKey, m.HolderEncryptionKey, prv.present&mptokenBitHolderEncryptionKey, m.present&mptokenBitHolderEncryptionKey)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, m.LedgerIndex, prv.present&mptokenBitLedgerIndex, m.present&mptokenBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, m.Sponsor, prv.present&mptokenBitSponsor, m.present&mptokenBitSponsor)
 }
 
@@ -882,6 +929,9 @@ func (m *MPToken) EmitChangeOrigFields(out map[string]any) {
 	}
 	if m.present&mptokenBitHolderEncryptionKey != 0 {
 		out["HolderEncryptionKey"] = m.HolderEncryptionKey
+	}
+	if m.present&mptokenBitLedgerIndex != 0 {
+		out["LedgerIndex"] = m.LedgerIndex
 	}
 	if m.present&mptokenBitSponsor != 0 {
 		out["Sponsor"] = m.Sponsor
@@ -969,6 +1019,9 @@ func (m *MPToken) ToMap() map[string]any {
 	if m.present&mptokenBitHolderEncryptionKey != 0 {
 		out["HolderEncryptionKey"] = m.HolderEncryptionKey
 	}
+	if m.present&mptokenBitLedgerIndex != 0 {
+		out["LedgerIndex"] = m.LedgerIndex
+	}
 	if m.present&mptokenBitSponsor != 0 {
 		out["Sponsor"] = m.Sponsor
 	}
@@ -1054,6 +1107,11 @@ func (m *MPToken) appendBinary(dst []byte) ([]byte, error) {
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if m.present&mptokenBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), m.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if m.present&mptokenBitConfidentialBalanceInbox != 0 {
 		if dst, err = appendBlob(append(dst, 0x70, 0x20), m.ConfidentialBalanceInbox); err != nil {
 			return nil, err
@@ -1116,6 +1174,9 @@ func (m *MPToken) encodedSizeHint() int {
 	if m.present&mptokenBitLockedAmount != 0 {
 		size += 10
 	}
+	if m.present&mptokenBitLedgerIndex != 0 {
+		size += 33
+	}
 	if m.present&mptokenBitConfidentialBalanceInbox != 0 {
 		size += 2 + blobEncodedLen(m.ConfidentialBalanceInbox)
 	}
@@ -1157,6 +1218,9 @@ func (m *MPToken) hasXAddress() bool {
 		return true
 	}
 	if m.present&mptokenBitPreviousTxnID != 0 && isXAddress(m.PreviousTxnID) {
+		return true
+	}
+	if m.present&mptokenBitLedgerIndex != 0 && isXAddress(m.LedgerIndex) {
 		return true
 	}
 	if m.present&mptokenBitConfidentialBalanceInbox != 0 && isXAddress(m.ConfidentialBalanceInbox) {

@@ -35,6 +35,7 @@ type AMM struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	LedgerIndex       string // Hash256 (uppercase hex)
 	Sponsor           string // AccountID (base58)
 }
 
@@ -55,6 +56,7 @@ const (
 	ammBitFlags
 	ammBitPreviousTxnID
 	ammBitPreviousTxnLgrSeq
+	ammBitLedgerIndex
 	ammBitSponsor
 )
 
@@ -137,6 +139,13 @@ func (a *AMM) SetPreviousTxnLgrSeq(value uint32) {
 	a.PreviousTxnLgrSeq = value
 	a.dirty = true
 	a.present |= ammBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (a *AMM) SetLedgerIndex(value string) {
+	a.LedgerIndex = value
+	a.dirty = true
+	a.present |= ammBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -430,6 +439,37 @@ func (a *AMM) SetPreviousTxnLgrSeqValue(value uint32) {
 	a.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (a *AMM) HasLedgerIndex() bool {
+	return a != nil && a.present&ammBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (a *AMM) ClearLedgerIndex() {
+	if a == nil {
+		return
+	}
+	a.LedgerIndex = ""
+	a.present &^= ammBitLedgerIndex
+	a.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (a *AMM) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if a == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(a.LedgerIndex, "AMM.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (a *AMM) SetLedgerIndexValue(value [32]byte) {
+	a.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (a *AMM) HasSponsor() bool {
 	return a != nil && a.present&ammBitSponsor != 0
@@ -593,6 +633,9 @@ func (a *AMM) decode(data []byte, legacy bool) error {
 			case 5:
 				a.PreviousTxnID = val
 				a.present |= ammBitPreviousTxnID
+			case 6:
+				a.LedgerIndex = val
+				a.present |= ammBitLedgerIndex
 			default:
 				return newErrUnknownField("AMM", typeCode, fieldCode)
 			}
@@ -707,6 +750,9 @@ func (a *AMM) emitAll(out map[string]any, skipDefault bool) {
 	if a.present&ammBitFlags != 0 && !(skipDefault && a.Flags == 0) {
 		out["Flags"] = a.Flags
 	}
+	if a.present&ammBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(a.LedgerIndex)) {
+		out["LedgerIndex"] = a.LedgerIndex
+	}
 	if a.present&ammBitSponsor != 0 && !(skipDefault && a.Sponsor == "") {
 		out["Sponsor"] = a.Sponsor
 	}
@@ -740,6 +786,7 @@ func (a *AMM) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedDeep(out, "Asset2", prv.Asset2, a.Asset2, prv.present&ammBitAsset2, a.present&ammBitAsset2)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, a.OwnerNode, prv.present&ammBitOwnerNode, a.present&ammBitOwnerNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, a.Flags, prv.present&ammBitFlags, a.present&ammBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, a.LedgerIndex, prv.present&ammBitLedgerIndex, a.present&ammBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, a.Sponsor, prv.present&ammBitSponsor, a.present&ammBitSponsor)
 }
 
@@ -775,6 +822,9 @@ func (a *AMM) EmitChangeOrigFields(out map[string]any) {
 	}
 	if a.present&ammBitFlags != 0 {
 		out["Flags"] = a.Flags
+	}
+	if a.present&ammBitLedgerIndex != 0 {
+		out["LedgerIndex"] = a.LedgerIndex
 	}
 	if a.present&ammBitSponsor != 0 {
 		out["Sponsor"] = a.Sponsor
@@ -853,6 +903,9 @@ func (a *AMM) ToMap() map[string]any {
 	if a.present&ammBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = a.PreviousTxnLgrSeq
 	}
+	if a.present&ammBitLedgerIndex != 0 {
+		out["LedgerIndex"] = a.LedgerIndex
+	}
 	if a.present&ammBitSponsor != 0 {
 		out["Sponsor"] = a.Sponsor
 	}
@@ -913,6 +966,11 @@ func (a *AMM) appendBinary(dst []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if a.present&ammBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), a.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if a.present&ammBitLPTokenBalance != 0 {
 		if dst, err = appendAmount(append(dst, 0x60, 0x1F), a.LPTokenBalance); err != nil {
 			return nil, err
@@ -970,6 +1028,9 @@ func (a *AMM) encodedSizeHint() int {
 	if a.present&ammBitPreviousTxnID != 0 {
 		size += 33
 	}
+	if a.present&ammBitLedgerIndex != 0 {
+		size += 33
+	}
 	if a.present&ammBitLPTokenBalance != 0 {
 		size += 2 + amountEncodedLen(a.LPTokenBalance)
 	}
@@ -996,6 +1057,9 @@ func (a *AMM) hasXAddress() bool {
 		return true
 	}
 	if a.present&ammBitPreviousTxnID != 0 && isXAddress(a.PreviousTxnID) {
+		return true
+	}
+	if a.present&ammBitLedgerIndex != 0 && isXAddress(a.LedgerIndex) {
 		return true
 	}
 	if a.present&ammBitLPTokenBalance != 0 && isXAddressValue(a.LPTokenBalance) {

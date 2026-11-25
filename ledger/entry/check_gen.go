@@ -37,6 +37,7 @@ type Check struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	LedgerIndex       string // Hash256 (uppercase hex)
 	Sponsor           string // AccountID (base58)
 }
 
@@ -59,6 +60,7 @@ const (
 	checkBitFlags
 	checkBitPreviousTxnID
 	checkBitPreviousTxnLgrSeq
+	checkBitLedgerIndex
 	checkBitSponsor
 )
 
@@ -151,6 +153,13 @@ func (c *Check) SetPreviousTxnLgrSeq(value uint32) {
 	c.PreviousTxnLgrSeq = value
 	c.dirty = true
 	c.present |= checkBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (c *Check) SetLedgerIndex(value string) {
+	c.LedgerIndex = value
+	c.dirty = true
+	c.present |= checkBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -455,6 +464,37 @@ func (c *Check) SetPreviousTxnLgrSeqValue(value uint32) {
 	c.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (c *Check) HasLedgerIndex() bool {
+	return c != nil && c.present&checkBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (c *Check) ClearLedgerIndex() {
+	if c == nil {
+		return
+	}
+	c.LedgerIndex = ""
+	c.present &^= checkBitLedgerIndex
+	c.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (c *Check) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if c == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(c.LedgerIndex, "Check.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (c *Check) SetLedgerIndexValue(value [32]byte) {
+	c.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (c *Check) HasSponsor() bool {
 	return c != nil && c.present&checkBitSponsor != 0
@@ -643,6 +683,9 @@ func (c *Check) decode(data []byte, legacy bool) error {
 			case 5:
 				c.PreviousTxnID = val
 				c.present |= checkBitPreviousTxnID
+			case 6:
+				c.LedgerIndex = val
+				c.present |= checkBitLedgerIndex
 			case 17:
 				c.InvoiceID = val
 				c.present |= checkBitInvoiceID
@@ -730,6 +773,9 @@ func (c *Check) emitAll(out map[string]any, skipDefault bool) {
 	if c.present&checkBitFlags != 0 && !(skipDefault && c.Flags == 0) {
 		out["Flags"] = c.Flags
 	}
+	if c.present&checkBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(c.LedgerIndex)) {
+		out["LedgerIndex"] = c.LedgerIndex
+	}
 	if c.present&checkBitSponsor != 0 && !(skipDefault && c.Sponsor == "") {
 		out["Sponsor"] = c.Sponsor
 	}
@@ -765,6 +811,7 @@ func (c *Check) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "SourceTag", prv.SourceTag, c.SourceTag, prv.present&checkBitSourceTag, c.present&checkBitSourceTag)
 	emitIfChangedUint32(out, "DestinationTag", prv.DestinationTag, c.DestinationTag, prv.present&checkBitDestinationTag, c.present&checkBitDestinationTag)
 	emitIfChangedUint32(out, "Flags", prv.Flags, c.Flags, prv.present&checkBitFlags, c.present&checkBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, c.LedgerIndex, prv.present&checkBitLedgerIndex, c.present&checkBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, c.Sponsor, prv.present&checkBitSponsor, c.present&checkBitSponsor)
 }
 
@@ -806,6 +853,9 @@ func (c *Check) EmitChangeOrigFields(out map[string]any) {
 	}
 	if c.present&checkBitFlags != 0 {
 		out["Flags"] = c.Flags
+	}
+	if c.present&checkBitLedgerIndex != 0 {
+		out["LedgerIndex"] = c.LedgerIndex
 	}
 	if c.present&checkBitSponsor != 0 {
 		out["Sponsor"] = c.Sponsor
@@ -890,6 +940,9 @@ func (c *Check) ToMap() map[string]any {
 	if c.present&checkBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = c.PreviousTxnLgrSeq
 	}
+	if c.present&checkBitLedgerIndex != 0 {
+		out["LedgerIndex"] = c.LedgerIndex
+	}
 	if c.present&checkBitSponsor != 0 {
 		out["Sponsor"] = c.Sponsor
 	}
@@ -972,6 +1025,11 @@ func (c *Check) appendBinary(dst []byte) ([]byte, error) {
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if c.present&checkBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), c.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if c.present&checkBitInvoiceID != 0 {
 		if dst, err = appendHash(append(dst, 0x50, 0x11), c.InvoiceID, 32); err != nil {
 			return nil, err
@@ -1025,6 +1083,9 @@ func (c *Check) encodedSizeHint() int {
 	if c.present&checkBitDestinationNode != 0 {
 		size += 9
 	}
+	if c.present&checkBitLedgerIndex != 0 {
+		size += 33
+	}
 	if c.present&checkBitInvoiceID != 0 {
 		size += 34
 	}
@@ -1054,6 +1115,9 @@ func (c *Check) hasXAddress() bool {
 		return true
 	}
 	if c.present&checkBitPreviousTxnID != 0 && isXAddress(c.PreviousTxnID) {
+		return true
+	}
+	if c.present&checkBitLedgerIndex != 0 && isXAddress(c.LedgerIndex) {
 		return true
 	}
 	if c.present&checkBitInvoiceID != 0 && isXAddress(c.InvoiceID) {

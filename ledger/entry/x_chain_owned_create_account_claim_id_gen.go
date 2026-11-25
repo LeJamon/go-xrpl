@@ -32,6 +32,7 @@ type XChainOwnedCreateAccountClaimID struct {
 	Flags                           uint32
 	PreviousTxnID                   string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq               uint32
+	LedgerIndex                     string // Hash256 (uppercase hex)
 	Sponsor                         string // AccountID (base58)
 }
 
@@ -49,6 +50,7 @@ const (
 	xchainownedcreateaccountclaimidBitFlags
 	xchainownedcreateaccountclaimidBitPreviousTxnID
 	xchainownedcreateaccountclaimidBitPreviousTxnLgrSeq
+	xchainownedcreateaccountclaimidBitLedgerIndex
 	xchainownedcreateaccountclaimidBitSponsor
 )
 
@@ -106,6 +108,13 @@ func (x *XChainOwnedCreateAccountClaimID) SetPreviousTxnLgrSeq(value uint32) {
 	x.PreviousTxnLgrSeq = value
 	x.dirty = true
 	x.present |= xchainownedcreateaccountclaimidBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (x *XChainOwnedCreateAccountClaimID) SetLedgerIndex(value string) {
+	x.LedgerIndex = value
+	x.dirty = true
+	x.present |= xchainownedcreateaccountclaimidBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -275,6 +284,37 @@ func (x *XChainOwnedCreateAccountClaimID) GetPreviousTxnLgrSeq() (uint32, error)
 // SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
 func (x *XChainOwnedCreateAccountClaimID) SetPreviousTxnLgrSeqValue(value uint32) {
 	x.SetPreviousTxnLgrSeq(value)
+}
+
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (x *XChainOwnedCreateAccountClaimID) HasLedgerIndex() bool {
+	return x != nil && x.present&xchainownedcreateaccountclaimidBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (x *XChainOwnedCreateAccountClaimID) ClearLedgerIndex() {
+	if x == nil {
+		return
+	}
+	x.LedgerIndex = ""
+	x.present &^= xchainownedcreateaccountclaimidBitLedgerIndex
+	x.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (x *XChainOwnedCreateAccountClaimID) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if x == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(x.LedgerIndex, "XChainOwnedCreateAccountClaimID.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (x *XChainOwnedCreateAccountClaimID) SetLedgerIndexValue(value [32]byte) {
+	x.SetLedgerIndex(hashValueToString(value[:]))
 }
 
 // HasSponsor reports whether Sponsor is present.
@@ -447,6 +487,9 @@ func (x *XChainOwnedCreateAccountClaimID) decode(data []byte, legacy bool) error
 			case 5:
 				x.PreviousTxnID = val
 				x.present |= xchainownedcreateaccountclaimidBitPreviousTxnID
+			case 6:
+				x.LedgerIndex = val
+				x.present |= xchainownedcreateaccountclaimidBitLedgerIndex
 			default:
 				return newErrUnknownField("XChainOwnedCreateAccountClaimID", typeCode, fieldCode)
 			}
@@ -525,6 +568,9 @@ func (x *XChainOwnedCreateAccountClaimID) emitAll(out map[string]any, skipDefaul
 	if x.present&xchainownedcreateaccountclaimidBitFlags != 0 && !(skipDefault && x.Flags == 0) {
 		out["Flags"] = x.Flags
 	}
+	if x.present&xchainownedcreateaccountclaimidBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(x.LedgerIndex)) {
+		out["LedgerIndex"] = x.LedgerIndex
+	}
 	if x.present&xchainownedcreateaccountclaimidBitSponsor != 0 && !(skipDefault && x.Sponsor == "") {
 		out["Sponsor"] = x.Sponsor
 	}
@@ -555,6 +601,7 @@ func (x *XChainOwnedCreateAccountClaimID) EmitPreviousFields(prev Entry, out map
 	emitIfChangedDeep(out, "XChainCreateAccountAttestations", prv.XChainCreateAccountAttestations, x.XChainCreateAccountAttestations, prv.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations, x.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, x.OwnerNode, prv.present&xchainownedcreateaccountclaimidBitOwnerNode, x.present&xchainownedcreateaccountclaimidBitOwnerNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, x.Flags, prv.present&xchainownedcreateaccountclaimidBitFlags, x.present&xchainownedcreateaccountclaimidBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, x.LedgerIndex, prv.present&xchainownedcreateaccountclaimidBitLedgerIndex, x.present&xchainownedcreateaccountclaimidBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, x.Sponsor, prv.present&xchainownedcreateaccountclaimidBitSponsor, x.present&xchainownedcreateaccountclaimidBitSponsor)
 }
 
@@ -581,6 +628,9 @@ func (x *XChainOwnedCreateAccountClaimID) EmitChangeOrigFields(out map[string]an
 	}
 	if x.present&xchainownedcreateaccountclaimidBitFlags != 0 {
 		out["Flags"] = x.Flags
+	}
+	if x.present&xchainownedcreateaccountclaimidBitLedgerIndex != 0 {
+		out["LedgerIndex"] = x.LedgerIndex
 	}
 	if x.present&xchainownedcreateaccountclaimidBitSponsor != 0 {
 		out["Sponsor"] = x.Sponsor
@@ -649,6 +699,9 @@ func (x *XChainOwnedCreateAccountClaimID) ToMap() map[string]any {
 	}
 	if x.present&xchainownedcreateaccountclaimidBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = x.PreviousTxnLgrSeq
+	}
+	if x.present&xchainownedcreateaccountclaimidBitLedgerIndex != 0 {
+		out["LedgerIndex"] = x.LedgerIndex
 	}
 	if x.present&xchainownedcreateaccountclaimidBitSponsor != 0 {
 		out["Sponsor"] = x.Sponsor
@@ -720,6 +773,11 @@ func (x *XChainOwnedCreateAccountClaimID) appendBinary(dst []byte) ([]byte, erro
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if x.present&xchainownedcreateaccountclaimidBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), x.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if x.present&xchainownedcreateaccountclaimidBitAccount != 0 {
 		if dst, err = appendAccountID(append(dst, 0x81), x.Account); err != nil {
 			return nil, err
@@ -756,6 +814,9 @@ func (x *XChainOwnedCreateAccountClaimID) encodedSizeHint() int {
 	if x.present&xchainownedcreateaccountclaimidBitXChainAccountCreateCount != 0 {
 		size += 10
 	}
+	if x.present&xchainownedcreateaccountclaimidBitLedgerIndex != 0 {
+		size += 33
+	}
 	if x.present&xchainownedcreateaccountclaimidBitAccount != 0 {
 		size += 1 + accountIDEncodedLen(x.Account)
 	}
@@ -779,6 +840,9 @@ func (x *XChainOwnedCreateAccountClaimID) hasXAddress() bool {
 		return true
 	}
 	if x.present&xchainownedcreateaccountclaimidBitPreviousTxnID != 0 && isXAddress(x.PreviousTxnID) {
+		return true
+	}
+	if x.present&xchainownedcreateaccountclaimidBitLedgerIndex != 0 && isXAddress(x.LedgerIndex) {
 		return true
 	}
 	if x.present&xchainownedcreateaccountclaimidBitAccount != 0 && isXAddress(x.Account) {

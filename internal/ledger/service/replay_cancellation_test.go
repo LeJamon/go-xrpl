@@ -64,7 +64,7 @@ func TestReplayCancellationPreservesFrontierAndAllowsRetry(t *testing.T) {
 			invoke := func(ctx context.Context) (*ledger.Ledger, error) {
 				switch mode {
 				case "direct":
-					return svc.ApplyReplay(ctx, replay, svc.EngineConfigForReplay(parent), true)
+					return svc.ApplyReplay(ctx, replay, mustReplayEngineConfig(t, svc, parent), true)
 				case "standalone":
 					_, err := svc.AcceptLedger(ctx)
 					return svc.GetClosedLedger(), err
@@ -108,7 +108,7 @@ func TestReplayCanceledBeforeExecutionDoesNotStartIntent(t *testing.T) {
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err = svc.ApplyReplay(ctx, replay, svc.EngineConfigForReplay(parent), true)
+	_, err = svc.ApplyReplay(ctx, replay, mustReplayEngineConfig(t, svc, parent), true)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, inbound.StateReplayReady, replay.State())
 	require.NoFileExists(t, path)

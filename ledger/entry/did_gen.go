@@ -32,6 +32,7 @@ type DID struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	LedgerIndex       string // Hash256 (uppercase hex)
 	Sponsor           string // AccountID (base58)
 }
 
@@ -49,6 +50,7 @@ const (
 	didBitFlags
 	didBitPreviousTxnID
 	didBitPreviousTxnLgrSeq
+	didBitLedgerIndex
 	didBitSponsor
 )
 
@@ -106,6 +108,13 @@ func (d *DID) SetPreviousTxnLgrSeq(value uint32) {
 	d.PreviousTxnLgrSeq = value
 	d.dirty = true
 	d.present |= didBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (d *DID) SetLedgerIndex(value string) {
+	d.LedgerIndex = value
+	d.dirty = true
+	d.present |= didBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -297,6 +306,37 @@ func (d *DID) SetPreviousTxnLgrSeqValue(value uint32) {
 	d.SetPreviousTxnLgrSeq(value)
 }
 
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (d *DID) HasLedgerIndex() bool {
+	return d != nil && d.present&didBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (d *DID) ClearLedgerIndex() {
+	if d == nil {
+		return
+	}
+	d.LedgerIndex = ""
+	d.present &^= didBitLedgerIndex
+	d.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (d *DID) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if d == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(d.LedgerIndex, "DID.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (d *DID) SetLedgerIndexValue(value [32]byte) {
+	d.SetLedgerIndex(hashValueToString(value[:]))
+}
+
 // HasSponsor reports whether Sponsor is present.
 func (d *DID) HasSponsor() bool {
 	return d != nil && d.present&didBitSponsor != 0
@@ -442,6 +482,9 @@ func (d *DID) decode(data []byte, legacy bool) error {
 			case 5:
 				d.PreviousTxnID = val
 				d.present |= didBitPreviousTxnID
+			case 6:
+				d.LedgerIndex = val
+				d.present |= didBitLedgerIndex
 			default:
 				return newErrUnknownField("DID", typeCode, fieldCode)
 			}
@@ -514,6 +557,9 @@ func (d *DID) emitAll(out map[string]any, skipDefault bool) {
 	if d.present&didBitFlags != 0 && !(skipDefault && d.Flags == 0) {
 		out["Flags"] = d.Flags
 	}
+	if d.present&didBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(d.LedgerIndex)) {
+		out["LedgerIndex"] = d.LedgerIndex
+	}
 	if d.present&didBitSponsor != 0 && !(skipDefault && d.Sponsor == "") {
 		out["Sponsor"] = d.Sponsor
 	}
@@ -544,6 +590,7 @@ func (d *DID) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "Data", prv.Data, d.Data, prv.present&didBitData, d.present&didBitData)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, d.OwnerNode, prv.present&didBitOwnerNode, d.present&didBitOwnerNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, d.Flags, prv.present&didBitFlags, d.present&didBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, d.LedgerIndex, prv.present&didBitLedgerIndex, d.present&didBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, d.Sponsor, prv.present&didBitSponsor, d.present&didBitSponsor)
 }
 
@@ -570,6 +617,9 @@ func (d *DID) EmitChangeOrigFields(out map[string]any) {
 	}
 	if d.present&didBitFlags != 0 {
 		out["Flags"] = d.Flags
+	}
+	if d.present&didBitLedgerIndex != 0 {
+		out["LedgerIndex"] = d.LedgerIndex
 	}
 	if d.present&didBitSponsor != 0 {
 		out["Sponsor"] = d.Sponsor
@@ -639,6 +689,9 @@ func (d *DID) ToMap() map[string]any {
 	if d.present&didBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = d.PreviousTxnLgrSeq
 	}
+	if d.present&didBitLedgerIndex != 0 {
+		out["LedgerIndex"] = d.LedgerIndex
+	}
 	if d.present&didBitSponsor != 0 {
 		out["Sponsor"] = d.Sponsor
 	}
@@ -704,6 +757,11 @@ func (d *DID) appendBinary(dst []byte) ([]byte, error) {
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if d.present&didBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), d.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if d.present&didBitURI != 0 {
 		if dst, err = appendBlob(append(dst, 0x75), d.URI); err != nil {
 			return nil, err
@@ -742,6 +800,9 @@ func (d *DID) encodedSizeHint() int {
 	if d.present&didBitOwnerNode != 0 {
 		size += 9
 	}
+	if d.present&didBitLedgerIndex != 0 {
+		size += 33
+	}
 	if d.present&didBitURI != 0 {
 		size += 1 + blobEncodedLen(d.URI)
 	}
@@ -768,6 +829,9 @@ func (d *DID) hasXAddress() bool {
 		return true
 	}
 	if d.present&didBitPreviousTxnID != 0 && isXAddress(d.PreviousTxnID) {
+		return true
+	}
+	if d.present&didBitLedgerIndex != 0 && isXAddress(d.LedgerIndex) {
 		return true
 	}
 	if d.present&didBitURI != 0 && isXAddress(d.URI) {

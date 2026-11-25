@@ -28,6 +28,7 @@ type LedgerHashes struct {
 	FirstLedgerSequence uint32
 	LastLedgerSequence  uint32
 	Hashes              []string
+	LedgerIndex         string // Hash256 (uppercase hex)
 	Sponsor             string // AccountID (base58)
 }
 
@@ -41,6 +42,7 @@ const (
 	ledgerhashesBitFirstLedgerSequence
 	ledgerhashesBitLastLedgerSequence
 	ledgerhashesBitHashes
+	ledgerhashesBitLedgerIndex
 	ledgerhashesBitSponsor
 )
 
@@ -70,6 +72,13 @@ func (l *LedgerHashes) SetHashes(value []string) {
 	l.Hashes = value
 	l.dirty = true
 	l.present |= ledgerhashesBitHashes
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (l *LedgerHashes) SetLedgerIndex(value string) {
+	l.LedgerIndex = value
+	l.dirty = true
+	l.present |= ledgerhashesBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -169,6 +178,37 @@ func (l *LedgerHashes) GetHashes() (Vector256Value, error) {
 // SetHashesValue assigns typed Vector256 values.
 func (l *LedgerHashes) SetHashesValue(value Vector256Value) {
 	l.SetHashes(vector256ValueToStrings(value))
+}
+
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (l *LedgerHashes) HasLedgerIndex() bool {
+	return l != nil && l.present&ledgerhashesBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (l *LedgerHashes) ClearLedgerIndex() {
+	if l == nil {
+		return
+	}
+	l.LedgerIndex = ""
+	l.present &^= ledgerhashesBitLedgerIndex
+	l.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (l *LedgerHashes) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if l == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(l.LedgerIndex, "LedgerHashes.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (l *LedgerHashes) SetLedgerIndexValue(value [32]byte) {
+	l.SetLedgerIndex(hashValueToString(value[:]))
 }
 
 // HasSponsor reports whether Sponsor is present.
@@ -286,6 +326,18 @@ func (l *LedgerHashes) decode(data []byte, legacy bool) error {
 			default:
 				return newErrUnknownField("LedgerHashes", typeCode, fieldCode)
 			}
+		case 5: // Hash256
+			val, err := sr.readHash(32)
+			if err != nil {
+				return err
+			}
+			switch fieldCode {
+			case 6:
+				l.LedgerIndex = val
+				l.present |= ledgerhashesBitLedgerIndex
+			default:
+				return newErrUnknownField("LedgerHashes", typeCode, fieldCode)
+			}
 		case 8: // AccountID
 			val, err := sr.readAccountID()
 			if err != nil {
@@ -340,6 +392,9 @@ func (l *LedgerHashes) emitAll(out map[string]any, skipDefault bool) {
 	if l.present&ledgerhashesBitHashes != 0 && !(skipDefault && len(l.Hashes) == 0) {
 		out["Hashes"] = l.Hashes
 	}
+	if l.present&ledgerhashesBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(l.LedgerIndex)) {
+		out["LedgerIndex"] = l.LedgerIndex
+	}
 	if l.present&ledgerhashesBitSponsor != 0 && !(skipDefault && l.Sponsor == "") {
 		out["Sponsor"] = l.Sponsor
 	}
@@ -368,6 +423,7 @@ func (l *LedgerHashes) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "FirstLedgerSequence", prv.FirstLedgerSequence, l.FirstLedgerSequence, prv.present&ledgerhashesBitFirstLedgerSequence, l.present&ledgerhashesBitFirstLedgerSequence)
 	emitIfChangedUint32(out, "LastLedgerSequence", prv.LastLedgerSequence, l.LastLedgerSequence, prv.present&ledgerhashesBitLastLedgerSequence, l.present&ledgerhashesBitLastLedgerSequence)
 	emitIfChangedStringSlice(out, "Hashes", prv.Hashes, l.Hashes, prv.present&ledgerhashesBitHashes, l.present&ledgerhashesBitHashes)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, l.LedgerIndex, prv.present&ledgerhashesBitLedgerIndex, l.present&ledgerhashesBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, l.Sponsor, prv.present&ledgerhashesBitSponsor, l.present&ledgerhashesBitSponsor)
 }
 
@@ -388,6 +444,9 @@ func (l *LedgerHashes) EmitChangeOrigFields(out map[string]any) {
 	}
 	if l.present&ledgerhashesBitHashes != 0 {
 		out["Hashes"] = l.Hashes
+	}
+	if l.present&ledgerhashesBitLedgerIndex != 0 {
+		out["LedgerIndex"] = l.LedgerIndex
 	}
 	if l.present&ledgerhashesBitSponsor != 0 {
 		out["Sponsor"] = l.Sponsor
@@ -432,6 +491,9 @@ func (l *LedgerHashes) ToMap() map[string]any {
 	}
 	if l.present&ledgerhashesBitHashes != 0 {
 		out["Hashes"] = l.Hashes
+	}
+	if l.present&ledgerhashesBitLedgerIndex != 0 {
+		out["LedgerIndex"] = l.LedgerIndex
 	}
 	if l.present&ledgerhashesBitSponsor != 0 {
 		out["Sponsor"] = l.Sponsor
@@ -481,6 +543,11 @@ func (l *LedgerHashes) appendBinary(dst []byte) ([]byte, error) {
 	if l.present&ledgerhashesBitLastLedgerSequence != 0 {
 		dst = binary.BigEndian.AppendUint32(append(dst, 0x20, 0x1B), l.LastLedgerSequence)
 	}
+	if l.present&ledgerhashesBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), l.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if l.present&ledgerhashesBitSponsor != 0 {
 		if dst, err = appendAccountID(append(dst, 0x80, 0x1B), l.Sponsor); err != nil {
 			return nil, err
@@ -507,6 +574,9 @@ func (l *LedgerHashes) encodedSizeHint() int {
 	if l.present&ledgerhashesBitLastLedgerSequence != 0 {
 		size += 6
 	}
+	if l.present&ledgerhashesBitLedgerIndex != 0 {
+		size += 33
+	}
 	if l.present&ledgerhashesBitSponsor != 0 {
 		size += 2 + accountIDEncodedLen(l.Sponsor)
 	}
@@ -520,6 +590,9 @@ func (l *LedgerHashes) encodedSizeHint() int {
 // X-address. The map encoder rewrites those, and may add a tag field, so such
 // entries are encoded through it.
 func (l *LedgerHashes) hasXAddress() bool {
+	if l.present&ledgerhashesBitLedgerIndex != 0 && isXAddress(l.LedgerIndex) {
+		return true
+	}
 	if l.present&ledgerhashesBitSponsor != 0 && isXAddress(l.Sponsor) {
 		return true
 	}

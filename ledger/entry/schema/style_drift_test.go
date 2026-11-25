@@ -13,20 +13,22 @@ import (
 
 var taggedStyleField = regexp.MustCompile(`^\s*\{\s*sf(\w+)\s*,\s*(?:soe|Soe)(REQUIRED|OPTIONAL|DEFAULT|Required|Optional|Default)\s*\}`)
 
-func TestSponsorCommonFieldAppliedToEveryEntry(t *testing.T) {
+func TestOptionalCommonFieldsAppliedToEveryEntry(t *testing.T) {
 	for _, entry := range Specs {
-		count := 0
-		for _, field := range entry.AllFields() {
-			if field.Name != "Sponsor" {
-				continue
+		fields := entry.AllFields()
+		for _, name := range []string{"Sponsor", "LedgerIndex"} {
+			count := 0
+			for _, field := range fields {
+				if field.Name == name {
+					count++
+					if field.Style != StyleOptional {
+						t.Errorf("%s.%s style = %d, want optional", entry.Name, name, field.Style)
+					}
+				}
 			}
-			count++
-			if field.Style != StyleOptional {
-				t.Errorf("%s.Sponsor style = %d, want optional", entry.Name, field.Style)
+			if count != 1 {
+				t.Errorf("%s has %d %s fields, want 1", entry.Name, count, name)
 			}
-		}
-		if count != 1 {
-			t.Errorf("%s has %d Sponsor fields, want 1", entry.Name, count)
 		}
 	}
 }
@@ -82,6 +84,9 @@ func TestSerializationStylesMatchRippledTag(t *testing.T) {
 	}
 	if !regexp.MustCompile(`\{sfFlags,\s*(?:soeREQUIRED|SoeRequired)\}`).Match(common) {
 		t.Fatal("rippled common Flags field is not required")
+	}
+	if !regexp.MustCompile(`\{sfLedgerIndex,\s*(?:soeOPTIONAL|SoeOptional)\}`).Match(common) {
+		t.Fatal("rippled common LedgerIndex field is not optional")
 	}
 	for _, entry := range Specs {
 		found := false

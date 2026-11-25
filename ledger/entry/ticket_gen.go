@@ -30,6 +30,7 @@ type Ticket struct {
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
+	LedgerIndex       string // Hash256 (uppercase hex)
 	Sponsor           string // AccountID (base58)
 }
 
@@ -45,6 +46,7 @@ const (
 	ticketBitFlags
 	ticketBitPreviousTxnID
 	ticketBitPreviousTxnLgrSeq
+	ticketBitLedgerIndex
 	ticketBitSponsor
 )
 
@@ -88,6 +90,13 @@ func (t *Ticket) SetPreviousTxnLgrSeq(value uint32) {
 	t.PreviousTxnLgrSeq = value
 	t.dirty = true
 	t.present |= ticketBitPreviousTxnLgrSeq
+}
+
+// SetLedgerIndex assigns LedgerIndex and updates its serialized presence.
+func (t *Ticket) SetLedgerIndex(value string) {
+	t.LedgerIndex = value
+	t.dirty = true
+	t.present |= ticketBitLedgerIndex
 }
 
 // SetSponsor assigns Sponsor and updates its serialized presence.
@@ -211,6 +220,37 @@ func (t *Ticket) GetPreviousTxnLgrSeq() (uint32, error) {
 // SetPreviousTxnLgrSeqValue assigns a typed UInt32 value.
 func (t *Ticket) SetPreviousTxnLgrSeqValue(value uint32) {
 	t.SetPreviousTxnLgrSeq(value)
+}
+
+// HasLedgerIndex reports whether LedgerIndex is present.
+func (t *Ticket) HasLedgerIndex() bool {
+	return t != nil && t.present&ticketBitLedgerIndex != 0
+}
+
+// ClearLedgerIndex removes LedgerIndex from the serialized entry.
+func (t *Ticket) ClearLedgerIndex() {
+	if t == nil {
+		return
+	}
+	t.LedgerIndex = ""
+	t.present &^= ticketBitLedgerIndex
+	t.dirty = true
+}
+
+// GetLedgerIndex returns the typed 256-bit hash.
+func (t *Ticket) GetLedgerIndex() ([32]byte, error) {
+	var result [32]byte
+	if t == nil {
+		return result, nil
+	}
+	raw, err := hashValueFromString(t.LedgerIndex, "Ticket.LedgerIndex", 32)
+	copy(result[:], raw)
+	return result, err
+}
+
+// SetLedgerIndexValue assigns a typed 256-bit hash.
+func (t *Ticket) SetLedgerIndexValue(value [32]byte) {
+	t.SetLedgerIndex(hashValueToString(value[:]))
 }
 
 // HasSponsor reports whether Sponsor is present.
@@ -367,6 +407,9 @@ func (t *Ticket) decode(data []byte, legacy bool) error {
 			case 5:
 				t.PreviousTxnID = val
 				t.present |= ticketBitPreviousTxnID
+			case 6:
+				t.LedgerIndex = val
+				t.present |= ticketBitLedgerIndex
 			default:
 				return newErrUnknownField("Ticket", typeCode, fieldCode)
 			}
@@ -415,6 +458,9 @@ func (t *Ticket) emitAll(out map[string]any, skipDefault bool) {
 	if t.present&ticketBitFlags != 0 && !(skipDefault && t.Flags == 0) {
 		out["Flags"] = t.Flags
 	}
+	if t.present&ticketBitLedgerIndex != 0 && !(skipDefault && isZeroHexString(t.LedgerIndex)) {
+		out["LedgerIndex"] = t.LedgerIndex
+	}
 	if t.present&ticketBitSponsor != 0 && !(skipDefault && t.Sponsor == "") {
 		out["Sponsor"] = t.Sponsor
 	}
@@ -443,6 +489,7 @@ func (t *Ticket) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, t.OwnerNode, prv.present&ticketBitOwnerNode, t.present&ticketBitOwnerNode)
 	emitIfChangedUint32(out, "TicketSequence", prv.TicketSequence, t.TicketSequence, prv.present&ticketBitTicketSequence, t.present&ticketBitTicketSequence)
 	emitIfChangedUint32(out, "Flags", prv.Flags, t.Flags, prv.present&ticketBitFlags, t.present&ticketBitFlags)
+	emitIfChangedString(out, "LedgerIndex", prv.LedgerIndex, t.LedgerIndex, prv.present&ticketBitLedgerIndex, t.present&ticketBitLedgerIndex)
 	emitIfChangedString(out, "Sponsor", prv.Sponsor, t.Sponsor, prv.present&ticketBitSponsor, t.present&ticketBitSponsor)
 }
 
@@ -463,6 +510,9 @@ func (t *Ticket) EmitChangeOrigFields(out map[string]any) {
 	}
 	if t.present&ticketBitFlags != 0 {
 		out["Flags"] = t.Flags
+	}
+	if t.present&ticketBitLedgerIndex != 0 {
+		out["LedgerIndex"] = t.LedgerIndex
 	}
 	if t.present&ticketBitSponsor != 0 {
 		out["Sponsor"] = t.Sponsor
@@ -525,6 +575,9 @@ func (t *Ticket) ToMap() map[string]any {
 	}
 	if t.present&ticketBitPreviousTxnLgrSeq != 0 {
 		out["PreviousTxnLgrSeq"] = t.PreviousTxnLgrSeq
+	}
+	if t.present&ticketBitLedgerIndex != 0 {
+		out["LedgerIndex"] = t.LedgerIndex
 	}
 	if t.present&ticketBitSponsor != 0 {
 		out["Sponsor"] = t.Sponsor
@@ -594,6 +647,11 @@ func (t *Ticket) appendBinary(dst []byte) ([]byte, error) {
 	} else {
 		dst = append(append(dst, 0x55), zeroHash[:]...)
 	}
+	if t.present&ticketBitLedgerIndex != 0 {
+		if dst, err = appendHash(append(dst, 0x56), t.LedgerIndex, 32); err != nil {
+			return nil, err
+		}
+	}
 	if t.present&ticketBitAccount != 0 {
 		if dst, err = appendAccountID(append(dst, 0x81), t.Account); err != nil {
 			return nil, err
@@ -620,6 +678,9 @@ func (t *Ticket) encodedSizeHint() int {
 	if t.present&ticketBitOwnerNode != 0 {
 		size += 9
 	}
+	if t.present&ticketBitLedgerIndex != 0 {
+		size += 33
+	}
 	if t.present&ticketBitAccount != 0 {
 		size += 1 + accountIDEncodedLen(t.Account)
 	}
@@ -637,6 +698,9 @@ func (t *Ticket) hasXAddress() bool {
 		return true
 	}
 	if t.present&ticketBitPreviousTxnID != 0 && isXAddress(t.PreviousTxnID) {
+		return true
+	}
+	if t.present&ticketBitLedgerIndex != 0 && isXAddress(t.LedgerIndex) {
 		return true
 	}
 	if t.present&ticketBitAccount != 0 && isXAddress(t.Account) {
