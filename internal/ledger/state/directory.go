@@ -523,8 +523,8 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, preserve
 		DirKey: dirKey.Key,
 	}
 
-	// Check if root directory exists
-	exists, err := view.Exists(dirKey)
+	// A different entry type at the root key also prevents directory creation.
+	exists, err := view.Exists(keylet.Keylet{Key: dirKey.Key, Type: ledgerfields.TypeAny})
 	if err != nil {
 		return nil, err
 	}
@@ -566,7 +566,7 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, preserve
 		return nil, err
 	}
 	if rootData == nil {
-		return nil, errors.New("directory root exists but cannot be read as a DirectoryNode")
+		return nil, fmt.Errorf("%w: root is not a DirectoryNode", ErrMalformedDirectory)
 	}
 	root, err := ParseDirectoryNode(rootData)
 	if err != nil {

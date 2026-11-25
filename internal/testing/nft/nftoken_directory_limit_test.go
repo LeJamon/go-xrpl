@@ -10,6 +10,7 @@ import (
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/nft"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
 	"github.com/LeJamon/go-xrpl/internal/tx/nftoken"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -106,7 +107,7 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 		{name: "mint reserve before directory", kind: mintOffer, lowReserve: true, want: ter.TecINSUFFICIENT_RESERVE},
 		{name: "mint with full owner directory", kind: mintOffer, want: ter.TecDIR_FULL},
 		{name: "mint with full sell directory", kind: mintOffer, tokenDirectory: true, want: ter.TecDIR_FULL},
-		{name: "wrong owner directory root type", fault: wrongRootType, want: ter.TefINTERNAL},
+		{name: "wrong owner directory root type", fault: wrongRootType, want: ter.TefEXCEPTION},
 		{name: "malformed owner directory root", fault: malformedRoot, want: ter.TefEXCEPTION},
 		{name: "malformed sell directory page", tokenDirectory: true, fault: malformedLastPage, want: ter.TefEXCEPTION},
 		{name: "missing sell directory page", tokenDirectory: true, fault: missingLastPage, want: ter.TefEXCEPTION},
@@ -230,4 +231,22 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCachedWrongTypeOfferDirectory(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	owner := jtx.NewAccount("owner")
+	env.Fund(owner)
+	data, err := env.LedgerEntry(keylet.Account(owner.ID))
+	require.NoError(t, err)
+
+	dir := keylet.OwnerDir(owner.ID)
+	require.NoError(t, env.Ledger().Insert(dir, data))
+	view := applystate.NewApplyStateTable(env.Ledger(), [32]byte{}, 1, env.Rules())
+	cached, err := view.Read(keylet.Keylet{Key: dir.Key, Type: entry.TypeAny})
+	require.NoError(t, err)
+	require.Equal(t, data, cached)
+	offer := keylet.NFTokenOffer(owner.ID, env.Seq(owner))
+	_, err = state.DirInsert(view, dir, offer.Key, false, nil)
+	require.ErrorIs(t, err, state.ErrMalformedDirectory)
 }
