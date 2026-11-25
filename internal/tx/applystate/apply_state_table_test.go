@@ -261,6 +261,22 @@ func TestReadChecksKeyletTypeForBaseAndTrackedEntries(t *testing.T) {
 	}
 }
 
+func TestInsertRejectsOccupiedKeyAcrossViews(t *testing.T) {
+	parent := NewApplyStateTable(newMockBaseView(), [32]byte{}, 0, nil)
+	index := key(1)
+	dir := keylet.Keylet{Type: entry.TypeDirectoryNode, Key: index}
+	if err := parent.Insert(dir, typedEntryData(dir.Type, 1)); err != nil {
+		t.Fatal(err)
+	}
+	offer := keylet.Keylet{Type: entry.TypeNFTokenOffer, Key: index}
+	child := NewApplyStateTable(parent, [32]byte{}, 0, nil)
+	for _, view := range []*ApplyStateTable{parent, child} {
+		if err := view.Insert(offer, typedEntryData(offer.Type, 2)); !errors.Is(err, ledgercore.ErrEntryExists) {
+			t.Fatalf("Insert at occupied index = %v, want ErrEntryExists", err)
+		}
+	}
+}
+
 // collectForEach runs ForEach and returns all yielded key-data pairs sorted by key.
 func collectForEach(t *testing.T, table *ApplyStateTable) [][2][]byte {
 	t.Helper()
