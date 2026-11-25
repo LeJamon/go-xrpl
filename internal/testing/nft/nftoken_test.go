@@ -2921,13 +2921,18 @@ func TestNFTokenMintOffer(t *testing.T) {
 			env.Fund(buyer)
 			env.Close()
 
-			offerKey := keylet.NFTokenOffer(alice.ID, env.Seq(alice))
+			sequence, balance := env.Seq(alice), env.Balance(alice)
+			offerKey := keylet.NFTokenOffer(alice.ID, sequence)
 			mint := nft.NFTokenMint(alice, 0).Transferable().Amount(tx.NewXRPAmount(1_000_000))
 			if tc.withDestination {
 				mint.Destination(buyer)
 			}
-			jtx.RequireTxSuccess(t, env.Submit(mint.Build()))
+			result := env.Submit(mint.Build())
+			jtx.RequireTxSuccess(t, result)
 			env.Close()
+			require.Equal(t, env.BaseFee(), result.Fee)
+			jtx.RequireSequence(t, env, alice, sequence+1)
+			jtx.RequireBalance(t, env, alice, balance-result.Fee)
 			jtx.RequireOwnerCount(t, env, alice, 2)
 
 			data, err := env.LedgerEntry(offerKey)

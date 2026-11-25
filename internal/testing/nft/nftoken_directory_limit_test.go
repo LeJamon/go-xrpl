@@ -54,9 +54,14 @@ func TestNFTokenOfferBeyondLegacyDirectoryLimit(t *testing.T) {
 
 	dir := keylet.OwnerDir(buyer.ID)
 	fillNFTOfferDirectory(t, env, dir, state.DirectoryNode{Owner: buyer.ID}, state.DirNodeMaxPages-1)
-	offerKey := keylet.NFTokenOffer(buyer.ID, env.Seq(buyer))
-	jtx.RequireTxSuccess(t, env.Submit(nft.NFTokenCreateBuyOffer(buyer, id, tx.NewXRPAmount(1), seller).Build()))
+	sequence, balance := env.Seq(buyer), env.Balance(buyer)
+	offerKey := keylet.NFTokenOffer(buyer.ID, sequence)
+	result := env.Submit(nft.NFTokenCreateBuyOffer(buyer, id, tx.NewXRPAmount(1), seller).Build())
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
+	require.Equal(t, env.BaseFee(), result.Fee)
+	jtx.RequireSequence(t, env, buyer, sequence+1)
+	jtx.RequireBalance(t, env, buyer, balance-result.Fee)
 
 	data, err := env.LedgerEntry(offerKey)
 	require.NoError(t, err)
@@ -71,22 +76,30 @@ func TestNFTokenOfferBeyondLegacyDirectoryLimit(t *testing.T) {
 }
 
 func TestNFTokenOfferDirectoryFailure(t *testing.T) {
+	type offerKind int
+	const (
+		sellOffer offerKind = iota
+		buyOffer
+		mintOffer
+	)
 	for _, tc := range []struct {
 		name           string
+		kind           offerKind
 		tokenDirectory bool
 		fixLimit       bool
 		lowReserve     bool
-		mint           bool
 		corrupt        bool
 		missingPage    bool
 		want           ter.Result
 	}{
 		{name: "full owner directory", want: ter.TecDIR_FULL},
 		{name: "full sell directory", tokenDirectory: true, want: ter.TecDIR_FULL},
+		{name: "full buy directory", kind: buyOffer, tokenDirectory: true, want: ter.TecDIR_FULL},
 		{name: "sell directory page overflow", tokenDirectory: true, fixLimit: true, want: ter.TecDIR_FULL},
 		{name: "reserve before directory", lowReserve: true, want: ter.TecINSUFFICIENT_RESERVE},
-		{name: "mint with full owner directory", mint: true, want: ter.TecDIR_FULL},
-		{name: "mint with full sell directory", mint: true, tokenDirectory: true, want: ter.TecDIR_FULL},
+		{name: "mint reserve before directory", kind: mintOffer, lowReserve: true, want: ter.TecINSUFFICIENT_RESERVE},
+		{name: "mint with full owner directory", kind: mintOffer, want: ter.TecDIR_FULL},
+		{name: "mint with full sell directory", kind: mintOffer, tokenDirectory: true, want: ter.TecDIR_FULL},
 		{name: "invalid owner directory", corrupt: true, want: ter.TefINTERNAL},
 		{name: "missing sell directory page", tokenDirectory: true, missingPage: true, want: ter.TefEXCEPTION},
 	} {
@@ -101,19 +114,29 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 			}
 			alice := jtx.NewAccount("alice")
 			env.Fund(alice)
+			issuer := alice
+			if tc.kind == buyOffer {
+				issuer = jtx.NewAccount("issuer")
+				env.Fund(issuer)
+			}
 			env.Close()
 
 			nextID := func() string {
-				return nft.GetNextNFTokenID(env, alice, 0, nftoken.NFTokenFlagTransferable, 0)
+				return nft.GetNextNFTokenID(env, issuer, 0, nftoken.NFTokenFlagTransferable, 0)
 			}
 			id := nextID()
-			jtx.RequireTxSuccess(t, env.Submit(nft.NFTokenMint(alice, 0).Transferable().Build()))
+			jtx.RequireTxSuccess(t, env.Submit(nft.NFTokenMint(issuer, 0).Transferable().Build()))
 			env.Close()
 			amount := tx.NewXRPAmount(1)
-			var transaction tx.Transaction = nft.NFTokenCreateSellOffer(alice, id, amount).Build()
-			if tc.mint {
+			var transaction tx.Transaction
+			switch tc.kind {
+			case buyOffer:
+				transaction = nft.NFTokenCreateBuyOffer(alice, id, amount, issuer).Build()
+			case mintOffer:
 				id = nextID()
 				transaction = nft.NFTokenMint(alice, 0).Transferable().Amount(amount).Build()
+			case sellOffer:
+				transaction = nft.NFTokenCreateSellOffer(alice, id, amount).Build()
 			}
 
 			rawID, err := hex.DecodeString(id)
@@ -122,11 +145,16 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 			tokenID := [32]byte(rawID)
 			ownerDir := keylet.OwnerDir(alice.ID)
 			tokenDir := keylet.NFTSells(tokenID)
+			tokenDirFlags := entry.LsfNFTokenSellOffers
+			if tc.kind == buyOffer {
+				tokenDir = keylet.NFTBuys(tokenID)
+				tokenDirFlags = entry.LsfNFTokenBuyOffers
+			}
 			dirKey := ownerDir
 			dir := state.DirectoryNode{Owner: alice.ID}
 			if tc.tokenDirectory {
 				dirKey = tokenDir
-				dir = state.DirectoryNode{NFTokenID: tokenID, Flags: entry.LsfNFTokenSellOffers}
+				dir = state.DirectoryNode{NFTokenID: tokenID, Flags: tokenDirFlags}
 			}
 			if tc.corrupt {
 				accountData, err := env.LedgerEntry(keylet.Account(alice.ID))
