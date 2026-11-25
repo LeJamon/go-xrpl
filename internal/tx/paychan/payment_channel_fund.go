@@ -185,11 +185,7 @@ func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) ter.Result {
 	if !ok {
 		return ter.TefINTERNAL
 	}
-	liquid, ok := tx.LiquidXRP(ctx.Account.Balance, reserve)
-	if !ok {
-		return ter.TefINTERNAL
-	}
-	if liquid < amount {
+	if !tx.MeetsReserveAfterDebit(ctx.Account.Balance, amount, reserve) {
 		ctx.Log.Warn("payment channel fund: unfunded",
 			"balance", ctx.Account.Balance,
 			"amount", amount,
@@ -206,6 +202,9 @@ func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	// Deduct from account and add to channel
+	if ctx.Account.Balance < amount {
+		return ter.TecINVARIANT_FAILED
+	}
 	ctx.Account.Balance -= amount
 	channel.Amount += amount
 

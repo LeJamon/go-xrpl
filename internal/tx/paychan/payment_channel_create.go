@@ -149,7 +149,7 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		if !ok {
 			return ter.TefINTERNAL
 		}
-		if !tx.BalanceCoversAmountAndReserve(priorBalance, amount, sourceReserve) {
+		if !tx.MeetsReserveAfterDebit(priorBalance, amount, sourceReserve) {
 			ctx.Log.Warn("payment channel create: unfunded", "balance", priorBalance, "amount", amount)
 			return ter.TecUNFUNDED
 		}
@@ -276,6 +276,9 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ctx.Internal("update pay channel", err)
 	}
 
+	if ctx.Account.Balance < amount {
+		return ter.TecINVARIANT_FAILED
+	}
 	ctx.Account.Balance -= amount
 
 	return ter.TesSUCCESS

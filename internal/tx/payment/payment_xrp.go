@@ -55,10 +55,7 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 	}
 	// A negative reserve can let an externally funded payment reach the debit.
 	// Preserve the destination checks that precede the balance invariant.
-	if priorBalance > math.MaxInt64 {
-		return ter.TecINTERNAL
-	}
-	if drops.XRPAmount(priorBalance)-drops.XRPAmount(amount) < minRequired {
+	if !tx.MeetsReserveAfterDebit(priorBalance, amountDrops, minRequired) {
 		return ter.TecUNFUNDED_PAYMENT
 	}
 

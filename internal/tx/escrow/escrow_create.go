@@ -317,7 +317,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			return ter.TefINTERNAL
 		}
 		amount := uint64(drops)
-		if !tx.BalanceCoversAmountAndReserve(ctx.Account.Balance, amount, sourceReserve) {
+		if !tx.MeetsReserveAfterDebit(ctx.Account.Balance, amount, sourceReserve) {
 			ctx.Log.Warn("escrow create: unfunded",
 				"balance", ctx.Account.Balance,
 				"amount", amount,
@@ -476,6 +476,9 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// trust-line reserve through the view, which ctx.Account must absorb first.
 	if isNative {
 		// XRP: deduct from account balance
+		if ctx.Account.Balance < uint64(e.Amount.Drops()) {
+			return ter.TecINVARIANT_FAILED
+		}
 		ctx.Account.Balance -= uint64(e.Amount.Drops())
 	} else if e.Amount.IsMPT() {
 		// MPT: lock via MPToken/MPTIssuance fields

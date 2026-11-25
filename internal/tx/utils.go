@@ -379,9 +379,13 @@ func BalanceLessThan(balance uint64, threshold drops.XRPAmount) bool {
 	return threshold > 0 && balance < uint64(threshold)
 }
 
-// BalanceCoversAmountAndReserve checks that a debit leaves the required reserve.
-func BalanceCoversAmountAndReserve(balance, amount uint64, reserve drops.XRPAmount) bool {
-	return balance >= amount && BalanceAtLeast(balance-amount, reserve)
+// MeetsReserveAfterDebit compares the post-debit balance with a signed reserve.
+// A negative reserve can pass this check even if the debit would overdraw the account.
+func MeetsReserveAfterDebit(balance, debit uint64, reserve drops.XRPAmount) bool {
+	if debit <= balance {
+		return BalanceAtLeast(balance-debit, reserve)
+	}
+	return reserve < 0 && debit-balance <= uint64(-reserve)
 }
 
 // LiquidXRP returns the zero-clamped spendable XRP after retaining reserve.

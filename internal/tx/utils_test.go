@@ -10,6 +10,27 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
+func TestMeetsReserveAfterDebit(t *testing.T) {
+	for _, test := range []struct {
+		balance, debit uint64
+		reserve        drops.XRPAmount
+		want           bool
+	}{
+		{11, 1, 10, true},
+		{10, 1, 10, false},
+		{1, 1, 0, true},
+		{1, 2, 0, false},
+		{1, 2, -1, true},
+		{1, 3, -1, false},
+		{0, 1 << 63, math.MinInt64, true},
+		{0, 1<<63 + 1, math.MinInt64, false},
+	} {
+		if got := MeetsReserveAfterDebit(test.balance, test.debit, test.reserve); got != test.want {
+			t.Errorf("balance %d less %d meets reserve %d: got %t, want %t", test.balance, test.debit, test.reserve, got, test.want)
+		}
+	}
+}
+
 func TestAccountFundsNoFreezeStrictRejectsReserveOverflow(t *testing.T) {
 	var accountID [20]byte
 	accountID[0] = 1
