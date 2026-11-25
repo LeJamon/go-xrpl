@@ -153,7 +153,6 @@ func TestResolveReplaySeedFeesAnchorsCustomGenesisSchedule(t *testing.T) {
 	if err != nil || got != (drops.Fees{Base: 12, Reserve: 34, Increment: 56}) {
 		t.Fatalf("absent FeeSettings resolved to %+v, %v", got, err)
 	}
-
 }
 
 func TestFeeHistoryEmptyLedgerArchiveErrors(t *testing.T) {
