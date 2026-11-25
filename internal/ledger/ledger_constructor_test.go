@@ -3,6 +3,7 @@ package ledger
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -167,6 +168,26 @@ func TestReadFeeSettingsTypeValidation(t *testing.T) {
 				t.Fatalf("ReadFeeSettings = %+v, want absent", settings)
 			}
 		})
+	}
+}
+
+func TestClosedLedgerConstructorRejectsModernFeesBeforeAmendment(t *testing.T) {
+	stateMap := shamap.New(shamap.TypeState)
+	data, err := state.SerializeFeeSettings(&state.FeeSettings{
+		XRPFeesMode:           true,
+		BaseFeeDrops:          10,
+		ReserveBaseDrops:      10_000_000,
+		ReserveIncrementDrops: 2_000_000,
+	})
+	if err != nil {
+		t.Fatalf("serialize FeeSettings: %v", err)
+	}
+	if err := stateMap.Put(keylet.Fees().Key, data); err != nil {
+		t.Fatalf("seed FeeSettings: %v", err)
+	}
+	_, err = NewClosedFromHeaderContext(context.Background(), header.LedgerHeader{}, stateMap, shamap.New(shamap.TypeTransaction), drops.DefaultFees())
+	if !errors.Is(err, state.ErrInvalidFeeSettings) {
+		t.Fatalf("NewClosedFromHeaderContext error = %v, want ErrInvalidFeeSettings", err)
 	}
 }
 

@@ -181,6 +181,40 @@ func (s *SetFee) parseFields() (parsedFeeFields, error) {
 	return out, nil
 }
 
+// FeeSchedule returns the complete fee schedule carried by this SetFee.
+// SetFee transactions emitted by consensus always carry every active field;
+// rejecting partial field sets here prevents offline replay from inventing
+// omitted values while retaining the parser's signed-value handling.
+func (s *SetFee) FeeSchedule() (drops.Fees, error) {
+	parsed, err := s.parsedOrError()
+	if err != nil {
+		return drops.Fees{}, err
+	}
+	modern := s.hasModernFields()
+	legacy := s.hasLegacyFields()
+	if modern && legacy {
+		return drops.Fees{}, ErrSetFeeMalformed
+	}
+	if modern {
+		if s.BaseFeeDrops == "" || s.ReserveBaseDrops == "" || s.ReserveIncrementDrops == "" {
+			return drops.Fees{}, ErrSetFeeMalformed
+		}
+		return drops.Fees{
+			Base:      parsed.baseFeeDrops,
+			Reserve:   parsed.reserveBaseDrops,
+			Increment: parsed.reserveIncrementDrops,
+		}, nil
+	}
+	if s.BaseFee == "" || s.ReferenceFeeUnits == nil || s.ReserveBase == nil || s.ReserveIncrement == nil {
+		return drops.Fees{}, ErrSetFeeMalformed
+	}
+	return drops.Fees{
+		Base:      drops.XRPAmount(parsed.baseFee),
+		Reserve:   drops.XRPAmount(*s.ReserveBase),
+		Increment: drops.XRPAmount(*s.ReserveIncrement),
+	}, nil
+}
+
 func (s *SetFee) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(s)
 }

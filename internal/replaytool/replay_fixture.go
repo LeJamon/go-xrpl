@@ -154,18 +154,6 @@ func loadValidatedFixture(ctx context.Context, dir string) (*validatedFixture, e
 	if root != stateHash {
 		return nil, fmt.Errorf("seed state account_hash mismatch: computed %x, fixture %x", root, stateHash)
 	}
-	declaredFees := drops.Fees{Base: env.Fees.BaseFee, Reserve: env.Fees.ReserveBase, Increment: env.Fees.ReserveIncrement}
-	fees, err := feesFromStateMap(ctx, stateMap, declaredFees)
-	if err != nil {
-		return nil, fmt.Errorf("loading fixture fees: %w", err)
-	}
-	if fees != declaredFees {
-		return nil, fmt.Errorf(
-			"env fees (%d/%d/%d) do not match state fees (%d/%d/%d)",
-			env.Fees.BaseFee, env.Fees.ReserveBase, env.Fees.ReserveIncrement,
-			fees.Base, fees.Reserve, fees.Increment,
-		)
-	}
 	declaredRules, err := buildRulesFromAmendments(env.Amendments)
 	if err != nil {
 		return nil, fmt.Errorf("env amendments: %w", err)
@@ -176,6 +164,19 @@ func loadValidatedFixture(ctx context.Context, dir string) (*validatedFixture, e
 	}
 	if !sameRuleSet(declaredRules, rules) {
 		return nil, errors.New("env amendments do not match the seed state's Amendments ledger entry")
+	}
+	settings, err := readReplayFeeSettings(ctx, stateMap, rules)
+	if err != nil {
+		return nil, fmt.Errorf("loading fixture fees: %w", err)
+	}
+	declaredFees := drops.Fees{Base: env.Fees.BaseFee, Reserve: env.Fees.ReserveBase, Increment: env.Fees.ReserveIncrement}
+	fees := settings.ApplyTo(declaredFees)
+	if fees != declaredFees {
+		return nil, fmt.Errorf(
+			"env fees (%d/%d/%d) do not match state fees (%d/%d/%d)",
+			env.Fees.BaseFee, env.Fees.ReserveBase, env.Fees.ReserveIncrement,
+			fees.Base, fees.Reserve, fees.Increment,
+		)
 	}
 	transactions, expectedTransactions, err := validateFixtureTransactions(ctx, txs.Transactions, expected.Transactions)
 	if err != nil {

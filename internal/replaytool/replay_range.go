@@ -573,9 +573,9 @@ func loadInitialState(ctx context.Context, client *statecompare.Client, ledgerIn
 		return nil, nil, drops.Fees{}, err
 	}
 
-	// Seed fees from the verified state, failing if a present FeeSettings entry
-	// is malformed.
-	fees, err := feesFromStateMap(ctx, stateMap, drops.DefaultFees())
+	// Seed fees from the verified state. A partial FeeSettings entry inherits
+	// from a successful SetFee recovered from the verified transaction history.
+	fees, err := resolveReplaySeedFees(ctx, client, snapshot, stateMap, drops.DefaultFees(), nil)
 	if err != nil {
 		return nil, nil, drops.Fees{}, err
 	}
@@ -600,7 +600,7 @@ func verifyStateRoot(stateMap *shamap.SHAMap, expected [32]byte, ledgerIndex uin
 // resumeFromCheckpoint loads the seed state from an on-disk checkpoint at seq,
 // validates its root against the known account_hash, and returns the snapshot
 // and fees needed to continue replay from seq+1.
-func resumeFromCheckpoint(ctx context.Context, client *statecompare.Client, dir string, seq uint32) (*shamap.SHAMap, *statecompare.LedgerSnapshot, drops.Fees, error) {
+func resumeFromCheckpoint(ctx context.Context, client replayHistoryClient, dir string, seq uint32) (*shamap.SHAMap, *statecompare.LedgerSnapshot, drops.Fees, error) {
 	path := checkpointPath(dir, seq)
 	stateMap, ckptSeq, checkpointFees, err := loadCheckpoint(ctx, path)
 	if err != nil {
@@ -619,11 +619,7 @@ func resumeFromCheckpoint(ctx context.Context, client *statecompare.Client, dir 
 		return nil, nil, drops.Fees{}, err
 	}
 
-	inheritedFees := drops.DefaultFees()
-	if checkpointFees != nil {
-		inheritedFees = *checkpointFees
-	}
-	fees, err := feesFromStateMap(ctx, stateMap, inheritedFees)
+	fees, err := resolveReplaySeedFees(ctx, client, snapshot, stateMap, drops.DefaultFees(), checkpointFees)
 	if err != nil {
 		return nil, nil, drops.Fees{}, err
 	}
