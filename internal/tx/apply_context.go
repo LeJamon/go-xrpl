@@ -2,7 +2,6 @@ package tx
 
 import (
 	"context"
-	"math"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
@@ -113,14 +112,7 @@ func (ctx *ApplyContext) AccountReserveAmount(ownerCount uint32) (drops.XRPAmoun
 // OwnerCount. Under Sponsor, sponsored objects are removed and sponsored
 // obligations are added to the reserve-bearing count.
 func (ctx *ApplyContext) AccountReserveFor(account *state.AccountRoot, ownerCount uint32) uint64 {
-	reserve, ok := ctx.AccountReserveAmountFor(account, ownerCount)
-	if !ok {
-		return math.MaxUint64
-	}
-	if reserve < 0 {
-		return 0
-	}
-	return uint64(reserve)
+	return reserveFloor(ctx.AccountReserveAmountFor(account, ownerCount))
 }
 
 // AccountReserveAmountFor returns the signed reserve carried by account at the
@@ -217,13 +209,10 @@ func (ctx *ApplyContext) SourcePaysFee() bool {
 	if ctx.Common == nil {
 		return true
 	}
-	if ctx.Common.Delegate != "" {
-		return false
+	if ctx.Common.Sponsor != "" && ctx.Common.SponsorFlags != nil && *ctx.Common.SponsorFlags&SpfSponsorFee != 0 {
+		return ctx.Common.Sponsor == ctx.Common.Account
 	}
-	if ctx.Common.Sponsor == "" || ctx.Common.SponsorFlags == nil {
-		return true
-	}
-	return *ctx.Common.SponsorFlags&SpfSponsorFee == 0
+	return ctx.Common.Delegate == "" || ctx.Common.Delegate == ctx.Common.Account
 }
 
 // PreclaimAccount returns the source account before transaction application.

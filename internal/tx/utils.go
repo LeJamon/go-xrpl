@@ -379,38 +379,9 @@ func BalanceLessThan(balance uint64, threshold drops.XRPAmount) bool {
 	return threshold > 0 && balance < uint64(threshold)
 }
 
-// BalanceCoversAmountAndReserve reports whether balance can pay amount while
-// retaining a signed reserve. It avoids converting the uint64 balance to a
-// signed value until the result is known to fit.
+// BalanceCoversAmountAndReserve checks that a debit leaves the required reserve.
 func BalanceCoversAmountAndReserve(balance, amount uint64, reserve drops.XRPAmount) bool {
-	// A negative reserve lowers the retained floor; it must not authorize
-	// spending more XRP than the account actually holds.
-	if balance < amount {
-		return false
-	}
-	if reserve >= 0 {
-		reserveUnsigned := uint64(reserve)
-		return amount <= math.MaxUint64-reserveUnsigned && balance >= amount+reserveUnsigned
-	}
-	return true
-}
-
-// BalanceMeetsAmountAndReserve reports whether a balance satisfies the signed
-// amount-plus-reserve precondition. Unlike BalanceCoversAmountAndReserve, it
-// intentionally does not require balance to cover amount by itself: rippled
-// lets an externally paid-fee payment pass this precondition when a negative
-// reserve makes the signed requirement non-positive, then catches a negative
-// source balance in its invariant pass.
-func BalanceMeetsAmountAndReserve(balance, amount uint64, reserve drops.XRPAmount) bool {
-	if reserve >= 0 {
-		reserveUnsigned := uint64(reserve)
-		return amount <= math.MaxUint64-reserveUnsigned && balance >= amount+reserveUnsigned
-	}
-	absReserve := uint64(-(reserve + 1)) + 1
-	if amount <= absReserve {
-		return true
-	}
-	return balance >= amount-absReserve
+	return balance >= amount && BalanceAtLeast(balance-amount, reserve)
 }
 
 // LiquidXRP returns the zero-clamped spendable XRP after retaining reserve.

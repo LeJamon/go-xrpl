@@ -46,27 +46,20 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 	// when the source account is the fee payer. With an external delegate or
 	// sponsor, the source need only keep its plain reserve.
 	// Reference: rippled Payment.cpp doApply() (fix: decouple reserve from fee).
-	sourcePaysFee := ctx.SourcePaysFee()
 	minRequired := reserve
-	if sourcePaysFee {
+	if ctx.SourcePaysFee() {
 		if feeDrops > math.MaxInt64 {
 			return ter.TecINTERNAL
 		}
-		if fee := drops.XRPAmount(feeDrops); fee > minRequired {
-			minRequired = fee
-		}
+		minRequired = max(drops.XRPAmount(feeDrops), reserve)
 	}
-
-	invariantFailure := false
-	if sourcePaysFee {
-		if !tx.BalanceCoversAmountAndReserve(priorBalance, amountDrops, minRequired) {
-			return ter.TecUNFUNDED_PAYMENT
-		}
-	} else {
-		if !tx.BalanceMeetsAmountAndReserve(priorBalance, amountDrops, reserve) {
-			return ter.TecUNFUNDED_PAYMENT
-		}
-		invariantFailure = priorBalance < amountDrops
+	// A negative reserve can let an externally funded payment reach the debit.
+	// Preserve the destination checks that precede the balance invariant.
+	if priorBalance > math.MaxInt64 {
+		return ter.TecINTERNAL
+	}
+	if drops.XRPAmount(priorBalance)-drops.XRPAmount(amount) < minRequired {
+		return ter.TecUNFUNDED_PAYMENT
 	}
 
 	// Get destination account
@@ -110,7 +103,7 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 				return result
 			}
 		}
-		if invariantFailure {
+		if ctx.Account.Balance < amountDrops {
 			return ter.TecINVARIANT_FAILED
 		}
 
@@ -148,7 +141,7 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 	if tx.BalanceLessThan(amountDrops, ctx.Config.Fees().Reserve) && !sponsorCreated {
 		return ter.TecNO_DST_INSUF_XRP
 	}
-	if invariantFailure {
+	if ctx.Account.Balance < amountDrops {
 		return ter.TecINVARIANT_FAILED
 	}
 

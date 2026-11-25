@@ -185,4 +185,9 @@ func TestPaymentSourceFeePayerUsesCommonIdentityForZeroFee(t *testing.T) {
 	reserveFlags := tx.SpfSponsorReserve
 	ctx.Common.SponsorFlags = &reserveFlags
 	require.True(t, ctx.SourcePaysFee())
+
+	ctx.Common.Delegate = "rDelegate"
+	ctx.Common.Sponsor = ctx.Common.Account
+	ctx.Common.SponsorFlags = &feeFlags
+	require.True(t, ctx.SourcePaysFee())
 }

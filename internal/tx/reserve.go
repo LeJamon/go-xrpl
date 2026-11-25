@@ -1,6 +1,8 @@
 package tx
 
 import (
+	"math"
+
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
@@ -13,14 +15,14 @@ import (
 // given owner count: ReserveBase + (ownerCount * ReserveIncrement). This matches
 // rippled's accountReserve(ownerCount).
 func (c EngineConfig) AccountReserve(ownerCount uint32) uint64 {
-	reserve, ok := c.AccountReserveAmount(ownerCount)
+	return reserveFloor(c.AccountReserveAmount(ownerCount))
+}
+
+func reserveFloor(reserve drops.XRPAmount, ok bool) uint64 {
 	if !ok {
-		return ^uint64(0)
+		return math.MaxUint64
 	}
-	if reserve < 0 {
-		return 0
-	}
-	return uint64(reserve)
+	return uint64(max(reserve, 0))
 }
 
 // AccountReserveAmount returns the signed reserve required for ownerCount.
@@ -35,14 +37,7 @@ func (c EngineConfig) AccountReserveAmount(ownerCount uint32) (drops.XRPAmount, 
 // this form because a sponsored account funds no base reserve of its own while
 // a sponsor may fund several accounts.
 func (c EngineConfig) AccountReserveWithCounts(ownerCount, accountCount uint32) uint64 {
-	reserve, ok := c.AccountReserveWithCountsAmount(ownerCount, accountCount)
-	if !ok {
-		return ^uint64(0)
-	}
-	if reserve < 0 {
-		return 0
-	}
-	return uint64(reserve)
+	return reserveFloor(c.AccountReserveWithCountsAmount(ownerCount, accountCount))
 }
 
 // AccountReserveWithCountsAmount is the signed form of
@@ -59,14 +54,7 @@ func (c EngineConfig) AccountReserveWithCountsAmount(ownerCount, accountCount ui
 //	    (uOwnerCount < 2) ? XRPAmount(beast::zero)
 //	                      : view().fees().accountReserve(uOwnerCount + 1));
 func (c EngineConfig) ReserveForNewObject(currentOwnerCount uint32) uint64 {
-	reserve, ok := c.ReserveForNewObjectAmount(currentOwnerCount)
-	if !ok {
-		return ^uint64(0)
-	}
-	if reserve < 0 {
-		return 0
-	}
-	return uint64(reserve)
+	return reserveFloor(c.ReserveForNewObjectAmount(currentOwnerCount))
 }
 
 // ReserveForNewObjectAmount is the signed form of ReserveForNewObject.
