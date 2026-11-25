@@ -179,9 +179,11 @@ func TestNFTokenOfferDirectoryFailure(t *testing.T) {
 				}
 				data, err := env.LedgerEntry(key)
 				require.NoError(t, err)
-				require.Greater(t, len(data), 3)
-				// Keep only LedgerEntryType so the typed lookup succeeds and decoding fails.
-				require.NoError(t, env.Ledger().Update(key, data[:3]))
+				require.NotEmpty(t, data)
+				truncated := data[:len(data)-1]
+				_, err = state.ParseDirectoryNode(truncated)
+				require.Error(t, err)
+				require.NoError(t, env.Ledger().Update(key, truncated))
 			case missingLastPage:
 				require.NoError(t, env.Ledger().Erase(lastKey))
 			}
