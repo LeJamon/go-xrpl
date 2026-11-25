@@ -102,23 +102,14 @@ func recoverPriorFeeSchedule(
 		if settings.PreviousTxnLgrSeq > current.LedgerIndex {
 			return drops.Fees{}, fmt.Errorf("partial FeeSettings points to future ledger %d from seed ledger %d", settings.PreviousTxnLgrSeq, current.LedgerIndex)
 		}
-		prior := current
-		if settings.PreviousTxnLgrSeq != current.LedgerIndex {
-			var err error
-			prior, err = client.Snapshot(ctx, settings.PreviousTxnLgrSeq)
+		for current.LedgerIndex > settings.PreviousTxnLgrSeq {
+			parent, err := previousFeeSnapshot(ctx, client, current)
 			if err != nil {
-				return drops.Fees{}, fmt.Errorf("loading FeeSettings history ledger %d: %w", settings.PreviousTxnLgrSeq, err)
+				return drops.Fees{}, err
 			}
-			if prior == nil || prior.LedgerIndex != settings.PreviousTxnLgrSeq {
-				return drops.Fees{}, fmt.Errorf("FeeSettings history ledger %d returned an invalid snapshot", settings.PreviousTxnLgrSeq)
-			}
-			if settings.PreviousTxnLgrSeq+1 == current.LedgerIndex {
-				if err := validateReplaySnapshotLink(prior, current, current.LedgerIndex); err != nil {
-					return drops.Fees{}, fmt.Errorf("validating FeeSettings history link: %w", err)
-				}
-			}
+			current = parent
 		}
-		return feeScheduleFromReferencedLedger(ctx, client, prior, settings.PreviousTxnID)
+		return feeScheduleFromReferencedLedger(ctx, client, current, settings.PreviousTxnID)
 	}
 
 	// Older entries may not carry threading fields. Walk the available ledger
@@ -149,15 +140,23 @@ func recoverPriorFeeSchedule(
 		if current.LedgerIndex <= 1 {
 			return genesisFeeSchedule(ctx, client, current)
 		}
-		previous, err := client.Snapshot(ctx, current.LedgerIndex-1)
+		previous, err := previousFeeSnapshot(ctx, client, current)
 		if err != nil {
-			return drops.Fees{}, fmt.Errorf("loading FeeSettings history ledger %d: %w", current.LedgerIndex-1, err)
-		}
-		if err := validateReplaySnapshotLink(previous, current, current.LedgerIndex); err != nil {
-			return drops.Fees{}, fmt.Errorf("validating FeeSettings history at ledger %d: %w", current.LedgerIndex-1, err)
+			return drops.Fees{}, err
 		}
 		current = previous
 	}
+}
+
+func previousFeeSnapshot(ctx context.Context, client replayHistoryClient, current *statecompare.LedgerSnapshot) (*statecompare.LedgerSnapshot, error) {
+	previous, err := client.Snapshot(ctx, current.LedgerIndex-1)
+	if err != nil {
+		return nil, fmt.Errorf("loading FeeSettings history ledger %d: %w", current.LedgerIndex-1, err)
+	}
+	if err := validateReplaySnapshotLink(previous, current, current.LedgerIndex); err != nil {
+		return nil, fmt.Errorf("validating FeeSettings history at ledger %d: %w", current.LedgerIndex-1, err)
+	}
+	return previous, nil
 }
 
 func transactionsOrEmpty(ctx context.Context, client replayHistoryClient, snapshot *statecompare.LedgerSnapshot) ([]statecompare.Transaction, error) {

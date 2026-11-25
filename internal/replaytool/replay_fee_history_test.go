@@ -74,6 +74,17 @@ func TestResolveReplaySeedFeesInheritsVerifiedSetFeeHistory(t *testing.T) {
 	if want := (drops.Fees{Base: 0, Reserve: -7, Increment: 20}); got != want {
 		t.Fatalf("resolved fees = %+v, want %+v", got, want)
 	}
+
+	client.snapshots[6] = current
+	descendant := &statecompare.LedgerSnapshot{LedgerIndex: 7, ParentHash: current.LedgerHash}
+	inherited, err := resolveReplaySeedFees(context.Background(), client, descendant, stateMap, drops.DefaultFees(), nil)
+	if err != nil || inherited != got {
+		t.Fatalf("fees two ledgers after SetFee = %+v, %v", inherited, err)
+	}
+	current.ParentHash = [32]byte{0xff}
+	if _, err := resolveReplaySeedFees(context.Background(), client, descendant, stateMap, drops.DefaultFees(), nil); err == nil {
+		t.Fatal("accepted a referenced SetFee from a different parent chain")
+	}
 }
 
 func TestResolveReplaySeedFeesRejectsUnavailableHistory(t *testing.T) {
