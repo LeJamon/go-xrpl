@@ -2923,9 +2923,9 @@ func TestNFTokenMintOffer(t *testing.T) {
 
 	for _, tc := range []struct {
 		name            string
-		withDestination bool
+		withOfferFields bool
 	}{
-		{name: "MintWithAmount", withDestination: true},
+		{name: "MintWithDestinationAndExpiration", withOfferFields: true},
 		{name: "MintWithAmountOnly"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2940,8 +2940,10 @@ func TestNFTokenMintOffer(t *testing.T) {
 			sequence, balance := env.Seq(alice), env.Balance(alice)
 			offerKey := keylet.NFTokenOffer(alice.ID, sequence)
 			mint := nft.NFTokenMint(alice, 0).Transferable().Amount(tx.NewXRPAmount(1_000_000))
-			if tc.withDestination {
-				mint.Destination(buyer)
+			var expiration uint32
+			if tc.withOfferFields {
+				expiration = uint32(env.Now().Unix()-protocol.RippleEpochUnix) + 25
+				mint.Destination(buyer).Expiration(expiration)
 			}
 			result := env.Submit(mint.Build())
 			jtx.RequireTxSuccess(t, result)
@@ -2957,8 +2959,9 @@ func TestNFTokenMintOffer(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, entry.LsfSellNFToken, offer.Flags)
 			require.Equal(t, uint64(1_000_000), offer.Amount)
-			require.Equal(t, tc.withDestination, offer.HasDestination)
-			if tc.withDestination {
+			require.Equal(t, expiration, offer.Expiration)
+			require.Equal(t, tc.withOfferFields, offer.HasDestination)
+			if tc.withOfferFields {
 				require.Equal(t, buyer.ID, offer.Destination)
 			}
 		})
