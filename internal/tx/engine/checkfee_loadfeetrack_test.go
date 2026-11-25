@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/amm"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
@@ -56,6 +57,16 @@ func TestCheckFee_LoadFeeTrackScaling(t *testing.T) {
 				t.Errorf("checkFee(fee=%s) = %v, want %v", tt.fee, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCheckFeeNegativeAMMOwnerReserve(t *testing.T) {
+	increment := drops.XRPAmount(-1)
+	e := &Engine{config: txcore.EngineConfig{BaseFee: 10, ReserveIncrement: uint64(increment), OpenLedger: true}}
+	txn := &amm.AMMCreate{BaseTx: *txcore.NewBaseTx(txcore.TypeAMMCreate, "rTestAccount")}
+	txn.Fee = "0"
+	if got := e.checkFee(txn, txn.GetCommon(), &state.AccountRoot{Balance: 100}); got != ter.TefEXCEPTION {
+		t.Fatalf("open ledger returned %v, want tefEXCEPTION", got)
 	}
 }
 

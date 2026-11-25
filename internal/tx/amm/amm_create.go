@@ -94,11 +94,7 @@ func (a *AMMCreate) Flatten() (map[string]any, error) {
 // AMMCreate requires one owner reserve as the fee (not the standard base fee).
 // Reference: rippled AMMCreate.cpp calculateBaseFee — returns view.fees().increment
 func (a *AMMCreate) CalculateBaseFee(_ tx.ReadOnlyLedgerView, config tx.EngineConfig) (uint64, error) {
-	increment := config.Fees().Increment
-	if increment <= 0 {
-		return 0, nil
-	}
-	return uint64(increment), nil
+	return config.ReserveIncrement, nil
 }
 
 func (a *AMMCreate) RequiredAmendments() [][32]byte {
