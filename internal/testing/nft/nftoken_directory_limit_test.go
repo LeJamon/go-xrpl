@@ -53,8 +53,14 @@ func TestNFTokenOfferBeyondLegacyDirectoryLimit(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(nft.NFTokenMint(seller, 0).Transferable().Build()))
 	env.Close()
 
-	dir := keylet.OwnerDir(buyer.ID)
-	fillNFTOfferDirectory(t, env, dir, state.DirectoryNode{Owner: buyer.ID}, state.DirNodeMaxPages-1)
+	ownerDir := keylet.OwnerDir(buyer.ID)
+	fillNFTOfferDirectory(t, env, ownerDir, state.DirectoryNode{Owner: buyer.ID}, state.DirNodeMaxPages-1)
+	rawID, err := hex.DecodeString(id)
+	require.NoError(t, err)
+	require.Len(t, rawID, 32)
+	tokenID := [32]byte(rawID)
+	buyDir := keylet.NFTBuys(tokenID)
+	fillNFTOfferDirectory(t, env, buyDir, state.DirectoryNode{NFTokenID: tokenID, Flags: entry.LsfNFTokenBuyOffers}, state.DirNodeMaxPages)
 	sequence, balance := env.Seq(buyer), env.Balance(buyer)
 	offerKey := keylet.NFTokenOffer(buyer.ID, sequence)
 	result := env.Submit(nft.NFTokenCreateBuyOffer(buyer, id, tx.NewXRPAmount(1), seller).Build())
@@ -69,11 +75,17 @@ func TestNFTokenOfferBeyondLegacyDirectoryLimit(t *testing.T) {
 	offer, err := state.ParseNFTokenOffer(data)
 	require.NoError(t, err)
 	require.Equal(t, state.DirNodeMaxPages, offer.OwnerNode)
-	data, err = env.LedgerEntry(keylet.DirPage(dir.Key, offer.OwnerNode))
-	require.NoError(t, err)
-	page, err := state.ParseDirectoryNode(data)
-	require.NoError(t, err)
-	require.Equal(t, [][32]byte{offerKey.Key}, page.Indexes)
+	require.Equal(t, state.DirNodeMaxPages+1, offer.NFTokenOfferNode)
+	for _, key := range []keylet.Keylet{
+		keylet.DirPage(ownerDir.Key, offer.OwnerNode),
+		keylet.DirPage(buyDir.Key, offer.NFTokenOfferNode),
+	} {
+		data, err := env.LedgerEntry(key)
+		require.NoError(t, err)
+		page, err := state.ParseDirectoryNode(data)
+		require.NoError(t, err)
+		require.Equal(t, [][32]byte{offerKey.Key}, page.Indexes)
+	}
 }
 
 func TestNFTokenOfferDirectoryFailure(t *testing.T) {
