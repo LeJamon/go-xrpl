@@ -2905,6 +2905,22 @@ func TestFixNFTokenRemint(t *testing.T) {
 // Reference: rippled NFToken_test.cpp testFeatMintWithOffer
 // ===========================================================================
 func TestNFTokenMintOffer(t *testing.T) {
+	t.Run("Disabled", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		env.DisableFeature("NFTokenMintOffer")
+		alice, buyer := jtx.NewAccount("alice"), jtx.NewAccount("buyer")
+		env.Fund(alice, buyer)
+		env.Close()
+
+		for _, mint := range []*nft.NFTokenMintBuilder{
+			nft.NFTokenMint(alice, 0).Amount(tx.NewXRPAmount(1)),
+			nft.NFTokenMint(alice, 0).Destination(buyer),
+			nft.NFTokenMint(alice, 0).Expiration(1),
+		} {
+			jtx.RequireTxFail(t, env.Submit(mint.Build()), "temDISABLED")
+		}
+	})
+
 	for _, tc := range []struct {
 		name            string
 		withDestination bool
