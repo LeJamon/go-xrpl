@@ -523,8 +523,8 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, preserve
 		DirKey: dirKey.Key,
 	}
 
-	// Check if root directory exists
-	exists, err := view.Exists(dirKey)
+	// A different entry type at the root key also prevents directory creation.
+	exists, err := view.Exists(keylet.Keylet{Key: dirKey.Key, Type: ledgerfields.TypeAny})
 	if err != nil {
 		return nil, err
 	}
@@ -565,9 +565,12 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, preserve
 	if err != nil {
 		return nil, err
 	}
+	if rootData == nil {
+		return nil, fmt.Errorf("%w: root is not a DirectoryNode", ErrMalformedDirectory)
+	}
 	root, err := ParseDirectoryNode(rootData)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: parse root: %w", ErrMalformedDirectory, err)
 	}
 
 	// Get the last page number from root's IndexPrevious
@@ -583,9 +586,12 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, preserve
 		if err != nil {
 			return nil, err
 		}
+		if pageData == nil {
+			return nil, fmt.Errorf("%w: root back-pointer broken", ErrMalformedDirectory)
+		}
 		node, err = ParseDirectoryNode(pageData)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: parse last page: %w", ErrMalformedDirectory, err)
 		}
 	}
 
@@ -607,14 +613,14 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, preserve
 			// (book) branch too, raising LogicError on a double insertion rather
 			// than silently corrupting the book. Reference: ApplyView.cpp:71-74.
 			if slices.Contains(node.Indexes, itemKey) {
-				return nil, fmt.Errorf("dirInsert: double insertion")
+				return nil, fmt.Errorf("%w: dirInsert: double insertion", ErrMalformedDirectory)
 			}
 			node.Indexes = append(node.Indexes, itemKey)
 		} else {
 			sortIndexes(node.Indexes)
 			pos := sortedSearch(node.Indexes, itemKey)
 			if pos < len(node.Indexes) && node.Indexes[pos] == itemKey {
-				return nil, fmt.Errorf("dirInsert: double insertion")
+				return nil, fmt.Errorf("%w: dirInsert: double insertion", ErrMalformedDirectory)
 			}
 			node.Indexes = append(node.Indexes, [32]byte{})
 			copy(node.Indexes[pos+1:], node.Indexes[pos:])

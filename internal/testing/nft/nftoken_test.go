@@ -19,7 +19,9 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/account"
 	"github.com/LeJamon/go-xrpl/internal/tx/nftoken"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/stretchr/testify/require"
 )
 
 // TestDiagnosticMultiPage verifies NFTokenPage handling with multiple pages
@@ -2903,45 +2905,67 @@ func TestFixNFTokenRemint(t *testing.T) {
 // Reference: rippled NFToken_test.cpp testFeatMintWithOffer
 // ===========================================================================
 func TestNFTokenMintOffer(t *testing.T) {
-	env := jtx.NewTestEnv(t)
+	t.Run("Disabled", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		env.DisableFeature("NFTokenMintOffer")
+		alice, buyer := jtx.NewAccount("alice"), jtx.NewAccount("buyer")
+		env.Fund(alice, buyer)
+		env.Close()
 
-	alice := jtx.NewAccount("alice")
-	buyer := jtx.NewAccount("buyer")
-	env.Fund(alice, buyer)
-	env.Close()
-
-	// Test: Mint with amount creates offer (requires featureNFTokenMintOffer)
-	t.Run("MintWithAmount", func(t *testing.T) {
-		result := env.Submit(nft.NFTokenMint(alice, 0).
-			Transferable().
-			Amount(tx.NewXRPAmount(1000000)).
-			Destination(buyer).
-			Build())
-		// Depending on whether featureNFTokenMintOffer is enabled
-		if result.Code == "temDISABLED" {
-			t.Log("featureNFTokenMintOffer not enabled, test passes as expected")
-			return
+		for _, mint := range []*nft.NFTokenMintBuilder{
+			nft.NFTokenMint(alice, 0).Amount(tx.NewXRPAmount(1)),
+			nft.NFTokenMint(alice, 0).Destination(buyer),
+			nft.NFTokenMint(alice, 0).Expiration(1),
+		} {
+			jtx.RequireTxFail(t, env.Submit(mint.Build()), "temDISABLED")
 		}
-		if result.Success {
+	})
+
+	for _, tc := range []struct {
+		name            string
+		withOfferFields bool
+	}{
+		{name: "MintWithDestinationAndExpiration", withOfferFields: true},
+		{name: "MintWithAmountOnly"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := jtx.NewTestEnv(t)
+			env.EnableFeature("NFTokenMintOffer")
+			alice := jtx.NewAccount("alice")
+			buyer := jtx.NewAccount("buyer")
+			env.FundAmount(alice, env.ReserveBase()+2*env.ReserveIncrement())
+			env.Fund(buyer)
 			env.Close()
-			// Verify offer was created (ownerCount should be 2: NFT + offer)
+
+			sequence, balance := env.Seq(alice), env.Balance(alice)
+			offerKey := keylet.NFTokenOffer(alice.ID, sequence)
+			mint := nft.NFTokenMint(alice, 0).Transferable().Amount(tx.NewXRPAmount(1_000_000))
+			var expiration uint32
+			if tc.withOfferFields {
+				expiration = uint32(env.Now().Unix()-protocol.RippleEpochUnix) + 25
+				mint.Destination(buyer).Expiration(expiration)
+			}
+			result := env.Submit(mint.Build())
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
+			require.Equal(t, env.BaseFee(), result.Fee)
+			jtx.RequireSequence(t, env, alice, sequence+1)
+			jtx.RequireBalance(t, env, alice, balance-result.Fee)
 			jtx.RequireOwnerCount(t, env, alice, 2)
-		}
-	})
 
-	// Test: Amount field without destination/expiration requires amendment
-	t.Run("MintWithAmountOnly", func(t *testing.T) {
-		result := env.Submit(nft.NFTokenMint(alice, 1).
-			Transferable().
-			Amount(tx.NewXRPAmount(1000000)).
-			Build())
-		// Without destination, this should fail
-		if result.Code == "temDISABLED" || result.Code == "temMALFORMED" {
-			// Expected
-		}
-	})
-
-	env.Close()
+			data, err := env.LedgerEntry(offerKey)
+			require.NoError(t, err)
+			offer, err := state.ParseNFTokenOffer(data)
+			require.NoError(t, err)
+			require.Equal(t, entry.LsfSellNFToken, offer.Flags)
+			require.Equal(t, uint64(1_000_000), offer.Amount)
+			require.Equal(t, expiration, offer.Expiration)
+			require.Equal(t, tc.withOfferFields, offer.HasDestination)
+			if tc.withOfferFields {
+				require.Equal(t, buyer.ID, offer.Destination)
+			}
+		})
+	}
 }
 
 // ===========================================================================

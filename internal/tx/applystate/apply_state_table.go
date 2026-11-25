@@ -231,7 +231,7 @@ func (t *ApplyStateTable) Insert(k keylet.Keylet, data []byte) error {
 	// Check if already exists in tracking
 	if entry, exists := t.items[k.Key]; exists {
 		if entry.Action != ActionErase {
-			return fmt.Errorf("entry already exists")
+			return ledgercore.ErrEntryExists
 		}
 		// Re-inserting a deleted entry becomes a modify
 		entry.Action = ActionModify
@@ -243,13 +243,13 @@ func (t *ApplyStateTable) Insert(k keylet.Keylet, data []byte) error {
 		return nil
 	}
 
-	// Check base
-	exists, err := t.base.Exists(k)
+	// An occupied ledger index blocks insertion regardless of its entry type.
+	exists, err := t.base.Exists(keylet.Keylet{Type: entry.TypeAny, Key: k.Key})
 	if err != nil {
 		return t.record(err)
 	}
 	if exists {
-		return fmt.Errorf("entry already exists")
+		return ledgercore.ErrEntryExists
 	}
 
 	// Track as insert

@@ -354,7 +354,7 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) ter.Result {
 		return insertResult.Result
 	}
 
-	ctx.Account.OwnerCount += uint32(insertResult.PagesCreated)
+	ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, insertResult.PagesCreated)
 
 	// MintedNFTokens was already incremented above.
 
@@ -373,7 +373,7 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Reference: rippled NFTokenMint.cpp doApply — tokenOfferCreateApply
 	if n.Amount != nil {
 		seqProxy := n.GetCommon().SeqProxy()
-		result := tokenOfferCreateApply(ctx, accountID, tokenID, n.Amount, n.Destination, n.Expiration, seqProxy, mPriorBalance)
+		result := tokenOfferCreateApply(ctx, tokenID, seqProxy, *n.Amount, n.Destination, n.Expiration, true)
 		if result != ter.TesSUCCESS {
 			return result
 		}
