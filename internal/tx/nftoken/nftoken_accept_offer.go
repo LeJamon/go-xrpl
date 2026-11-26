@@ -359,27 +359,15 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 			}
 		}
 
-		// Fund check: the buyer must have sufficient funds. rippled checks both
-		// native and issued amounts here via accountFunds, so the XRP path is not
-		// deferred to doApply.
-		// Reference: rippled NFTokenAcceptOffer.cpp preclaim.
-		if buyOffer.AmountIOU != nil {
-			buyAmount, err := offerIOUToAmount(buyOffer)
-			if err != nil {
-				return ter.TecINTERNAL
-			}
-			funds := mptutil.AccountFunds(ctx.View, buyOffer.Owner, buyAmount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
-			if funds.Compare(buyAmount) < 0 {
-				return ter.TecINSUFFICIENT_FUNDS
-			}
-		} else {
-			// XRP buy offer: the buyer needs enough liquid XRP. accountFunds for a
-			// native amount returns balance minus reserve in both amendment eras.
-			needed := tx.NewXRPAmount(int64(buyOffer.Amount))
-			funds := mptutil.AccountFunds(ctx.View, buyOffer.Owner, needed, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
-			if funds.Compare(needed) < 0 {
-				return ter.TecINSUFFICIENT_FUNDS
-			}
+		// The buyer's funds are read before the fee is charged: a delegate or
+		// sponsor paying the fee may be the buy-offer owner.
+		needed, err := offerIOUToAmount(buyOffer)
+		if err != nil {
+			return ter.TecINTERNAL
+		}
+		funds := mptutil.AccountFunds(ctx.PreclaimLedger(), buyOffer.Owner, needed, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+		if funds.Compare(needed) < 0 {
+			return ter.TecINSUFFICIENT_FUNDS
 		}
 
 		// Trust line authorization checks (fixEnforceNFTokenTrustlineV2)

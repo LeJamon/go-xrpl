@@ -7,6 +7,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -138,66 +139,24 @@ func accountSendIOU(
 	)
 }
 
-// payIOU wraps accountSendIOU with post-hoc balance validation: after the
-// payment is processed, it checks that neither party's balance went negative
-// (which would indicate insufficient funds to cover the IOU transfer rate).
-// Reference: rippled NFTokenAcceptOffer.cpp pay()
+// payIOU sends amount, then fails with tecINSUFFICIENT_FUNDS if either party's
+// funds went negative, which catches a payer unable to cover the transfer rate.
+// Funds read zero on a frozen line, so a frozen negative balance passes.
 func payIOU(ctx *tx.ApplyContext, from, to [20]byte, amount tx.Amount) ter.Result {
 	if amount.IsZero() {
 		return ter.TesSUCCESS
 	}
 
-	result := accountSendIOU(ctx.View, from, to, amount, ctx.NumberContext())
-
-	if result != ter.TesSUCCESS {
+	if result := accountSendIOU(ctx.View, from, to, amount, ctx.NumberContext()); result != ter.TesSUCCESS {
 		return result
 	}
 
-	// Post-hoc check: ensure neither party went negative after accounting for transfer rate
-	if accountIOUBalanceSignum(ctx.View, from, amount) < 0 {
-		return ter.TecINSUFFICIENT_FUNDS
+	for _, account := range [...][20]byte{from, to} {
+		if mptutil.AccountFundsSigned(ctx.View, account, amount, true).Signum() < 0 {
+			return ter.TecINSUFFICIENT_FUNDS
+		}
 	}
-	if accountIOUBalanceSignum(ctx.View, to, amount) < 0 {
-		return ter.TecINSUFFICIENT_FUNDS
-	}
-
 	return ter.TesSUCCESS
-}
-
-// accountIOUBalanceSignum returns the signum of an account's IOU balance.
-// Unlike mptutil.AccountFunds, this returns -1 if the balance is negative (doesn't clamp to 0).
-// Used for post-hoc checks after IOU transfers.
-// Returns: -1 (negative/owes), 0 (zero), 1 (positive/has funds)
-// For the IOU issuer, always returns 1 (issuer has unlimited).
-func accountIOUBalanceSignum(view tx.LedgerView, accountID [20]byte, amount tx.Amount) int {
-	issuerID, err := state.DecodeAccountID(amount.Issuer)
-	if err != nil {
-		return 0
-	}
-
-	// Issuer always has positive balance in their own currency
-	if accountID == issuerID {
-		return 1
-	}
-
-	trustLineKey := keylet.Line(accountID, issuerID, amount.Currency)
-	data, err := view.Read(trustLineKey)
-	if err != nil || data == nil {
-		return 0
-	}
-
-	rs, err := state.ParseRippleState(data)
-	if err != nil {
-		return 0
-	}
-
-	accountIsLow := state.CompareAccountIDs(accountID, issuerID) < 0
-	balance := rs.Balance
-	if !accountIsLow {
-		balance = balance.Negate()
-	}
-
-	return balance.Signum()
 }
 
 // checkIssuerTrustLineForAccept checks that the NFT issuer has a trust line for the
