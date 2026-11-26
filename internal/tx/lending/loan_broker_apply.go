@@ -386,7 +386,7 @@ func (l *LoanBrokerCoverDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.
 		if res := mptutil.CheckFrozen(view, accountID, asset); res != ter.TesSUCCESS {
 			return res
 		}
-		if res := mptutil.CheckFrozen(view, b.Account, asset); res != ter.TesSUCCESS {
+		if res := mptutil.CheckDeepFrozen(view, b.Account, asset); res != ter.TesSUCCESS {
 			return res
 		}
 	}
@@ -659,7 +659,7 @@ func (l *LoanBrokerCoverClawback) determineBrokerID(view tx.ReadOnlyLedgerView) 
 
 // clawAmount computes the amount that may be clawed: capped at
 // CoverAvailable minus the minimum required cover, and at the requested Amount
-// when present.
+// when present. Integral assets round the result to the nearest whole unit.
 func (l *LoanBrokerCoverClawback) clawAmount(b *loanBrokerData, vinfo *vault.VaultLending, rules *amendment.Rules) (lmath.N, ter.Result) {
 	fix320 := rules != nil && rules.FixCleanup3_2_0Enabled()
 	integral := assetIntegral(vinfo.Asset)
@@ -674,14 +674,16 @@ func (l *LoanBrokerCoverClawback) clawAmount(b *loanBrokerData, vinfo *vault.Vau
 	if maxClaw.Signum() <= 0 {
 		return lmath.NumScaled(0, 0, lendingNumberScale(rules)), ter.TecINSUFFICIENT_FUNDS
 	}
-	if l.Amount == nil || l.Amount.IsZero() {
-		return maxClaw, ter.TesSUCCESS
+	claw := maxClaw
+	if l.Amount != nil && !l.Amount.IsZero() {
+		if req := amountToLendNumForRules(*l.Amount, rules); req.Cmp(maxClaw) <= 0 {
+			claw = req
+		}
 	}
-	req := amountToLendNumForRules(*l.Amount, rules)
-	if req.Cmp(maxClaw) > 0 {
-		return maxClaw, ter.TesSUCCESS
+	if integral {
+		claw = lmath.RoundAssetNearest(lmath.Asset{Integral: true}, claw, 0)
 	}
-	return req, ter.TesSUCCESS
+	return claw, ter.TesSUCCESS
 }
 
 func (l *LoanBrokerCoverClawback) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {

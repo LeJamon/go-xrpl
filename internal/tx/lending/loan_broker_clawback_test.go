@@ -3,6 +3,7 @@ package lending
 import (
 	"context"
 	"encoding/hex"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -212,6 +213,72 @@ func TestLoanBrokerCoverClawbackMPTAuthorization(t *testing.T) {
 			t.Fatalf("Preclaim() = %v, want tecINTERNAL", got)
 		}
 	})
+}
+
+func TestLoanBrokerCoverClawbackMPTRoundsToAsset(t *testing.T) {
+	cases := []struct {
+		name      string
+		fix320    bool
+		wantCover int64
+	}{
+		{name: "fixCleanup3_2_0 disabled", fix320: false, wantCover: 1_000},
+		{name: "fixCleanup3_2_0 enabled", fix320: true, wantCover: 1_001},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCoverClawbackFixture(t, entry.LsfMPTCanClawback)
+			features := [][32]byte{
+				amendment.FeatureMPTokensV1,
+				amendment.FeatureSingleAssetVault,
+				amendment.FeatureLendingProtocol,
+			}
+			if tc.fix320 {
+				features = append(features, amendment.FeatureFixCleanup3_2_0)
+			}
+			rules := amendment.NewRules(features)
+			f.view.rules = rules
+			f.config = tx.EngineConfig{Rules: rules}
+
+			brokerKey := keylet.LoanBrokerByID(f.brokerID)
+			broker, err := readLoanBroker(f.view, brokerKey)
+			if err != nil || broker == nil {
+				t.Fatalf("read broker: broker=%v err=%v", broker, err)
+			}
+			broker.DebtTotal = "10001"
+			broker.CoverRateMinimum = 10_000
+			data, err := serializeLoanBrokerForRules(broker, rules)
+			if err != nil {
+				t.Fatalf("serialize broker: %v", err)
+			}
+			f.view.data[brokerKey.Key] = data
+			f.txn.Amount = nil
+
+			if got := f.txn.Preclaim(f.view, f.config); got != ter.TesSUCCESS {
+				t.Fatalf("Preclaim() = %v, want tesSUCCESS", got)
+			}
+			ctx := &tx.ApplyContext{
+				View: f.view, AccountID: f.issuerID, Config: f.config,
+				Metadata: &tx.Metadata{}, Log: xrpllog.Discard(), Ctx: context.Background(),
+			}
+			if got := f.txn.Apply(ctx); got != ter.TesSUCCESS {
+				t.Fatalf("Apply() = %v, want tesSUCCESS", got)
+			}
+			broker, err = readLoanBroker(f.view, brokerKey)
+			if err != nil || broker == nil {
+				t.Fatalf("read broker: broker=%v err=%v", broker, err)
+			}
+			if broker.CoverAvailable != strconv.FormatInt(tc.wantCover, 10) {
+				t.Fatalf("CoverAvailable = %s, want %d", broker.CoverAvailable, tc.wantCover)
+			}
+			holding, err := state.ParseMPToken(f.view.data[keylet.MPTokenByID(f.mptID, f.brokerAcct).Key])
+			if err != nil {
+				t.Fatalf("parse holding: %v", err)
+			}
+			if holding.MPTAmount != uint64(tc.wantCover) {
+				t.Fatalf("broker holding = %d, want %d", holding.MPTAmount, tc.wantCover)
+			}
+		})
+	}
 }
 
 func repeatedAccountID(value byte) [20]byte {
