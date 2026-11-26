@@ -112,7 +112,8 @@ func (s *Service) runStateBaseRecertification(ctx context.Context, wake <-chan s
 		}
 		retry = nil
 		if err := s.recertifyValidatedStateBase(ctx); err != nil {
-			if errors.Is(err, errStateBaseRecertificationSuperseded) {
+			superseded := errors.Is(err, errStateBaseRecertificationSuperseded)
+			if superseded {
 				s.logger.Info("Obsolete validated state base re-certification canceled", "reason", err)
 			} else {
 				s.logger.Warn("Validated state base re-certification unavailable",
@@ -121,7 +122,9 @@ func (s *Service) runStateBaseRecertification(ctx context.Context, wake <-chan s
 			if ctx.Err() != nil {
 				return
 			}
-			if s.ReplayBlocked() {
+			// A superseded walk is not a verification failure: the superseding
+			// change requests a fresh walk, which a retry backoff would drop.
+			if superseded || s.ReplayBlocked() {
 				continue
 			}
 			timer = time.NewTimer(30 * time.Second)
