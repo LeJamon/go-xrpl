@@ -68,7 +68,7 @@ var (
 	FeatureFixEnforceNFTokenTrustline    = registerFix("fixEnforceNFTokenTrustline", SupportedYes, VoteDefaultNo)
 	FeatureFixReducedOffersV2            = registerFix("fixReducedOffersV2", SupportedYes, VoteDefaultNo)
 	FeatureNFTokenMintOffer              = registerFeature("NFTokenMintOffer", SupportedYes, VoteDefaultNo)
-	FeatureFixAMMv1_1                    = registerFix("fixAMMv1_1", SupportedYes, VoteDefaultNo)
+	FeatureFixAMMv1_1                    = registerRetired("fixAMMv1_1")
 	FeatureFixPreviousTxnID              = registerFix("fixPreviousTxnID", SupportedYes, VoteDefaultNo)
 	FeatureFixXChainRewardRounding       = registerFix("fixXChainRewardRounding", SupportedYes, VoteDefaultNo)
 	FeatureFixEmptyDID                   = registerFix("fixEmptyDID", SupportedYes, VoteDefaultNo)
