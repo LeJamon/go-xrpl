@@ -43,13 +43,9 @@ func (n XRPLNumber) RoundToAssetScale(integral bool, scale int, mode RoundingMod
 		v := n.ToInt64WithMode(mode)
 		return NewXRPLNumberScaled(v, 0, n.scale, RoundToNearest)
 	}
-	iou := newIOUAmountValueRoundedWithContext(
-		n.Mantissa(),
-		n.Exponent(),
-		mode,
-		NewNumberContext(MantissaScaleSmall, true),
-	)
-	iou = roundIOUToScale(iou, scale, mode)
+	ctx := NewNumberContext(n.scale, true)
+	iou := newIOUAmountValueRoundedWithContext(n.Mantissa(), n.Exponent(), mode, ctx)
+	iou = roundIOUToScale(iou, scale, mode, ctx)
 	if iou.IsZero() {
 		return n.zero()
 	}
@@ -77,7 +73,9 @@ func (n XRPLNumber) AssetExponent(integral bool, mode RoundingMode) int {
 // exponent already meets or exceeds scale there is nothing to drop. Otherwise it
 // adds a reference value (mantissa cMinValue at exponent scale) so IOU addition
 // truncates the sub-scale digits under mode, then subtracts the reference back.
-func roundIOUToScale(v IOUAmountValue, scale int, mode RoundingMode) IOUAmountValue {
+// Each addition rounds to ctx's Number scale before snapping to 16 digits, so a
+// to-nearest result can differ from rounding the exact sum once.
+func roundIOUToScale(v IOUAmountValue, scale int, mode RoundingMode, ctx NumberContext) IOUAmountValue {
 	if v.IsZero() || v.Exponent() >= scale {
 		return v
 	}
@@ -87,7 +85,6 @@ func roundIOUToScale(v IOUAmountValue, scale int, mode RoundingMode) IOUAmountVa
 	}
 	ref := IOUAmountValue{mantissa: refMant, exponent: scale}
 	negRef := IOUAmountValue{mantissa: -refMant, exponent: scale}
-	numberContext := NewNumberContext(MantissaScaleSmall, true)
-	sum := addIOUValuesRoundedWithContext(v, ref, mode, numberContext)
-	return addIOUValuesRoundedWithContext(sum, negRef, mode, numberContext)
+	sum := addIOUValuesRoundedWithContext(v, ref, mode, ctx)
+	return addIOUValuesRoundedWithContext(sum, negRef, mode, ctx)
 }
