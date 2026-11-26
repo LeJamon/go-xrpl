@@ -540,7 +540,7 @@ func withdrawToDestExceedsLimit(view tx.ReadOnlyLedgerView, from, to [20]byte, a
 	if from == to || to == issuerID {
 		return ter.TesSUCCESS
 	}
-	owed := lineBalanceInTerms(view, to, issuerID, amount.Currency, numberContext)
+	owed := creditBalance(view, to, issuerID, amount.Currency, numberContext)
 	if owed.Signum() <= 0 {
 		limit := lineLimit(view, to, issuerID, amount.Currency, numberContext)
 		amountN := numberContext.FromAmount(amount, state.RoundToNearest)
@@ -557,9 +557,9 @@ func withdrawToDestExceedsLimit(view tx.ReadOnlyLedgerView, from, to [20]byte, a
 	return ter.TesSUCCESS
 }
 
-// lineBalanceInTerms returns the trust-line balance between account and issuer
-// expressed in account's terms (positive means the account holds the asset).
-func lineBalanceInTerms(view tx.ReadOnlyLedgerView, account, issuer [20]byte, currency string, numberContext state.NumberContext) state.XRPLNumber {
+// creditBalance returns what account owes issuer on their trust line: negative
+// means the account holds the asset, positive means it owes the issuer.
+func creditBalance(view tx.ReadOnlyLedgerView, account, issuer [20]byte, currency string, numberContext state.NumberContext) state.XRPLNumber {
 	data, err := view.Read(keylet.Line(account, issuer, currency))
 	if err != nil || len(data) == 0 {
 		return numberContext.Int(0)
@@ -569,7 +569,7 @@ func lineBalanceInTerms(view tx.ReadOnlyLedgerView, account, issuer [20]byte, cu
 		return numberContext.Int(0)
 	}
 	bal := numberContext.FromAmount(rs.Balance, state.RoundToNearest)
-	if bytes.Compare(account[:], issuer[:]) > 0 {
+	if bytes.Compare(account[:], issuer[:]) < 0 {
 		bal = bal.Negate()
 	}
 	return bal
