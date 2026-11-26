@@ -312,7 +312,7 @@ func (p *Payment) validate(rules *amendment.Rules) error {
 
 func badPaymentAsset(a tx.Amount, mpTokensV2 bool) bool {
 	if !a.IsNative() && !a.IsMPT() {
-		return a.Currency == tx.BadCurrency
+		return tx.IsBadCurrency(a.Currency)
 	}
 	if !mpTokensV2 || !a.IsMPT() {
 		return false

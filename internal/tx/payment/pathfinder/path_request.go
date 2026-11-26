@@ -68,7 +68,7 @@ type PathRequest struct {
 // ID, matching rippled's validAsset check.
 func IsValidAsset(amount tx.Amount) bool {
 	issue := payment.GetIssue(amount)
-	return issue.IsConsistent() && (issue.IsMPT || issue.IsXRP() || issue.Currency != tx.BadCurrency)
+	return issue.IsConsistent() && (issue.IsMPT || issue.IsXRP() || !tx.IsBadCurrency(issue.Currency))
 }
 
 // ParseSourceMPTID parses the uint192 syntax accepted for an MPT entry in

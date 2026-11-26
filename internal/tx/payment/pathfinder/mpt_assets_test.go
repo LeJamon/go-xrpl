@@ -148,7 +148,8 @@ func TestMPTAccountLinksAllowHolderBalanceWhenIssuanceIsMaxed(t *testing.T) {
 
 func TestIsValidAssetRejectsBadCurrency(t *testing.T) {
 	issuer := state.EncodeAccountIDSafe(testAccountID(0x81))
-	require.False(t, IsValidAsset(state.NewIssuedAmountFromFloat64(1, tx.BadCurrency, issuer)))
+	require.False(t, IsValidAsset(state.NewIssuedAmountFromFloat64(1, "XRP", issuer)))
+	require.False(t, IsValidAsset(state.NewIssuedAmountFromFloat64(1, "0000000000000000000000005852500000000000", issuer)))
 	require.True(t, IsValidAsset(state.NewXRPAmountFromInt(1)))
 	require.True(t, IsValidAsset(state.NewIssuedAmountFromFloat64(1, "USD", issuer)))
 }

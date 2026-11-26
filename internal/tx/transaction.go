@@ -10,6 +10,7 @@ import (
 	binarytypes "github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // Common errors
@@ -160,10 +161,12 @@ type PreclaimerWithError interface {
 	PreclaimWithError(view ReadOnlyLedgerView, config EngineConfig) (ter.Result, error)
 }
 
-// BadCurrency is the currency code that may not name a non-native (issued)
-// amount: the ISO code "XRP" collides with the native asset.
-// Reference: rippled protocol/UintTypes.cpp badCurrency()
-const BadCurrency = "XRP"
+// IsBadCurrency reports whether currency is the reserved 160-bit code that may
+// not name an issued amount: the ISO code "XRP", which collides with the native
+// asset. The binary codec renders it as 40-char hex; "XRP" is its JSON spelling.
+func IsBadCurrency(currency string) bool {
+	return currency == "XRP" || keylet.CurrencyBytes(currency) == keylet.BadCurrency()
+}
 
 // BatchFeeCalculator is implemented by transaction types that need custom minimum fee calculation.
 // Used by Batch transactions which require a higher fee based on inner tx count and signers.

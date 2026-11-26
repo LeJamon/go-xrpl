@@ -85,10 +85,10 @@ func (o *OfferCreate) Validate() error {
 
 	// Check for bad currency (XRP as non-native currency code)
 	// Reference: lines 126-130
-	if !saTakerPays.IsNative() && !saTakerPays.IsMPT() && saTakerPays.Currency == badCurrency() {
+	if !saTakerPays.IsNative() && !saTakerPays.IsMPT() && tx.IsBadCurrency(saTakerPays.Currency) {
 		return ter.Errorf(ter.TemBAD_CURRENCY, "cannot use XRP as non-native currency code")
 	}
-	if !saTakerGets.IsNative() && !saTakerGets.IsMPT() && saTakerGets.Currency == badCurrency() {
+	if !saTakerGets.IsNative() && !saTakerGets.IsMPT() && tx.IsBadCurrency(saTakerGets.Currency) {
 		return ter.Errorf(ter.TemBAD_CURRENCY, "cannot use XRP as non-native currency code")
 	}
 
@@ -119,12 +119,6 @@ func badOfferMPTAsset(amount tx.Amount) bool {
 	}
 	id, err := mptutil.DecodeID(amount.MPTIssuanceID())
 	return err != nil || mptutil.Issuer(id) == ([20]byte{})
-}
-
-// badCurrency returns the "bad" currency code - using XRP as a non-native currency code
-// Reference: rippled protocol/Issue.h badCurrency()
-func badCurrency() string {
-	return "XRP"
 }
 
 // GetFlagsMask returns the invalid-flags mask enforced by the engine at the
