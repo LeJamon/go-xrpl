@@ -179,7 +179,7 @@ func adjustXRPBalance(ctx *tx.ApplyContext, account [20]byte, delta int64) ter.R
 	if account == ctx.AccountID {
 		nb := int64(ctx.Account.Balance) + delta
 		if nb < 0 {
-			return ter.TecINSUFFICIENT_FUNDS
+			return xrpShortfall(ctx)
 		}
 		ctx.Account.Balance = uint64(nb)
 		return ter.TesSUCCESS
@@ -190,7 +190,7 @@ func adjustXRPBalance(ctx *tx.ApplyContext, account [20]byte, delta int64) ter.R
 	}
 	nb := int64(ar.Balance) + delta
 	if nb < 0 {
-		return ter.TecINSUFFICIENT_FUNDS
+		return xrpShortfall(ctx)
 	}
 	ar.Balance = uint64(nb)
 	data, serr := state.SerializeAccountRoot(ar)

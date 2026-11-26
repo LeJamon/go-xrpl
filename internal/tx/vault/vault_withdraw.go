@@ -389,6 +389,15 @@ func (v *VaultWithdraw) withdrawalAmounts(
 			return assetsTotalN, availN, assetsWithdrawnN, 0, fix320, ter.TecPRECISION_LOSS
 		}
 	}
+	// An integral payout must fit its amount type: past int64 the conversion
+	// overflows (tecPATH_DRY via the Apply recover), and native drops above the
+	// XRP cap are an unrecoverable amount-construction failure.
+	if integral {
+		units := assetsWithdrawnN.ToInt64WithMode(state.RoundTowardsZero)
+		if asset.IsNative() && uint64(units) > state.MaxNativeDrops {
+			return assetsTotalN, availN, assetsWithdrawnN, 0, fix320, ter.TefEXCEPTION
+		}
+	}
 
 	shares = uint64(sharesRedeemedN.ToInt64WithMode(state.RoundTowardsZero))
 	if rules.Enabled(amendment.FeatureFixCleanup3_4_0) && shares != issuance.OutstandingAmount {
