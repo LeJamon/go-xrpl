@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/internal/tx/signerlist"
 	xchaintx "github.com/LeJamon/go-xrpl/internal/tx/xchain"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -461,6 +462,22 @@ func TestXChainIOUClaimDeliversExactAmountWithTransferRate(t *testing.T) {
 }
 
 func TestXChainRewardRoundingPreventsOverDistribution(t *testing.T) {
+	tests := []struct {
+		name      string
+		reward    int64
+		witnesses int
+	}{
+		{name: "two drops over three attesters", reward: 2, witnesses: 3},
+		{name: "five drops over two attesters", reward: 5, witnesses: 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			testRewardRoundingOverDistribution(t, test.reward, test.witnesses)
+		})
+	}
+}
+
+func testRewardRoundingOverDistribution(t *testing.T, rewardDrops int64, witnessCount int) {
 	env := jtx.NewTestEnv(t)
 	env.EnableFeature("XChainBridge")
 	env.DisableFeature("fixXChainRewardRounding")
@@ -470,10 +487,9 @@ func TestXChainRewardRoundingPreventsOverDistribution(t *testing.T) {
 	issuingDoor := env.MasterAccount()
 	owner := jtx.NewAccount("xchain-rounding-owner")
 	destination := jtx.NewAccount("xchain-rounding-destination")
-	witnesses := []*jtx.Account{
-		jtx.NewAccount("xchain-rounding-witness-1"),
-		jtx.NewAccount("xchain-rounding-witness-2"),
-		jtx.NewAccount("xchain-rounding-witness-3"),
+	witnesses := make([]*jtx.Account, witnessCount)
+	for i := range witnesses {
+		witnesses[i] = jtx.NewAccount("xchain-rounding-witness-" + strconv.Itoa(i+1))
 	}
 	accounts := make([]*jtx.Account, 0, 3+len(witnesses))
 	accounts = append(accounts, lockingDoor, owner, destination)
@@ -484,9 +500,9 @@ func TestXChainRewardRoundingPreventsOverDistribution(t *testing.T) {
 	env.Close()
 
 	bridge := nativeBridge(lockingDoor, issuingDoor)
-	reward := txcore.NewXRPAmount(2)
+	reward := txcore.NewXRPAmount(rewardDrops)
 	jtx.RequireTxSuccess(t, env.Submit(xchaintx.NewXChainCreateBridge(lockingDoor.Address, bridge, reward)))
-	signers := signerlist.NewSignerListSet(lockingDoor.Address, 3)
+	signers := signerlist.NewSignerListSet(lockingDoor.Address, uint32(witnessCount))
 	for _, witness := range witnesses {
 		signers.AddSigner(witness.Address, 1)
 	}
@@ -631,4 +647,100 @@ func TestXChainClaimDestinationTagAndDepositAuth(t *testing.T) {
 	require.Equal(t, "tecNO_PERMISSION", env.Submit(claim(&tag)).Code)
 	env.Preauthorize(destination, lockingDoor)
 	jtx.RequireTxSuccess(t, env.Submit(claim(&tag)))
+}
+
+func newAccountCreateBridge(t *testing.T, env *jtx.TestEnv, prefix string) (xchaintx.XChainBridge, *jtx.Account, *jtx.Account) {
+	t.Helper()
+	locking := jtx.NewAccount(prefix + "-locking")
+	owner := jtx.NewAccount(prefix + "-owner")
+	witness := jtx.NewAccount(prefix + "-witness")
+	for _, account := range []*jtx.Account{locking, owner, witness} {
+		env.FundAmount(account, uint64(5_000*dropsPerXRP))
+	}
+	env.Close()
+
+	bridge := nativeBridge(locking, env.MasterAccount())
+	minimum := txcore.NewXRPAmount(200 * dropsPerXRP)
+	create := xchaintx.NewXChainCreateBridge(locking.Address, bridge, txcore.NewXRPAmount(0))
+	create.MinAccountCreateAmount = &minimum
+	jtx.RequireTxSuccess(t, env.Submit(create))
+	signers := signerlist.NewSignerListSet(locking.Address, 1)
+	signers.AddSigner(witness.Address, 1)
+	jtx.RequireTxSuccess(t, env.Submit(signers))
+	return bridge, owner, witness
+}
+
+func TestXChainAccountCreateAttestationChecksWindowBeforeChain(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	env.EnableFeature("XChainBridge")
+	env.Close()
+
+	bridge, owner, witness := newAccountCreateBridge(t, env, "xchain-order")
+	destination := jtx.NewAccount("xchain-order-destination")
+	amount := txcore.NewXRPAmount(210 * dropsPerXRP)
+	reward := txcore.NewXRPAmount(0)
+
+	wrongChain := func(count uint64) *xchaintx.XChainAddAccountCreateAttestation {
+		att := newCreateAttestation(t, witness, witness, bridge, count, owner.Address, destination.Address, amount, reward)
+		att.WasLockingChainSend = 1
+		signCreateAttestation(t, att, witness)
+		return att
+	}
+	require.Equal(t, "tecXCHAIN_ACCOUNT_CREATE_PAST", env.Submit(wrongChain(0)).Code)
+	require.Equal(t, "tecXCHAIN_ACCOUNT_CREATE_TOO_MANY", env.Submit(wrongChain(128)).Code)
+	require.Equal(t, "tecXCHAIN_WRONG_CHAIN", env.Submit(wrongChain(1)).Code)
+}
+
+func TestPseudoTransactionConsumesZeroAccountSequence(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	env.EnableFeature("XChainBridge")
+	env.Close()
+
+	bridge, owner, witness := newAccountCreateBridge(t, env, "xchain-zero")
+	zero := jtx.NewAccountWithAddress("zero", "rrrrrrrrrrrrrrrrrrrrrhoLvTp")
+	amount := txcore.NewXRPAmount(210 * dropsPerXRP)
+	reward := txcore.NewXRPAmount(0)
+	jtx.RequireTxSuccess(t, env.Submit(xchaintx.NewXChainAccountCreateCommit(
+		owner.Address, bridge, zero.Address, amount, reward,
+	)))
+	jtx.RequireTxSuccess(t, env.Submit(newCreateAttestation(
+		t, witness, witness, bridge, 1, owner.Address, zero.Address, amount, reward,
+	)))
+	jtx.RequireAccountExists(t, env, zero)
+	require.Greater(t, env.Seq(zero), uint32(1))
+	env.Close()
+
+	zeroKey := keylet.Account(zero.ID).Key
+	touchesZero := func(result jtx.TxResult) bool {
+		t.Helper()
+		require.NotNil(t, result.Metadata)
+		for _, node := range result.Metadata.AffectedNodes {
+			if strings.EqualFold(node.LedgerIndex, hex.EncodeToString(zeroKey[:])) {
+				return true
+			}
+		}
+		return false
+	}
+
+	result := env.SubmitPseudo(newEnableAmendment(1))
+	jtx.RequireTxSuccess(t, result)
+	require.Equal(t, uint32(1), env.Seq(zero))
+	require.True(t, touchesZero(result))
+
+	result = env.SubmitPseudo(newEnableAmendment(2))
+	jtx.RequireTxSuccess(t, result)
+	require.Equal(t, uint32(1), env.Seq(zero))
+	require.False(t, touchesZero(result))
+}
+
+func newEnableAmendment(id byte) *pseudo.EnableAmendment {
+	var hash [32]byte
+	hash[31] = id
+	ea := &pseudo.EnableAmendment{BaseTx: *txcore.NewBaseTx(txcore.TypeAmendment, "rrrrrrrrrrrrrrrrrrrrrhoLvTp")}
+	ea.Amendment = strings.ToUpper(hex.EncodeToString(hash[:]))
+	ea.Common.Fee = "0"
+	flags, seq := uint32(0), uint32(0)
+	ea.Common.Flags = &flags
+	ea.Common.Sequence = &seq
+	return ea
 }

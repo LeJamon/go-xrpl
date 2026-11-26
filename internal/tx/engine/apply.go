@@ -519,6 +519,14 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transa
 		Ctx:             reqCtx,
 	}
 
+	if err := applyPseudoSourceAccount(table, tx.GetCommon(), txHash); err != nil {
+		return txcore.ApplyResult{
+			Result:  ter.TefINTERNAL,
+			Applied: false,
+			Message: fmt.Sprintf("failed to update pseudo-transaction source account: %v", err),
+		}
+	}
+
 	// Apply the transaction
 	var result ter.Result
 	if appliable, ok := tx.(txcore.Appliable); ok {
@@ -576,6 +584,38 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transa
 // payExternalFeeOnTable) so the fee/seq commit semantics stay in lockstep.
 // Reference: rippled applySteps.cpp — likelyToClaimFee tec still enters
 // Transactor::operator() which calls reset(fee) before returning.
+// applyPseudoSourceAccount runs the generic source-account step for a
+// pseudo-transaction, whose source is the zero account. That AccountRoot
+// normally does not exist, but when it does (e.g. created by an XChain
+// account-create attestation) its Sequence and AccountTxnID are consumed like
+// any other source account. The fee is always zero, so the balance is untouched.
+func applyPseudoSourceAccount(table *applystate.ApplyStateTable, common *txcore.Common, txHash [32]byte) error {
+	key := keylet.Account([20]byte{})
+	data, err := table.Read(key)
+	if err != nil || data == nil {
+		return err
+	}
+	account, err := state.ParseAccountRoot(data)
+	if err != nil {
+		return err
+	}
+	if common.TicketSequence == nil {
+		var seq uint32
+		if common.Sequence != nil {
+			seq = *common.Sequence
+		}
+		account.Sequence = seq + 1
+	}
+	if account.HasAccountTxnID {
+		account.AccountTxnID = txHash
+	}
+	updated, err := state.SerializeAccountRoot(account)
+	if err != nil {
+		return err
+	}
+	return table.Update(key, updated)
+}
+
 func (e *Engine) commitPreclaimTec(ctx context.Context, tx txcore.Transaction, txHash [32]byte, fee uint64, origResult ter.Result, metadata *txcore.Metadata) (ter.Result, uint64) {
 	common := tx.GetCommon()
 	accountID, _ := state.DecodeAccountID(common.Account)

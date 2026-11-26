@@ -3,6 +3,7 @@ package xchain
 import (
 	"encoding/hex"
 	"errors"
+	"math/big"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -525,7 +526,6 @@ func finalizeClaim(
 		share := rewardShare(
 			rewardPool,
 			uint64(len(rewardAccounts)),
-			ctx.NumberContext(),
 			ctx.Rules().Enabled(amendment.FeatureFixXChainRewardRounding),
 		)
 		distributed := tx.NewXRPAmount(0)
@@ -595,17 +595,50 @@ func finalizeClaim(
 	return result
 }
 
-func rewardShare(pool tx.Amount, count uint64, numberContext state.NumberContext, roundDown bool) tx.Amount {
-	if count == 0 {
+// rewardShare splits the XRP reward pool across count attesters with the
+// STAmount divide algorithm: both operands are lifted to at least 10^15, the
+// quotient is taken to 17 extra digits plus a bias of 5 in the last digit, and
+// the result is rounded to drops, downward under fixXChainRewardRounding and to
+// nearest (ties to even) otherwise. Without the fix the bias can push the
+// shares past the pool, which the caller reports as tecINTERNAL.
+func rewardShare(pool tx.Amount, count uint64, roundDown bool) tx.Amount {
+	drops := pool.Drops()
+	if count == 0 || drops == 0 {
 		return pool
 	}
-	mode := state.RoundToNearest
-	if roundDown {
-		mode = state.RoundDownward
+	ten := big.NewInt(10)
+	minMantissa := big.NewInt(1e15)
+	num := new(big.Int).Abs(big.NewInt(drops))
+	den := new(big.Int).SetUint64(count)
+	exponent := -17
+	for num.Cmp(minMantissa) < 0 {
+		num.Mul(num, ten)
+		exponent--
 	}
-	numerator := numberContext.FromAmount(pool, mode)
-	denominator := numberContext.FromInt(int64(count), mode)
-	return numberContext.ToAmount(numerator.DivRounded(denominator, mode), pool, mode)
+	for den.Cmp(minMantissa) < 0 {
+		den.Mul(den, ten)
+		exponent++
+	}
+	num.Mul(num, big.NewInt(1e17))
+	num.Quo(num, den)
+	num.Add(num, big.NewInt(5))
+
+	scale := new(big.Int).Exp(ten, big.NewInt(int64(-exponent)), nil)
+	share, rem := num.QuoRem(num, scale, new(big.Int))
+	negative := drops < 0
+	if rem.Sign() != 0 {
+		if roundDown {
+			if negative {
+				share.Add(share, big.NewInt(1))
+			}
+		} else if c := new(big.Int).Lsh(rem, 1).Cmp(scale); c > 0 || (c == 0 && share.Bit(0) == 1) {
+			share.Add(share, big.NewInt(1))
+		}
+	}
+	if negative {
+		share.Neg(share)
+	}
+	return tx.NewXRPAmount(share.Int64())
 }
 
 func claimOwnerFields(data []byte) (string, uint64, string, ter.Result) {
@@ -815,9 +848,6 @@ func (x *XChainAddAccountCreateAttestation) Apply(ctx *tx.ApplyContext) ter.Resu
 		return result
 	}
 	srcChain := otherChain(dstChain)
-	if destinationChain(x.WasLockingChainSend != 0) != dstChain {
-		return ter.TecXCHAIN_WRONG_CHAIN
-	}
 	signers, result := loadSignerSet(outer, bridge)
 	if result != ter.TesSUCCESS {
 		return result
@@ -839,6 +869,9 @@ func (x *XChainAddAccountCreateAttestation) Apply(ctx *tx.ApplyContext) ter.Resu
 	}
 	if x.XChainAccountCreateCount >= claimCount+maxAccountCreateClaims {
 		return ter.TecXCHAIN_ACCOUNT_CREATE_TOO_MANY
+	}
+	if destinationChain(x.WasLockingChainSend != 0) != dstChain {
+		return ter.TecXCHAIN_WRONG_CHAIN
 	}
 	claimBridge, err := claimBridgeKeylet(x.XChainBridge)
 	if err != nil {

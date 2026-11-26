@@ -77,7 +77,6 @@ func TestAssetEqualUsesCurrencyBytes(t *testing.T) {
 }
 
 func TestRewardShareRounding(t *testing.T) {
-	numberContext := state.NewNumberContext(state.MantissaScaleSmall, false)
 	tests := []struct {
 		name      string
 		pool      int64
@@ -87,13 +86,18 @@ func TestRewardShareRounding(t *testing.T) {
 	}{
 		{name: "legacy nearest rounds up", pool: 2, count: 3, want: 1},
 		{name: "fixed rounds positive down", pool: 2, count: 3, roundDown: true, want: 0},
-		{name: "legacy tie to even", pool: 1, count: 2, want: 0},
+		{name: "legacy bias breaks half upward", pool: 1, count: 2, want: 1},
+		{name: "legacy overpays odd pool", pool: 5, count: 2, want: 3},
+		{name: "fixed odd pool", pool: 5, count: 2, roundDown: true, want: 2},
+		{name: "exact split", pool: 6, count: 3, want: 2},
+		{name: "fixed exact split", pool: 6, count: 3, roundDown: true, want: 2},
+		{name: "max pool single attester", pool: 100_000_000_000_000_000, count: 1, want: 100_000_000_000_000_000},
 		{name: "fixed rounds negative down", pool: -1, count: 2, roundDown: true, want: -1},
-		{name: "legacy negative tie to even", pool: -1, count: 2, want: 0},
+		{name: "legacy negative bias", pool: -1, count: 2, want: -1},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := rewardShare(tx.NewXRPAmount(test.pool), test.count, numberContext, test.roundDown)
+			got := rewardShare(tx.NewXRPAmount(test.pool), test.count, test.roundDown)
 			assert.Equal(t, test.want, got.Drops())
 		})
 	}
