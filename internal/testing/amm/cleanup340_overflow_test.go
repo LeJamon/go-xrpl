@@ -146,3 +146,47 @@ func TestAMMDepositLPTokenOverflowReturnsInternalAndClaimsFee(t *testing.T) {
 		}
 	}
 }
+
+func TestAMMDepositEPriceNegativeDiscriminant(t *testing.T) {
+	for _, cleanup := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cleanup=%t", cleanup), func(t *testing.T) {
+			env := amm.NewAMMTestEnv(t)
+			if cleanup {
+				env.EnableFeatureNow("fixCleanup3_4_0")
+			} else {
+				env.DisableFeature("fixCleanup3_4_0")
+				env.Close()
+			}
+			env.Fund()
+			env.Trust(env.Alice, env.GW, "USD", 1e9)
+			env.PayIOU(env.GW, env.Alice, "USD", 1e6)
+			env.Close()
+			jtx.RequireTxSuccess(t, env.Submit(amm.AMMCreate(env.GW,
+				amm.IOUAmount(env.GW, "USD", 1000), amm.IOUAmount(env.GW, "EUR", 1000)).TradingFee(1000).Build()))
+			env.Close()
+
+			key := coreamm.ComputeAMMKeylet(env.USD, env.EUR)
+			poolBefore, err := env.LedgerEntry(key)
+			require.NoError(t, err)
+			balanceBefore, sequenceBefore := env.Balance(env.Alice), env.Seq(env.Alice)
+
+			deposit := amm.AMMDeposit(env.Alice, env.USD, env.EUR).
+				Amount(amm.IOUAmount(env.GW, "USD", 0)).
+				EPrice(tx.NewIssuedAmount(1_000_000_008, -9, "USD", env.GW.Address)).
+				LimitLPToken()
+			result := env.Submit(deposit.Build())
+			if cleanup {
+				require.Equal(t, "tecAMM_FAILED", result.Code)
+				require.Equal(t, balanceBefore-10, env.Balance(env.Alice))
+				require.Equal(t, sequenceBefore+1, env.Seq(env.Alice))
+			} else {
+				require.Equal(t, "tefEXCEPTION", result.Code)
+				require.Equal(t, balanceBefore, env.Balance(env.Alice))
+				require.Equal(t, sequenceBefore, env.Seq(env.Alice))
+			}
+			poolAfter, err := env.LedgerEntry(key)
+			require.NoError(t, err)
+			require.Equal(t, poolBefore, poolAfter)
+		})
+	}
+}

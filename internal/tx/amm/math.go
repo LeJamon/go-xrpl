@@ -34,6 +34,7 @@ func isAMMAmountOverflowPanic(value any) bool {
 		"XRPLNumber::normalize overflow",
 		"XRPLNumber::operator rep() overflow",
 		"XRPLNumber::operator rep() rounding overflow",
+		"XRPLNumber::root2 nan",
 		"XRPLNumber::shiftExponent overflow":
 		return true
 	default:
@@ -176,11 +177,7 @@ func (m numberMath) solveQuadraticEq(a, b, c state.XRPLNumber, mode state.Roundi
 	four := m.int(4)
 	bb := b.MulRounded(b, mode)
 	fourAC := four.MulRounded(a, mode).MulRounded(c, mode)
-	disc := bb.AddRounded(fourAC.Negate(), mode)
-	if disc.Signum() < 0 {
-		return m.zero()
-	}
-	sqrtDisc := disc.Root2Rounded(mode)
+	sqrtDisc := bb.AddRounded(fourAC.Negate(), mode).Root2Rounded(mode)
 	numerator := b.Negate().AddRounded(sqrtDisc, mode)
 	return m.div(numerator, two.MulRounded(a, mode), mode)
 }
