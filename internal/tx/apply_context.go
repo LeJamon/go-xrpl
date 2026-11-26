@@ -190,6 +190,15 @@ func (ctx *ApplyContext) PriorBalance() uint64 {
 	return ctx.Account.Balance + ctx.SourceFeeCharged
 }
 
+// PreclaimLedger returns the ledger as preclaim sees it, before fee, sequence,
+// and ticket changes. Direct callers without PreclaimView get View.
+func (ctx *ApplyContext) PreclaimLedger() ReadOnlyLedgerView {
+	if ctx.PreclaimView == nil {
+		return ctx.View
+	}
+	return ctx.PreclaimView
+}
+
 // PreclaimAccount returns the source account before transaction application.
 // Direct callers without PreclaimView must supply the original ownership state
 // in Account; only the source fee is restored in that case.

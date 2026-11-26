@@ -106,7 +106,17 @@ func AccountFunds(view tx.ReadOnlyLedgerView, accountID [20]byte, amount tx.Amou
 	if amount.IsNative() {
 		return tx.XRPLiquid(view, accountID, 0, reserveBase, reserveIncrement)
 	}
+	return issuedFunds(view, accountID, amount, fhZeroIfFrozen, true)
+}
 
+// AccountFundsSigned is AccountFunds for an issued amount that keeps a
+// negative trust-line balance instead of clamping it to zero, as rippled's
+// accountFunds does. Callers use its sign to detect a holder left owing.
+func AccountFundsSigned(view tx.ReadOnlyLedgerView, accountID [20]byte, amount tx.Amount, fhZeroIfFrozen bool) tx.Amount {
+	return issuedFunds(view, accountID, amount, fhZeroIfFrozen, false)
+}
+
+func issuedFunds(view tx.ReadOnlyLedgerView, accountID [20]byte, amount tx.Amount, fhZeroIfFrozen, clampNegative bool) tx.Amount {
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
 		return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
@@ -158,7 +168,7 @@ func AccountFunds(view tx.ReadOnlyLedgerView, accountID [20]byte, amount tx.Amou
 	if state.CompareAccountIDs(accountID, issuerID) >= 0 {
 		balance = balance.Negate()
 	}
-	if balance.Signum() <= 0 {
+	if sign := balance.Signum(); sign == 0 || (clampNegative && sign < 0) {
 		return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 	}
 	return state.NewIssuedAmountFromValue(balance.IOU().Mantissa(), balance.IOU().Exponent(), amount.Currency, amount.Issuer)

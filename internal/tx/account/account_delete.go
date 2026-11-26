@@ -175,10 +175,7 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 	const maxDeletableDirEntries = 1000
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	preclaimView := ctx.PreclaimView
-	if preclaimView == nil {
-		preclaimView = ctx.View
-	}
+	preclaimView := ctx.PreclaimLedger()
 	deletableCount := 0
 	if err := state.DirForEach(preclaimView, ownerDirKey, func(itemKey [32]byte) error {
 		data, err := preclaimView.Read(keylet.Keylet{Key: itemKey})
