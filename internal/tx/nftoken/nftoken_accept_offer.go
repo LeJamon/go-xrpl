@@ -107,6 +107,50 @@ func (n *NFTokenAcceptOffer) RequiredAmendments() [][32]byte {
 	return nil
 }
 
+// Preclaim loads both offers so that a pre-fixCleanup3_1_3 tecEXPIRED is
+// deferred on a retry pass instead of being committed from Apply.
+func (n *NFTokenAcceptOffer) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig) ter.Result {
+	for _, offerID := range []string{n.NFTokenBuyOffer, n.NFTokenSellOffer} {
+		if offerID == "" {
+			continue
+		}
+		if _, _, _, result := loadAcceptOffer(view, offerID, config.ParentCloseTime, config.RequireRules()); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+	return ter.TesSUCCESS
+}
+
+// loadAcceptOffer reads an offer named by the transaction. Before
+// fixCleanup3_1_3 an expired offer fails with tecEXPIRED; afterwards it is
+// returned with expired set so that Apply deletes it.
+func loadAcceptOffer(view state.ReadOnlyLedgerView, offerID string, closeTime uint32, rules *amendment.Rules) (*state.NFTokenOfferData, keylet.Keylet, bool, ter.Result) {
+	idBytes, err := hex.DecodeString(offerID)
+	if err != nil || len(idBytes) != 32 {
+		return nil, keylet.Keylet{}, false, ter.TemINVALID
+	}
+	key := keylet.Keylet{Type: entry.TypeNFTokenOffer, Key: [32]byte(idBytes)}
+	if key.Key == ([32]byte{}) {
+		return nil, key, false, ter.TecOBJECT_NOT_FOUND
+	}
+	data, err := view.Read(key)
+	if err != nil || data == nil {
+		return nil, key, false, ter.TecOBJECT_NOT_FOUND
+	}
+	offer, err := state.ParseNFTokenOffer(data)
+	if err != nil {
+		return nil, key, false, ter.TefINTERNAL
+	}
+	expired := tx.HasExpiredField(offer.Expiration, closeTime)
+	if expired && !rules.Enabled(amendment.FeatureFixCleanup3_1_3) {
+		return nil, key, false, ter.TecEXPIRED
+	}
+	if offer.Negative {
+		return nil, key, false, ter.TemBAD_OFFER
+	}
+	return offer, key, expired, ter.TesSUCCESS
+}
+
 // Reference: rippled NFTokenAcceptOffer.cpp preclaim + doApply
 // IMPORTANT: Check order must match rippled's preclaim exactly:
 //  1. Load offers (existence, expiration, negative amount)
@@ -124,98 +168,23 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	accountID := ctx.AccountID
 
-	// --- Step 1: Load offers (checkOffer equivalent) ---
-	// Reference: rippled NFTokenAcceptOffer.cpp preclaim lines 66-97
 	var buyOffer, sellOffer *state.NFTokenOfferData
 	var buyOfferKey, sellOfferKey keylet.Keylet
-	var normalizedBrokerFee *tx.Amount
-	// With fixCleanup3_1_3, an expired offer no longer fails at this point;
-	// it flows through the remaining checks and is deleted (with tecEXPIRED)
-	// once the rest of processing would otherwise have succeeded.
-	cleanupExpired := ctx.Rules().Enabled(amendment.FeatureFixCleanup3_1_3)
 	var buyOfferExpired, sellOfferExpired bool
-
+	var normalizedBrokerFee *tx.Amount
+	closeTime := ctx.Config.ParentCloseTime
 	if n.NFTokenBuyOffer != "" {
-		buyOfferIDBytes, err := hex.DecodeString(n.NFTokenBuyOffer)
-		if err != nil || len(buyOfferIDBytes) != 32 {
-			return ter.TemINVALID
-		}
-		var buyOfferKeyBytes [32]byte
-		copy(buyOfferKeyBytes[:], buyOfferIDBytes)
-		buyOfferKey = keylet.Keylet{Type: entry.TypeNFTokenOffer, Key: buyOfferKeyBytes}
-
-		// Zero offer ID check
-		var zeroID [32]byte
-		if buyOfferKeyBytes == zeroID {
-			return ter.TecOBJECT_NOT_FOUND
-		}
-
-		buyOfferData, err := ctx.View.Read(buyOfferKey)
-		if err != nil || buyOfferData == nil {
-			ctx.Log.Warn("nftoken accept offer: buy offer not found",
-				"buyOffer", n.NFTokenBuyOffer,
-			)
-			return ter.TecOBJECT_NOT_FOUND
-		}
-		buyOffer, err = state.ParseNFTokenOffer(buyOfferData)
-		if err != nil {
-			ctx.Log.Error("nftoken accept offer: failed to parse buy offer", "error", err)
-			return ter.TefINTERNAL
-		}
-
-		// Check expiration
-		if tx.HasExpiredField(buyOffer.Expiration, ctx.Config.ParentCloseTime) {
-			if !cleanupExpired {
-				ctx.Log.Warn("nftoken accept offer: buy offer expired")
-				return ter.TecEXPIRED
-			}
-			buyOfferExpired = true
-		}
-
-		if buyOffer.Negative {
-			return ter.TemBAD_OFFER
+		var result ter.Result
+		buyOffer, buyOfferKey, buyOfferExpired, result = loadAcceptOffer(ctx.View, n.NFTokenBuyOffer, closeTime, ctx.Rules())
+		if result != ter.TesSUCCESS {
+			return result
 		}
 	}
-
 	if n.NFTokenSellOffer != "" {
-		sellOfferIDBytes, err := hex.DecodeString(n.NFTokenSellOffer)
-		if err != nil || len(sellOfferIDBytes) != 32 {
-			return ter.TemINVALID
-		}
-		var sellOfferKeyBytes [32]byte
-		copy(sellOfferKeyBytes[:], sellOfferIDBytes)
-		sellOfferKey = keylet.Keylet{Type: entry.TypeNFTokenOffer, Key: sellOfferKeyBytes}
-
-		// Zero offer ID check
-		var zeroID [32]byte
-		if sellOfferKeyBytes == zeroID {
-			return ter.TecOBJECT_NOT_FOUND
-		}
-
-		sellOfferData, err := ctx.View.Read(sellOfferKey)
-		if err != nil || sellOfferData == nil {
-			ctx.Log.Warn("nftoken accept offer: sell offer not found",
-				"sellOffer", n.NFTokenSellOffer,
-			)
-			return ter.TecOBJECT_NOT_FOUND
-		}
-		sellOffer, err = state.ParseNFTokenOffer(sellOfferData)
-		if err != nil {
-			ctx.Log.Error("nftoken accept offer: failed to parse sell offer", "error", err)
-			return ter.TefINTERNAL
-		}
-
-		// Check expiration
-		if tx.HasExpiredField(sellOffer.Expiration, ctx.Config.ParentCloseTime) {
-			if !cleanupExpired {
-				ctx.Log.Warn("nftoken accept offer: sell offer expired")
-				return ter.TecEXPIRED
-			}
-			sellOfferExpired = true
-		}
-
-		if sellOffer.Negative {
-			return ter.TemBAD_OFFER
+		var result ter.Result
+		sellOffer, sellOfferKey, sellOfferExpired, result = loadAcceptOffer(ctx.View, n.NFTokenSellOffer, closeTime, ctx.Rules())
+		if result != ter.TesSUCCESS {
+			return result
 		}
 	}
 
@@ -544,7 +513,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 	// would otherwise have been consumed, so instead delete it from the ledger
 	// and return tecEXPIRED. The engine's tec-recovery re-applies these erasures
 	// as DeletedNodes. Only offers that are actually expired are removed.
-	if cleanupExpired && (buyOfferExpired || sellOfferExpired) {
+	if buyOfferExpired || sellOfferExpired {
 		if buyOfferExpired {
 			if err := deleteTokenOffer(ctx.View, buyOfferKey); err != nil {
 				return ter.TecINTERNAL

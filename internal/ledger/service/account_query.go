@@ -872,6 +872,7 @@ type AccountChannel struct {
 	CancelAfter        uint32 `json:"cancel_after,omitempty"`
 	SourceTag          uint32 `json:"source_tag,omitempty"`
 	DestinationTag     uint32 `json:"destination_tag,omitempty"`
+	HasCancelAfter     bool   `json:"-"`
 	HasSourceTag       bool   `json:"-"`
 	HasDestTag         bool   `json:"-"`
 }
@@ -965,8 +966,9 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 			if payChan.Expiration > 0 {
 				channel.Expiration = payChan.Expiration
 			}
-			if payChan.CancelAfter > 0 {
+			if payChan.HasCancelAfter {
 				channel.CancelAfter = payChan.CancelAfter
+				channel.HasCancelAfter = true
 			}
 			if payChan.HasSourceTag {
 				channel.SourceTag = payChan.SourceTag

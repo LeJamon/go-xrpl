@@ -557,6 +557,51 @@ func TestPayChan_CancelAfter(t *testing.T) {
 			})
 		}
 	})
+
+	// A zero CancelAfter is rejected with fixPayChanCancelAfter. Without it the
+	// channel stores CancelAfter as present-zero, so the next Fund closes it.
+	t.Run("FixPayChanCancelAfter_Zero", func(t *testing.T) {
+		for _, withFix := range []bool{true, false} {
+			label := "WithFix"
+			if !withFix {
+				label = "WithoutFix"
+			}
+			t.Run(label, func(t *testing.T) {
+				env := jtx.NewTestEnv(t)
+				if !withFix {
+					env.DisableFeature("fixPayChanCancelAfter")
+				}
+
+				alice := jtx.NewAccount("alice")
+				bob := jtx.NewAccount("bob")
+				env.FundAmount(alice, uint64(jtx.XRP(10000)))
+				env.FundAmount(bob, uint64(jtx.XRP(10000)))
+				env.Close()
+
+				chanK := chanKeylet(alice, bob, env.Seq(alice))
+				create := ChannelCreate(alice, bob, xrp(1000), 100, alice.PublicKeyHex()).
+					CancelAfterRipple(0).Build()
+				if withFix {
+					submitExpect(t, env, create, "tecEXPIRED")
+					require.False(t, chanExists(env, chanK))
+					return
+				}
+				jtx.RequireTxSuccess(t, env.Submit(create))
+				env.Close()
+
+				cancelAfter, present := chanCancelAfter(env, chanK)
+				require.True(t, present)
+				require.Zero(t, cancelAfter)
+
+				preAlice := env.Balance(alice)
+				result := env.Submit(ChannelFund(alice, hex.EncodeToString(chanK.Key[:]), xrp(1000)).Build())
+				jtx.RequireTxSuccess(t, result)
+				env.Close()
+				require.False(t, chanExists(env, chanK))
+				require.Equal(t, preAlice+uint64(xrp(1000))-env.BaseFee(), env.Balance(alice))
+			})
+		}
+	})
 }
 
 // TestPayChan_SettleDelay tests the settle delay behavior.
