@@ -349,10 +349,11 @@ func (a *AMMDeposit) Preclaim(view tx.ReadOnlyLedgerView, config tx.EngineConfig
 	}
 
 	if flags&tfLPToken != 0 {
-		if r := checkFreezeForAsset(a.Asset); r != ter.TesSUCCESS {
+		// Pool assets are checked in the AMM's canonical order, not the tx's.
+		if r := checkFreezeForAsset(amm.Asset); r != ter.TesSUCCESS {
 			return r
 		}
-		if r := checkFreezeForAsset(a.Asset2); r != ter.TesSUCCESS {
+		if r := checkFreezeForAsset(amm.Asset2); r != ter.TesSUCCESS {
 			return r
 		}
 	} else {
