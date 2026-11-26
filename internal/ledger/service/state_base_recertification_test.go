@@ -137,6 +137,17 @@ func (f *stateBaseRecertificationFixture) invalidate(t *testing.T) {
 	require.EqualValues(t, fastLoadCheckpointInvalidated, f.svc.fastLoadCheckpointState.Load())
 }
 
+// installWorkerNodeStore swaps the NodeStore while no re-certification worker
+// runs, so a background request cannot walk, and publish from, the old store.
+func (f *stateBaseRecertificationFixture) installWorkerNodeStore(db nodestore.Database) {
+	f.svc.StopStateBaseRecertification()
+	f.svc.nodeStore = bindNodeStore(db)
+	f.svc.recertificationMu.Lock()
+	f.svc.recertificationStopped = false
+	f.svc.recertificationCancel, f.svc.recertificationWake, f.svc.recertificationDone = nil, nil, nil
+	f.svc.recertificationMu.Unlock()
+}
+
 func requireStateBaseRecertificationUnavailable(t *testing.T, f *stateBaseRecertificationFixture) {
 	t.Helper()
 	proof, found := f.svc.currentValidatedStateBaseProof()
@@ -412,14 +423,14 @@ func (d *blockingStateBaseRecertificationDatabase) unblock() {
 
 func TestStateBaseRecertificationWorkerStopsWhileDurableWalkIsCanceled(t *testing.T) {
 	f := newStateBaseRecertificationFixture(t)
-	f.invalidate(t)
 	blocked := &blockingStateBaseRecertificationDatabase{
 		checkpointTrackingDatabase: &checkpointTrackingDatabase{Database: f.db, uncached: f.db},
 		target:                     nodestore.Hash256(f.childHash),
 		started:                    make(chan struct{}),
 		release:                    make(chan struct{}),
 	}
-	f.svc.nodeStore = bindNodeStore(blocked)
+	f.installWorkerNodeStore(blocked)
+	f.invalidate(t)
 	f.svc.RequestStateBaseRecertification()
 	select {
 	case <-blocked.started:
@@ -438,6 +449,55 @@ func TestStateBaseRecertificationWorkerStopsWhileDurableWalkIsCanceled(t *testin
 		t.Fatal("stopping re-certification did not join the canceled walk")
 	}
 	requireStateBaseRecertificationUnavailable(t, f)
+}
+
+// parkingStateBaseRecertificationDatabase reports every walk that reaches
+// target and parks it until the walk is canceled.
+type parkingStateBaseRecertificationDatabase struct {
+	*checkpointTrackingDatabase
+	target  nodestore.Hash256
+	reached chan struct{}
+}
+
+func (d *parkingStateBaseRecertificationDatabase) FetchDataUncached(
+	ctx context.Context,
+	hash nodestore.Hash256,
+) ([]byte, error) {
+	if hash == d.target {
+		d.reached <- struct{}{}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return d.checkpointTrackingDatabase.FetchDataUncached(ctx, hash)
+}
+
+func TestStateBaseRecertificationRequestAfterSupersededWalkStartsFreshWalk(t *testing.T) {
+	f := newStateBaseRecertificationFixture(t)
+	parked := &parkingStateBaseRecertificationDatabase{
+		checkpointTrackingDatabase: &checkpointTrackingDatabase{Database: f.db, uncached: f.db},
+		target:                     nodestore.Hash256(f.childHash),
+		reached:                    make(chan struct{}, 8),
+	}
+	f.installWorkerNodeStore(parked)
+	f.invalidate(t)
+	t.Cleanup(f.svc.StopStateBaseRecertification)
+	awaitWalk := func(msg string) {
+		t.Helper()
+		select {
+		case <-parked.reached:
+		case <-time.After(progressTimeout):
+			t.Fatal(msg)
+		}
+	}
+
+	f.svc.RequestStateBaseRecertification()
+	awaitWalk("re-certification did not start the durable walk")
+
+	// A managed NodeStore mutation supersedes the walk and then asks for a
+	// fresh one; the superseded walk must not hold that request in backoff.
+	f.svc.InvalidateFastLoadCheckpointEligibility()
+	f.svc.RequestStateBaseRecertification()
+	awaitWalk("request after a superseded walk did not start a fresh walk")
 }
 
 func TestStateBaseRecertificationMutationDuringWalkPreventsPublication(t *testing.T) {
