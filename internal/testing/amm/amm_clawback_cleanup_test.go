@@ -95,76 +95,117 @@ func TestAMMClawbackTerminalIOUPoolMatrix(t *testing.T) {
 
 func TestAMMClawback_ExceedBalance(t *testing.T) {
 	// EUR/USD pool: multiple clawbacks, last one exceeds balance
-	t.Run("EUR_USD_Pool", func(t *testing.T) {
-		env := amm.NewAMMTestEnv(t)
-		gw2 := jtx.NewAccount("gw2")
+	for _, tc := range []struct {
+		name                string
+		fixAMMv13, fixRound bool
+		lptCreate, lpt1000  string
+		pool500             [3]string
+		eur500              string
+		pool1               [3]string
+		eur1                string
+	}{
+		{
+			name:      "EUR_USD_Pool/Legacy",
+			lptCreate: "4472.135954999580", lpt1000: "3354.101966249685",
+			pool500: [3]string{"2500.000000000001", "3125.000000000001", "2795.084971874738"},
+			eur500:  "2874.999999999999",
+			pool1:   [3]string{"2499.000000000002", "3123.750000000002", "2793.966937885989"},
+			eur1:    "2876.249999999998",
+		},
+		{
+			name: "EUR_USD_Pool/AMMv1_3", fixAMMv13: true,
+			lptCreate: "4472.135954999579", lpt1000: "3354.101966249684",
+			pool500: [3]string{"2500", "3125", "2795.084971874737"},
+			eur500:  "2875",
+			pool1:   [3]string{"2499", "3123.75", "2793.966937885987"},
+			eur1:    "2876.25",
+		},
+		{
+			name: "EUR_USD_Pool/AMMv1_3_ClawbackRounding", fixAMMv13: true, fixRound: true,
+			lptCreate: "4472.135954999579", lpt1000: "3354.101966249684",
+			pool500: [3]string{"2500", "3125", "2795.084971874737"},
+			eur500:  "2875",
+			pool1:   [3]string{"2499.000000000001", "3123.750000000001", "2793.966937885988"},
+			eur1:    "2876.249999999999",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := amm.NewAMMTestEnv(t)
+			env.DisableFeature("SingleAssetVault")
+			env.DisableFeature("LendingProtocol")
+			if !tc.fixAMMv13 {
+				env.DisableFeature("fixAMMv1_3")
+			}
+			if !tc.fixRound {
+				env.DisableFeature("fixAMMClawbackRounding")
+			}
+			gw2 := jtx.NewAccount("gw2")
 
-		env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(1000000)))
-		env.TestEnv.FundAmount(gw2, uint64(jtx.XRP(1000000)))
-		env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(1000000)))
-		env.Close()
+			env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(1000000)))
+			env.TestEnv.FundAmount(gw2, uint64(jtx.XRP(1000000)))
+			env.TestEnv.FundAmount(env.Alice, uint64(jtx.XRP(1000000)))
+			env.Close()
 
-		result := env.Submit(accountset.AccountSet(env.GW).AllowClawback().Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
+			jtx.RequireTxSuccess(t, env.Submit(accountset.AccountSet(env.GW).AllowClawback().Build()))
+			env.Close()
 
-		EUR := tx.Asset{Currency: "EUR", Issuer: gw2.Address}
+			EUR := tx.Asset{Currency: "EUR", Issuer: gw2.Address}
 
-		env.Trust(env.Alice, env.GW, "USD", 100000)
-		env.PayIOU(env.GW, env.Alice, "USD", 6000)
-		env.Close()
+			env.Trust(env.Alice, env.GW, "USD", 100000)
+			env.PayIOU(env.GW, env.Alice, "USD", 6000)
+			env.Close()
 
-		env.Trust(env.Alice, gw2, "EUR", 100000)
-		env.PayIOU(gw2, env.Alice, "EUR", 6000)
-		env.Close()
+			env.Trust(env.Alice, gw2, "EUR", 100000)
+			env.PayIOU(gw2, env.Alice, "EUR", 6000)
+			env.Close()
 
-		createTx := amm.AMMCreate(env.Alice, amm.IOUAmount(gw2, "EUR", 5000), amm.IOUAmount(env.GW, "USD", 4000)).Build()
-		result = env.Submit(createTx)
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
+			jtx.RequireTxSuccess(t, env.Submit(amm.AMMCreate(env.Alice, amm.IOUAmount(gw2, "EUR", 5000), amm.IOUAmount(env.GW, "USD", 4000)).Build()))
+			env.Close()
 
-		// gw clawback 1000 USD
-		clawbackTx := amm.AMMClawback(env.GW, env.Alice.Address, env.USD, EUR).
-			Amount(amm.IOUAmount(env.GW, "USD", 1000)).
-			Build()
-		result = env.Submit(clawbackTx)
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
+			requirePool := func(usd, eur, lpt string) {
+				t.Helper()
+				gotUSD, gotEUR, gotLPT := env.AMMIOUBalances(env.USD, EUR)
+				requireAMMAmount(t, gotUSD, usd)
+				requireAMMAmount(t, gotEUR, eur)
+				requireAMMAmount(t, gotLPT, lpt)
+			}
+			claw := func(usd float64) {
+				t.Helper()
+				jtx.RequireTxSuccess(t, env.Submit(amm.AMMClawback(env.GW, env.Alice.Address, env.USD, EUR).
+					Amount(amm.IOUAmount(env.GW, "USD", usd)).
+					Build()))
+				env.Close()
+			}
+			requireEUR := func(value string) {
+				t.Helper()
+				requireAMMAmount(t, ammHolding(t, env, env.Alice, EUR), value)
+			}
 
-		// rippled expects: alice USD = 2000 (6000-4000 deposited), EUR = 2250 (1000 + 1250 returned)
-		requireAMMIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 2000)
+			requirePool("4000", "5000", tc.lptCreate)
 
-		// gw clawback 500 USD
-		clawbackTx = amm.AMMClawback(env.GW, env.Alice.Address, env.USD, EUR).
-			Amount(amm.IOUAmount(env.GW, "USD", 500)).
-			Build()
-		result = env.Submit(clawbackTx)
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
+			claw(1000)
+			requireAMMIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 2000)
+			requireEUR("2250")
+			requirePool("3000", "3750", tc.lpt1000)
+			_, _, poolLPT := env.AMMIOUBalances(env.USD, EUR)
+			env.ExpectLPTokensExact(env.Alice, env.USD, EUR, poolLPT)
 
-		requireAMMIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 2000)
+			claw(500)
+			requireAMMIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 2000)
+			requirePool(tc.pool500[0], tc.pool500[1], tc.pool500[2])
+			requireEUR(tc.eur500)
 
-		// gw clawback 1 USD
-		clawbackTx = amm.AMMClawback(env.GW, env.Alice.Address, env.USD, EUR).
-			Amount(amm.IOUAmount(env.GW, "USD", 1)).
-			Build()
-		result = env.Submit(clawbackTx)
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
+			claw(1)
+			requireAMMIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 2000)
+			requirePool(tc.pool1[0], tc.pool1[1], tc.pool1[2])
+			requireEUR(tc.eur1)
 
-		// gw clawback 4000 USD (exceeds remaining balance in pool)
-		clawbackTx = amm.AMMClawback(env.GW, env.Alice.Address, env.USD, EUR).
-			Amount(amm.IOUAmount(env.GW, "USD", 4000)).
-			Build()
-		result = env.Submit(clawbackTx)
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		// rippled expects: USD still 2000, EUR = 6000 (all returned), AMM deleted
-		requireAMMIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 2000)
-		requireAMMIOUBalance(t, env.TestEnv, env.Alice, gw2, "EUR", 6000)
-		require.True(t, ammIsDeleted(t, env, env.USD, EUR))
-	})
+			claw(4000)
+			requireAMMIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 2000)
+			requireAMMIOUBalance(t, env.TestEnv, env.Alice, gw2, "EUR", 6000)
+			require.True(t, ammIsDeleted(t, env, env.USD, EUR))
+		})
+	}
 
 	// USD/XRP pool with multiple depositors
 	t.Run("USD_XRP_Pool_MultiDepositors", func(t *testing.T) {
