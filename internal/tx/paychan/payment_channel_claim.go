@@ -231,11 +231,8 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TemINVALID
 	}
 
-	var channelKeyBytes [32]byte
-	copy(channelKeyBytes[:], channelID)
-	channelKey := keylet.Keylet{Key: channelKeyBytes}
+	channelKey := keylet.PayChannelByID([32]byte(channelID))
 
-	// Read channel
 	channelData, err := ctx.View.Read(channelKey)
 	if err != nil || channelData == nil {
 		ctx.Log.Warn("payment channel claim: channel not found",
