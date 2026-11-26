@@ -381,7 +381,8 @@ func (q Quality) CeilInStrictWithNumberContext(
 // Algorithm:
 //  1. Extract mantissa/exponent from each quality (STAmount-like encoding)
 //  2. Multiply mantissas, divide by 10^14 with round-up (mulRound with roundUp=true)
-//  3. Canonicalize result mantissa to [10^15, 10^16-1] with round-up
+//  3. Canonicalize result mantissa to [10^15, 10^16-1], truncating every
+//     divide by 10 except the last, which rounds up
 //  4. Encode back to quality format
 //
 // Reference: rippled Quality.cpp composed_quality() lines 157-180
@@ -425,8 +426,13 @@ func (q Quality) Compose(other Quality) Quality {
 		product.Mul(product, ten)
 		offset--
 	}
-	// Scale down if too large, rounding up: (amount + 9) / 10
-	for product.Cmp(maxMantissa) > 0 {
+	// Scale down truncating, rounding up only on the final divide.
+	tenMaxMantissa := new(big.Int).Mul(maxMantissa, ten)
+	for product.Cmp(tenMaxMantissa) > 0 {
+		product.Div(product, ten)
+		offset++
+	}
+	if product.Cmp(maxMantissa) > 0 {
 		product.Add(product, nine)
 		product.Div(product, ten)
 		offset++
