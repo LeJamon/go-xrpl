@@ -3,6 +3,7 @@ package invariants
 import (
 	"fmt"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -12,17 +13,13 @@ import (
 // limit issues "instead of relying on .native()", and inspects the after image
 // of every touched trust line (for a delete, the erased SLE is the after).
 // Reference: rippled InvariantCheck.cpp — NoXRPTrustLines (lines 581-610).
-func checkNoXRPTrustLines(entries []InvariantEntry) *InvariantViolation {
+func checkNoXRPTrustLines(entries []InvariantEntry, rules *amendment.Rules) *InvariantViolation {
+	violations := newViolationSet(rules)
 	for _, e := range entries {
 		if e.EntryType != entry.TypeRippleState {
 			continue
 		}
-		// rippled uses the "after" image, which for a delete is the erased SLE;
-		// CollectEntries leaves that in Before with After nil.
-		data := e.After
-		if data == nil {
-			data = e.Before
-		}
+		data := e.finalImage()
 		if data == nil {
 			continue
 		}
@@ -33,14 +30,16 @@ func checkNoXRPTrustLines(entries []InvariantEntry) *InvariantViolation {
 				Message: fmt.Sprintf("could not parse RippleState SLE: %v", err),
 			}
 		}
+		var v *InvariantViolation
 		if hasXRP {
-			return &InvariantViolation{
+			v = &InvariantViolation{
 				Name:    "NoXRPTrustLines",
 				Message: "RippleState entry uses XRP as currency (trust lines must use IOU currencies)",
 			}
 		}
+		violations.assign(v)
 	}
-	return nil
+	return violations.found
 }
 
 func rippleStateHasXRPTrustLimit(data []byte) (bool, error) {
@@ -97,20 +96,18 @@ func rippleStateHasXRPTrustLimit(data []byte) (bool, error) {
 // has lsfLowDeepFreeze set without lsfLowFreeze, or lsfHighDeepFreeze set
 // without lsfHighFreeze.
 // Reference: rippled InvariantCheck.cpp — NoDeepFreezeTrustLinesWithoutFreeze (lines 614-648)
-func checkNoDeepFreezeTrustLinesWithoutFreeze(entries []InvariantEntry) *InvariantViolation {
+func checkNoDeepFreezeTrustLinesWithoutFreeze(entries []InvariantEntry, rules *amendment.Rules) *InvariantViolation {
+	violations := newViolationSet(rules)
 	for _, e := range entries {
-		if e.After == nil {
+		data := e.finalImage()
+		if data == nil {
 			continue
 		}
-		// Only check RippleState entries (created or modified, not deleted).
-		// Confirm the type from the after data, matching rippled which checks
-		// after->getType() == ltRIPPLE_STATE.
-		afterType, err := state.DecodeType(e.After)
-		if err != nil || afterType != entry.TypeRippleState {
+		if afterType, err := state.DecodeType(data); err != nil || afterType != entry.TypeRippleState {
 			continue
 		}
 
-		rs, err := e.rippleState(e.After)
+		rs, err := e.rippleState(data)
 		if err != nil {
 			return &InvariantViolation{
 				Name:    "NoDeepFreezeTrustLinesWithoutFreeze",
@@ -124,13 +121,14 @@ func checkNoDeepFreezeTrustLinesWithoutFreeze(entries []InvariantEntry) *Invaria
 		highFreeze := (flags & state.LsfHighFreeze) != 0
 		highDeepFreeze := (flags & state.LsfHighDeepFreeze) != 0
 
+		var v *InvariantViolation
 		if (lowDeepFreeze && !lowFreeze) || (highDeepFreeze && !highFreeze) {
-			return &InvariantViolation{
+			v = &InvariantViolation{
 				Name:    "NoDeepFreezeTrustLinesWithoutFreeze",
 				Message: "a trust line with deep freeze flag without normal freeze was created",
 			}
 		}
+		violations.assign(v)
 	}
-
-	return nil
+	return violations.found
 }

@@ -98,7 +98,7 @@ func (l *AMMLiquidity) GetOffer(view *PaymentSandbox, clobQuality *Quality) (res
 		if spotPriceQ.WorseThan(*clobQuality) || spotPriceQ.Value == clobQuality.Value {
 			return nil
 		}
-		if WithinRelativeDistance(spotPriceQ, *clobQuality, 1e-7) {
+		if WithinRelativeDistance(l.ammContext.numberContext, spotPriceQ, *clobQuality, l.ammContext.numberContext.Number(1, -7, state.RoundToNearest)) {
 			return nil
 		}
 	}

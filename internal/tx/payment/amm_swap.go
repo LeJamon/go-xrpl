@@ -334,11 +334,8 @@ func changeSpotPriceQualityPreFix(m numberMath, poolIn, poolOut tx.Amount, quali
 	// nullopt. The throw suppresses the AMM offer entirely (no maxOffer
 	// fallback), leaving the AMM blocked by the LOB tip.
 	offerQ := QualityFromAmountsWithNumberContext(toEitherAmt(takerPays), toEitherAmt(takerGets), m.ctx)
-	if offerQ.WorseThan(quality) {
-		rd := RelativeDistance(offerQ, quality)
-		if rd >= 1e-7 {
-			return tx.Amount{}, tx.Amount{}, false, true
-		}
+	if offerQ.WorseThan(quality) && !WithinRelativeDistance(m.ctx, offerQ, quality, m.number(1, -7, state.RoundToNearest)) {
+		return tx.Amount{}, tx.Amount{}, false, true
 	}
 
 	return takerPays, takerGets, true, false
@@ -487,14 +484,22 @@ func reduceOffer(m numberMath, amount tx.Amount) tx.Amount {
 	)
 }
 
-// WithinRelativeDistance checks if two qualities are within a relative distance threshold.
-// Reference: rippled AMMHelpers.h withinRelativeDistance(Quality, Quality, Number)
-func WithinRelativeDistance(q1, q2 Quality, threshold float64) bool {
+// WithinRelativeDistance reports whether two qualities differ by less than
+// dist relative to the worse one: (worseRate - betterRate) / worseRate < dist.
+// The difference is normalized as an IOU amount and the ratio taken in Number
+// arithmetic, matching rippled.
+func WithinRelativeDistance(ctx state.NumberContext, q1, q2 Quality, dist state.XRPLNumber) bool {
 	if q1.Value == q2.Value {
 		return true
 	}
-	rd := RelativeDistance(q1, q2)
-	return rd < threshold
+	worse, better := q1, q2
+	if worse.Value < better.Value {
+		worse, better = better, worse
+	}
+	m := numberMath{ctx: ctx}
+	worseRate := qualityToRate(m, worse)
+	diff := worseRate.Sub(qualityToRate(m, better)).ToIOUAmountValueRounded(state.RoundToNearest)
+	return m.number(diff.Mantissa(), diff.Exponent(), state.RoundToNearest).Div(worseRate).Cmp(dist) < 0
 }
 
 // qualityToRate converts a Quality to its rate representation as an Amount.

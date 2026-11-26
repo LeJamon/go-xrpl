@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -55,35 +56,28 @@ func checkNoBadOffers(entries []InvariantEntry) *InvariantViolation {
 // MPToken.MPTAmount/LockedAmount must each fit within [0, MaxMPTokenAmount],
 // and OutstandingAmount must be >= LockedAmount.
 // Reference: rippled InvariantCheck.cpp — NoZeroEscrow (lines 267-356).
-func checkNoZeroEscrow(entries []InvariantEntry) *InvariantViolation {
+func checkNoZeroEscrow(entries []InvariantEntry, rules *amendment.Rules) *InvariantViolation {
+	violations := newViolationSet(rules)
 	for _, e := range entries {
+		after := e.finalImage()
 		switch e.EntryType {
 		case entry.TypeEscrow:
-			for _, data := range [][]byte{e.Before, e.After} {
-				if data == nil {
-					continue
-				}
-				if v := checkEscrowAmount(data); v != nil {
-					return v
+			for _, data := range [][]byte{e.Before, after} {
+				if data != nil {
+					violations.add(checkEscrowAmount(data))
 				}
 			}
 		case entry.TypeMPTokenIssuance:
-			if e.After == nil {
-				continue
-			}
-			if v := checkMPTokenIssuanceAmounts(e.After); v != nil {
-				return v
+			if after != nil {
+				checkMPTokenIssuanceAmounts(after, &violations)
 			}
 		case entry.TypeMPToken:
-			if e.After == nil {
-				continue
-			}
-			if v := checkMPTokenAmounts(e.After); v != nil {
-				return v
+			if after != nil {
+				violations.add(checkMPTokenAmounts(after))
 			}
 		}
 	}
-	return nil
+	return violations.found
 }
 
 // MaxMPTokenAmount is the maximum representable MPT amount (2^63 - 1).
@@ -150,36 +144,42 @@ func checkEscrowAmount(data []byte) *InvariantViolation {
 	return nil
 }
 
-func checkMPTokenIssuanceAmounts(data []byte) *InvariantViolation {
+// checkMPTokenIssuanceAmounts records bound violations, then the
+// OutstandingAmount >= LockedAmount check, which before fixCleanup3_1_3
+// replaced every violation recorded so far.
+func checkMPTokenIssuanceAmounts(data []byte, violations *violationSet) {
 	issuance, err := state.ParseMPTokenIssuance(data)
 	if err != nil {
-		return &InvariantViolation{
+		violations.add(&InvariantViolation{
 			Name:    "NoZeroEscrow",
 			Message: fmt.Sprintf("could not parse MPTokenIssuance SLE: %v", err),
-		}
+		})
+		return
 	}
 	if issuance.OutstandingAmount > MaxMPTokenAmount {
-		return &InvariantViolation{
+		violations.add(&InvariantViolation{
 			Name:    "NoZeroEscrow",
 			Message: fmt.Sprintf("MPTokenIssuance.OutstandingAmount %d exceeds MaxMPTokenAmount", issuance.OutstandingAmount),
+		})
+	}
+	if issuance.LockedAmount == nil {
+		return
+	}
+	locked := *issuance.LockedAmount
+	if locked > MaxMPTokenAmount {
+		violations.add(&InvariantViolation{
+			Name:    "NoZeroEscrow",
+			Message: fmt.Sprintf("MPTokenIssuance.LockedAmount %d exceeds MaxMPTokenAmount", locked),
+		})
+	}
+	var v *InvariantViolation
+	if issuance.OutstandingAmount < locked {
+		v = &InvariantViolation{
+			Name:    "NoZeroEscrow",
+			Message: fmt.Sprintf("MPTokenIssuance.OutstandingAmount %d < LockedAmount %d", issuance.OutstandingAmount, locked),
 		}
 	}
-	if issuance.LockedAmount != nil {
-		locked := *issuance.LockedAmount
-		if locked > MaxMPTokenAmount {
-			return &InvariantViolation{
-				Name:    "NoZeroEscrow",
-				Message: fmt.Sprintf("MPTokenIssuance.LockedAmount %d exceeds MaxMPTokenAmount", locked),
-			}
-		}
-		if issuance.OutstandingAmount < locked {
-			return &InvariantViolation{
-				Name:    "NoZeroEscrow",
-				Message: fmt.Sprintf("MPTokenIssuance.OutstandingAmount %d < LockedAmount %d", issuance.OutstandingAmount, locked),
-			}
-		}
-	}
-	return nil
+	violations.assign(v)
 }
 
 func checkMPTokenAmounts(data []byte) *InvariantViolation {

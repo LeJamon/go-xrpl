@@ -309,7 +309,7 @@ func TestNoZeroEscrow_IOUBadCurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hex.DecodeString: %v", err)
 	}
-	if v := checkNoZeroEscrow([]InvariantEntry{{EntryType: entry.TypeEscrow, After: good}}); v != nil {
+	if v := checkNoZeroEscrow([]InvariantEntry{{EntryType: entry.TypeEscrow, After: good}}, nil); v != nil {
 		t.Fatalf("good IOU escrow: unexpected violation %v", v)
 	}
 
@@ -322,7 +322,7 @@ func TestNoZeroEscrow_IOUBadCurrency(t *testing.T) {
 	copy(bad, good)
 	copy(bad[idx:idx+3], []byte{'X', 'R', 'P'})
 
-	if v := checkNoZeroEscrow([]InvariantEntry{{EntryType: entry.TypeEscrow, After: bad}}); v == nil {
+	if v := checkNoZeroEscrow([]InvariantEntry{{EntryType: entry.TypeEscrow, After: bad}}, nil); v == nil {
 		t.Fatal("expected violation: IOU escrow with bad (XRP) currency")
 	}
 }
@@ -335,14 +335,14 @@ func TestNoZeroEscrow_MPTokenIssuanceBounds(t *testing.T) {
 	good := mustSerializeMPTIssuance(t, &state.MPTokenIssuanceData{
 		Sequence: 1, OutstandingAmount: 100, LockedAmount: &locked,
 	})
-	if v := checkNoZeroEscrow([]InvariantEntry{{EntryType: entry.TypeMPTokenIssuance, After: good}}); v != nil {
+	if v := checkNoZeroEscrow([]InvariantEntry{{EntryType: entry.TypeMPTokenIssuance, After: good}}, nil); v != nil {
 		t.Fatalf("balanced issuance: unexpected violation %v", v)
 	}
 	overLocked := uint64(150)
 	bad := mustSerializeMPTIssuance(t, &state.MPTokenIssuanceData{
 		Sequence: 1, OutstandingAmount: 100, LockedAmount: &overLocked,
 	})
-	if v := checkNoZeroEscrow([]InvariantEntry{{EntryType: entry.TypeMPTokenIssuance, After: bad}}); v == nil {
+	if v := checkNoZeroEscrow([]InvariantEntry{{EntryType: entry.TypeMPTokenIssuance, After: bad}}, nil); v == nil {
 		t.Fatal("expected violation: LockedAmount > OutstandingAmount")
 	}
 }

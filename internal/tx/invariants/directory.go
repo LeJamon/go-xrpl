@@ -32,16 +32,17 @@ const (
 	fcTakerPaysIssuer   = 2  // Hash160
 	fcTakerGetsCurrency = 3  // Hash160
 	fcTakerGetsIssuer   = 4  // Hash160
+	fcTakerPaysMPT      = 3  // Hash192
+	fcTakerGetsMPT      = 4  // Hash192
 
 	tcUInt64  = 3
 	tcHash256 = 5
 	tcHash160 = 17
+	tcHash192 = 21
 )
 
 // bookDirRootPresence lists the fields whose presence marks a DirectoryNode as a
-// book-directory root rather than an owner directory. The MPT book fields
-// (TakerPaysMPT/TakerGetsMPT) do not exist in this build's protocol and so are
-// omitted.
+// book-directory root rather than an owner directory.
 var bookDirRootPresence = []struct {
 	typeCode  int
 	fieldCode int
@@ -49,8 +50,10 @@ var bookDirRootPresence = []struct {
 	{tcUInt64, fcExchangeRate},
 	{tcHash160, fcTakerPaysCurrency},
 	{tcHash160, fcTakerPaysIssuer},
+	{tcHash192, fcTakerPaysMPT},
 	{tcHash160, fcTakerGetsCurrency},
 	{tcHash160, fcTakerGetsIssuer},
+	{tcHash192, fcTakerGetsMPT},
 	{tcHash256, fcDomainID},
 }
 
