@@ -73,5 +73,5 @@ func tokenOfferCreatePreflight(
 }
 
 func isFakeXRP(amount tx.Amount) bool {
-	return !amount.IsNative() && !amount.IsMPT() && (amount.Currency == "XRP" || amount.Currency == "0000000000000000000000005852500000000000")
+	return !amount.IsNative() && !amount.IsMPT() && tx.IsBadCurrency(amount.Currency)
 }
