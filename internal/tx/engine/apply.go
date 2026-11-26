@@ -167,11 +167,12 @@ func (e *Engine) applyWithContext(
 		ParentBatchID:     parentBatchID,
 	}
 
+	var applied bool
 	if result.IsSuccess() {
 		// doApply returns the fee actually charged. On the tec/invariant recovery
 		// paths this is clamped to the payer's balance (rippled reset()); on the
 		// success path it equals the declared fee.
-		result, fee = e.doApply(ctx, tx, metadata, txHash)
+		result, fee, applied = e.doApply(ctx, tx, metadata, txHash)
 		applyCause := e.stateError()
 		if applyCause != nil {
 			return txcore.ApplyResult{
@@ -225,33 +226,10 @@ func (e *Engine) applyWithContext(
 		}
 		result = committed
 		fee = chargedFee
+		applied = true
 	}
 
 	metadata.TransactionResult = result
-
-	// Determine if the transaction is applied.
-	// In rippled (Transactor.cpp:1108): applied = isTesSuccess(result).
-	// For specific tec codes without tapRETRY (tecOVERSIZE, tecKILLED,
-	// tecINCOMPLETE, tecEXPIRED, or isTecClaimHardFail), applied is
-	// set to true (line 1215). With tapRETRY set, regular tec codes
-	// are NOT applied — they return Retry for the next pass.
-	// Reference: rippled Transactor.cpp operator() lines 1108-1216
-	applied := result.IsApplied()
-	if result.IsTec() && (e.config.ApplyFlags&txcore.TapFAIL_HARD) != 0 {
-		// fail_hard: a tec from doApply was discarded (doApply returned fee 0
-		// without committing its recovery table), so it must not count as
-		// applied either. Reference: rippled Transactor.cpp:1114-1120 sets
-		// applied = false for any tec claim under tapFAIL_HARD.
-		applied = false
-	}
-	if result.IsTec() && (e.config.ApplyFlags&txcore.TapRETRY) != 0 && !isReapplyOnRetryTec(result) {
-		// Retry pass: a generic tec is NOT applied (no fee, no sequence) — it
-		// stays in the retry queue for a pass without TapRETRY. doApply already
-		// returned fee 0 without committing its recovery table for this case.
-		// The four work-on-tec codes are excluded here because doApply reapplied
-		// them (fee + cleanup) even under TapRETRY, so they keep applied=true.
-		applied = false
-	}
 
 	// The charged fee was committed atomically with the state table.
 	if applied {

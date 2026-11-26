@@ -57,12 +57,16 @@ func (st *applyState) sourceFeeCharged() uint64 {
 
 // doApply applies the transaction to the ledger
 // For tec results, only fee/sequence changes are applied; transaction effects are discarded.
+// applied reports whether a table was committed, which the caller must not
+// re-derive from result: an invariant reset can turn any committed outcome into
+// tecINVARIANT_FAILED, which is applied even on a retry pass.
 // Reference: rippled Transactor.cpp - tec results claim fee but don't apply effects
-func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *txcore.Metadata, txHash [32]byte) (result ter.Result, chargedFee uint64) {
+func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *txcore.Metadata, txHash [32]byte) (result ter.Result, chargedFee uint64, applied bool) {
 	defer func() {
 		if e.stateError() != nil {
 			result = ter.TefEXCEPTION
 			chargedFee = 0
+			applied = false
 		}
 	}()
 	common := tx.GetCommon()
@@ -72,18 +76,18 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	// Read sender account directly from view
 	accountData, err := e.view.Read(accountKey)
 	if err != nil {
-		return ter.TefINTERNAL, 0
+		return ter.TefINTERNAL, 0, false
 	}
 
 	account, err := state.ParseAccountRoot(accountData)
 	if err != nil {
-		return ter.TefINTERNAL, 0
+		return ter.TefINTERNAL, 0, false
 	}
 
 	fee := e.calculateFee(tx)
 	payer, payerResult := e.getFeePayer(common)
 	if payerResult != ter.TesSUCCESS {
-		return payerResult, 0
+		return payerResult, 0, false
 	}
 
 	// Save original serialized account data for tec recovery.
@@ -117,11 +121,11 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	// payFee + consumeSeqProxy + AccountTxnID threading: apply pre-doApply()
 	// account mutations (rippled Transactor::apply()).
 	if result := e.applyPreApplyAccountChanges(st); result != ter.TesSUCCESS {
-		return result, 0
+		return result, 0, false
 	}
 
 	if result := e.payExternalFeeOnTable(st, table, false); result != ter.TesSUCCESS {
-		return result, 0
+		return result, 0, false
 	}
 
 	// Consume ticket BEFORE Apply, matching rippled's Transactor::apply()
@@ -130,7 +134,7 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	// consumed ticket is already gone.
 	if st.isTicket {
 		if result := e.consumeTicket(st, table); result != ter.TesSUCCESS {
-			return result, 0
+			return result, 0, false
 		}
 	}
 
@@ -138,7 +142,7 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	e.observeApplyPhase(ApplyPhaseTransaction)
 	result = e.invokeApply(st)
 	if cause := e.stateError(); cause != nil {
-		return ter.TefEXCEPTION, 0
+		return ter.TefEXCEPTION, 0, false
 	}
 
 	// If tx.Apply() returned a non-applied result (tem*/tef*/ter*), discard all
@@ -147,7 +151,7 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	// read failure) that rippled would have caught earlier; discarding here keeps
 	// them fee-free and side-effect-free.
 	if !result.IsSuccess() && !result.IsTec() {
-		return result, 0
+		return result, 0, false
 	}
 
 	// Check for oversize metadata: if the transaction touched more than 5200
@@ -173,7 +177,7 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	//       ctx_.discard(); applied = false; }
 	// This takes precedence over the retry handling and the hard-fail commit.
 	if result.IsTec() && (e.config.ApplyFlags&txcore.TapFAIL_HARD) != 0 {
-		return result, 0
+		return result, 0, false
 	}
 
 	// When TapRETRY is set, a generic tec result is NOT applied (no fee, no
@@ -187,10 +191,11 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	if result.IsTec() && (e.config.ApplyFlags&txcore.TapRETRY) != 0 && !isReapplyOnRetryTec(result) {
 		// Retry pass: discard all changes, don't commit fee/sequence.
 		// The transaction will be retried on the next pass without TapRETRY.
-		return result, 0
+		return result, 0, false
 	}
 	if result.IsTec() {
-		return e.applyTecRecovery(st, result), st.chargedFee
+		r := e.applyTecRecovery(st, result)
+		return r, st.chargedFee, r.IsTec()
 	}
 
 	// For success, apply all changes through the table
@@ -198,11 +203,11 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	if !table.IsErased(accountKey) {
 		updatedData, err := state.SerializeAccountRoot(account)
 		if err != nil {
-			return ter.TefINTERNAL, 0
+			return ter.TefINTERNAL, 0, false
 		}
 
 		if err := table.Update(accountKey, updatedData); err != nil {
-			return ter.TefINTERNAL, 0
+			return ter.TefINTERNAL, 0, false
 		}
 	}
 
@@ -210,24 +215,24 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	// Reference: rippled Transactor::apply() — invariant check runs before ctx_->apply().
 	if r, handled := e.runInvariants(st, result); handled {
 		if e.stateError() != nil {
-			return ter.TefEXCEPTION, 0
+			return ter.TefEXCEPTION, 0, false
 		}
-		return r, st.chargedFee
+		return r, st.chargedFee, r.IsTec()
 	}
 	if e.stateError() != nil {
-		return ter.TefEXCEPTION, 0
+		return ter.TefEXCEPTION, 0, false
 	}
 
 	// Apply all tracked changes to the base view and generate metadata automatically
 	generatedMeta, err := e.applyTable(table, st.chargedFee)
 	if err != nil {
-		return ter.TefINTERNAL, 0
+		return ter.TefINTERNAL, 0, false
 	}
 
 	// Copy generated metadata to the output
 	metadata.AffectedNodes = generatedMeta.AffectedNodes
 
-	return result, st.chargedFee
+	return result, st.chargedFee, true
 }
 
 // applyPreApplyAccountChanges charges the fee, consumes an account sequence,
@@ -921,6 +926,7 @@ func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (
 			result = ter.TefINVARIANT_FAILED
 		}
 	}()
+	st.metadata.DeliveredAmount = nil
 	// Don't call table.Apply() — discard all transaction effects.
 	// Create a fresh tecTable for fee-only changes.
 	invTecTable := applystate.NewApplyStateTableWithErrorRecorder(e.view, st.txHash, e.config.LedgerSequence, e.rules(), e.stateErrors.record)
