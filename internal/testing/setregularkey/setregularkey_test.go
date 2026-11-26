@@ -252,5 +252,59 @@ func TestSetRegularKey_PasswordSpentFeeBinding(t *testing.T) {
 	}
 }
 
+// TestSetRegularKey_PasswordSpentZeroBaseFee pins that lsfPasswordSpent follows
+// the computed base fee rather than the signing method: at a zero reference fee
+// every SetRegularKey costs nothing, so regular-key and multi-signed changes set
+// the flag too, while at a non-zero fee they leave it clear.
+func TestSetRegularKey_PasswordSpentZeroBaseFee(t *testing.T) {
+	tests := []struct {
+		name      string
+		baseFee   uint64
+		multiSign bool
+		wantSpent bool
+	}{
+		{name: "RegularKeyZeroFee", baseFee: 0, wantSpent: true},
+		{name: "MultiSignedZeroFee", baseFee: 0, multiSign: true, wantSpent: true},
+		{name: "RegularKeyNonZeroFee", baseFee: 10},
+		{name: "MultiSignedNonZeroFee", baseFee: 10, multiSign: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := jtx.NewTestEnv(t)
+			alice := jtx.NewAccount("alice")
+			rk1 := jtx.NewAccount("rk1")
+			rk2 := jtx.NewAccount("rk2")
+			signer := jtx.NewAccount("signer")
+			env.Fund(alice, rk1, signer)
+			env.Close()
+
+			env.SetRegularKey(alice, rk1)
+			env.SetSignerList(alice, 1, []jtx.TestSigner{{Account: signer, Weight: 1}})
+			env.Close()
+			// An incoming XRP payment clears the flag the master-signed change set.
+			env.Pay(alice, uint64(jtx.XRP(1)))
+			env.Close()
+			jtx.RequireFlagNotSet(t, env, alice, state.LsfPasswordSpent)
+
+			env.SetBaseFee(tc.baseFee)
+			setKey := signerlist.NewSetRegularKey(alice.Address)
+			setKey.SetKey(rk2.Address)
+			var res jtx.TxResult
+			if tc.multiSign {
+				res = env.SubmitMultiSigned(setKey, []*jtx.Account{signer})
+			} else {
+				res = env.SubmitSignedWith(setKey, rk1)
+			}
+			jtx.RequireTxSuccess(t, res)
+
+			if tc.wantSpent {
+				jtx.RequireFlagSet(t, env, alice, state.LsfPasswordSpent)
+			} else {
+				jtx.RequireFlagNotSet(t, env, alice, state.LsfPasswordSpent)
+			}
+		})
+	}
+}
+
 // Suppress unused import warnings
 var _ = payment.Pay

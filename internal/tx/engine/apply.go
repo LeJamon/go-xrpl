@@ -141,7 +141,8 @@ func (e *Engine) applyWithContext(
 	// Rippled recomputes the transaction-specific base fee immediately before
 	// application. A failure here means the preclaim result cannot safely enter
 	// apply, including a tec result that would otherwise claim a fee.
-	if _, err := sign.CalculateBaseFee(tx, e.view, e.config); err != nil {
+	baseFee, err := sign.CalculateBaseFee(tx, e.view, e.config)
+	if err != nil {
 		cause := e.stateError()
 		feeResult := ter.TefINTERNAL
 		if cause != nil {
@@ -172,7 +173,7 @@ func (e *Engine) applyWithContext(
 		// doApply returns the fee actually charged. On the tec/invariant recovery
 		// paths this is clamped to the payer's balance (rippled reset()); on the
 		// success path it equals the declared fee.
-		result, fee, applied = e.doApply(ctx, tx, metadata, txHash)
+		result, fee, applied = e.doApply(ctx, tx, baseFee, metadata, txHash)
 		applyCause := e.stateError()
 		if applyCause != nil {
 			return txcore.ApplyResult{

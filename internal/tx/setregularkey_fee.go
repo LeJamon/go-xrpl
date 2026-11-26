@@ -6,16 +6,8 @@ import (
 
 // SetRegularKeyFeeWaived reports whether a SetRegularKey qualifies for the free
 // password-change discount: it is signed with the account's master key while
-// lsfPasswordSpent is clear.
-//
-// This is the single source of truth shared by fee dispatch and the doApply
-// lsfPasswordSpent flag, so the fee charged and the flag can never drift. It
-// mirrors rippled, where both read the one
-// computed ctx_.baseFee: the flag is set iff !minimumFee(ctx_.baseFee), and
-// ctx_.baseFee is 0 iff this discount applies.
-//
-// Reference: rippled SetRegularKey.cpp calculateBaseFee (lines 28-49) and
-// doApply (lines 83-84).
+// lsfPasswordSpent is clear. Apply sets lsfPasswordSpent from the resulting
+// computed base fee, not from this predicate.
 func SetRegularKeyFeeWaived(skipSigVerification bool, common *Common, account *state.AccountRoot) bool {
 	if common == nil || account == nil {
 		return false

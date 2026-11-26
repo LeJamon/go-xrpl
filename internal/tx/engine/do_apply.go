@@ -30,6 +30,7 @@ type applyState struct {
 	account             *state.AccountRoot
 	originalAccountData []byte
 	fee                 uint64
+	baseFee             uint64
 	// chargedFee is the fee actually deducted from the payer. It equals fee on
 	// the success path, but the tec/invariant recovery paths clamp it to the
 	// payer's balance (rippled Transactor::reset() — `if (fee > balance) fee =
@@ -61,7 +62,7 @@ func (st *applyState) sourceFeeCharged() uint64 {
 // re-derive from result: an invariant reset can turn any committed outcome into
 // tecINVARIANT_FAILED, which is applied even on a retry pass.
 // Reference: rippled Transactor.cpp - tec results claim fee but don't apply effects
-func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *txcore.Metadata, txHash [32]byte) (result ter.Result, chargedFee uint64, applied bool) {
+func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, baseFee uint64, metadata *txcore.Metadata, txHash [32]byte) (result ter.Result, chargedFee uint64, applied bool) {
 	defer func() {
 		if e.stateError() != nil {
 			result = ter.TefEXCEPTION
@@ -108,6 +109,7 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 		account:             account,
 		originalAccountData: originalAccountData,
 		fee:                 fee,
+		baseFee:             baseFee,
 		chargedFee:          fee,
 		isDelegated:         common.Delegate != "",
 		feePayer:            payer,
@@ -338,6 +340,7 @@ func (e *Engine) invokeApplyInner(st *applyState) ter.Result {
 		AccountID:        st.accountID,
 		Common:           st.common,
 		SourceFeeCharged: st.sourceFeeCharged(),
+		BaseFee:          st.baseFee,
 		Config:           e.config,
 		TxHash:           st.txHash,
 		Metadata:         st.metadata,

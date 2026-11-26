@@ -7,11 +7,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
-// TestSetRegularKeyFeeWaived pins the single predicate that both the preclaim
-// fee floor and the doApply lsfPasswordSpent flag now share. Keeping them in
-// lockstep is what prevents the #732 account_hash fork (a full fee charged
-// while the flag is still set). Reference: rippled SetRegularKey.cpp
-// calculateBaseFee + doApply.
+// TestSetRegularKeyFeeWaived pins the free password-change predicate that
+// zeroes the SetRegularKey base fee.
 func TestSetRegularKeyFeeWaived(t *testing.T) {
 	// EncodeClassicAddressFromPublicKeyHex only hashes the bytes, so any valid
 	// 33-byte key (0xED/0x02/0x03 prefix) yields a deterministic address.

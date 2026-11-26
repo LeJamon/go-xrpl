@@ -36,6 +36,10 @@ type ApplyContext struct {
 	// rippled's mPriorBalance.
 	SourceFeeCharged uint64
 
+	// BaseFee is the transaction's computed base fee in drops, before load
+	// scaling: zero for a waived SetRegularKey or when the reference fee is zero.
+	BaseFee uint64
+
 	// Config holds engine configuration (reserves, ledger sequence, etc.)
 	Config EngineConfig
 
