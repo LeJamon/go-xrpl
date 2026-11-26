@@ -749,13 +749,21 @@ func actualAssetHolding(view tx.ReadOnlyLedgerView, accountID [20]byte, asset tx
 	return balance, nil
 }
 
+// xrpShortfall is the result of an XRP send whose sender cannot cover it.
+func xrpShortfall(ctx *tx.ApplyContext) ter.Result {
+	if ctx.Config.IsViewOpen() {
+		return ter.TelFAILED_PROCESSING
+	}
+	return ter.TecFAILED_PROCESSING
+}
+
 // sendAssetToVault transfers assetsN of the vault asset from the submitter
 // (ctx.Account) to the vault pseudo-account.
 func sendAssetToVault(ctx *tx.ApplyContext, vaultAccountID [20]byte, orig tx.Amount, assetsN state.XRPLNumber) ter.Result {
 	if orig.IsNative() {
 		drops := uint64(assetsN.ToInt64WithMode(state.RoundTowardsZero))
 		if ctx.Account.Balance < drops {
-			return ter.TecINSUFFICIENT_FUNDS
+			return xrpShortfall(ctx)
 		}
 		ctx.Account.Balance -= drops
 		vaultAcct, err := tx.ReadAccountRoot(ctx.View, vaultAccountID)
@@ -807,7 +815,7 @@ func sendAssetFromVault(ctx *tx.ApplyContext, vaultAccountID, dstID [20]byte, as
 			return ter.TefINTERNAL
 		}
 		if vaultAcct.Balance < drops {
-			return ter.TecINSUFFICIENT_FUNDS
+			return xrpShortfall(ctx)
 		}
 		vaultAcct.Balance -= drops
 		data, serr := state.SerializeAccountRoot(vaultAcct)
