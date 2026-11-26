@@ -1,6 +1,9 @@
 package nftoken
 
-import "github.com/LeJamon/go-xrpl/ledger/entry"
+import (
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
+)
 
 // NFToken constants matching rippled
 const (
@@ -11,14 +14,6 @@ const (
 	// Note: When provided in transactions, URI is hex-encoded, so the actual
 	// byte length is len(hexString)/2
 	maxTokenURILength = 256
-
-	// transferFeeDivisor is the divisor used for transfer fee calculation
-	// Transfer fee is in basis points where 50000 = 50%
-	// Calculation: amount * transferFee / transferFeeDivisor
-	transferFeeDivisor = 100000
-
-	// transferFeeDivisor32 is the uint32 version for use with Amount.MulRatio
-	transferFeeDivisor32 uint32 = 100000
 
 	// dirMaxTokensPerPage is the maximum number of NFTs per page
 	// Reference: rippled Protocol.h - dirMaxTokensPerPage = 32
@@ -37,37 +32,18 @@ const (
 	maxTokenOfferCancelCount = 500
 )
 
-// nftTransferFeeXRP computes the issuer transfer fee cut for an XRP amount
-// using round-half-even (banker's rounding) to match rippled's Number arithmetic.
-//
-// rippled computes: multiply(amount, transferFeeAsRate(fee))
-//
-//	transferFeeAsRate(fee) = Rate{fee * 10000}
-//	as_amount(rate) = STAmount{noIssue(), rate, -9} = rate/1e9
-//	multiply goes through Number path: amount * fee * 10000 / 1e9 = amount * fee / 1e5
-//
-// The result is converted back to drops via Number::operator rep() which uses
-// round-to-nearest, even on tie.
-//
-// Reference: rippled Rate2.cpp, Number.cpp operator rep()
-func nftTransferFeeXRP(amount uint64, fee uint16) uint64 {
-	fee64 := uint64(fee)
-	whole := amount / transferFeeDivisor
-	fraction := amount % transferFeeDivisor
-	quotient := whole*fee64 + fraction*fee64/transferFeeDivisor
-	remainder := fraction * fee64 % transferFeeDivisor
+// nftIssuerCut returns the issuer's share of an NFT sale: the amount times the
+// transfer fee as a rate (fee/100000), computed in Number arithmetic and
+// converted back to the amount's asset with round-to-nearest.
+func nftIssuerCut(amount state.Amount, fee uint16, nctx state.NumberContext) state.Amount {
+	rate := nctx.Number(int64(fee)*10000, -9, state.RoundToNearest)
+	cut := nctx.FromAmount(amount, state.RoundToNearest).MulRounded(rate, state.RoundToNearest)
+	return nctx.ToAmount(cut, amount, state.RoundToNearest)
+}
 
-	// Round-half-even (banker's rounding)
-	half := uint64(transferFeeDivisor / 2) // 50000
-	if remainder > half {
-		quotient++
-	} else if remainder == half {
-		// Tie: round to even
-		if quotient%2 != 0 {
-			quotient++
-		}
-	}
-	return quotient
+// nftIssuerCutXRP is nftIssuerCut for a sale priced in drops.
+func nftIssuerCutXRP(drops uint64, fee uint16, nctx state.NumberContext) uint64 {
+	return uint64(nftIssuerCut(state.NewXRPAmountFromInt(int64(drops)), fee, nctx).Drops())
 }
 
 // clampedSub subtracts n from count, clamping at zero.

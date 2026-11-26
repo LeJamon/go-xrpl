@@ -313,30 +313,79 @@ func TestUint256Next(t *testing.T) {
 	}
 }
 
-// TestNFTransferFeeXRP exercises the round-half-even (banker's rounding) used
-// for the issuer's XRP transfer-fee cut.
-// Reference: rippled Rate2.cpp / Number.cpp operator rep().
-func TestNFTransferFeeXRP(t *testing.T) {
+var issuerCutScales = []struct {
+	name  string
+	scale state.MantissaScale
+}{
+	{"small", state.MantissaScaleSmall},
+	{"large", state.MantissaScaleLarge},
+}
+
+func TestNFTIssuerCutXRP(t *testing.T) {
 	tests := []struct {
 		name   string
 		amount uint64
 		fee    uint16
-		want   uint64
+		small  uint64
+		large  uint64
 	}{
-		{"zero_fee", 1_000_000, 0, 0},
-		{"exact_half", 1_000_000, 50000, 500_000}, // 1e6 * 0.5, no remainder
-		{"five_percent", 1_000_000, 5000, 50_000},
-		{"round_down_below_half", 2, 20000, 0}, // 40000/100000 = 0.4 → 0
-		{"round_up_above_half", 2, 30000, 1},   // 60000/100000 = 0.6 → 1
-		{"tie_to_even_down", 1, 50000, 0},      // 50000/100000 = 0.5 → ties to even (0)
-		{"tie_to_even_up", 3, 50000, 2},        // 150000/100000 = 1.5 → ties to even (2)
-		{"max_native_half", state.MaxNativeDrops, 50000, state.MaxNativeDrops / 2},
+		{"exact_half", 1_000_000, 50000, 500_000, 500_000},
+		{"five_percent", 1_000_000, 5000, 50_000, 50_000},
+		{"round_down_below_half", 2, 20000, 0, 0},
+		{"round_up_above_half", 2, 30000, 1, 1},
+		{"tie_to_even_down", 1, 50000, 0, 0},
+		{"tie_to_even_up", 3, 50000, 2, 2},
+		{"max_native_half", state.MaxNativeDrops, 50000, state.MaxNativeDrops / 2, state.MaxNativeDrops / 2},
+		// 17-digit drops round to a tie when lifted into the small mantissa
+		// range, so the second rounding to drops lands one above the exact
+		// 100000000001.49995.
+		{"small_scale_double_rounding", 10_000_000_000_149_995, 1, 100_000_000_002, 100_000_000_001},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := nftTransferFeeXRP(tc.amount, tc.fee); got != tc.want {
-				t.Errorf("nftTransferFeeXRP(%d, %d) = %d, want %d", tc.amount, tc.fee, got, tc.want)
+	for _, sc := range issuerCutScales {
+		nctx := state.NewNumberContext(sc.scale, true)
+		for _, tc := range tests {
+			want := tc.large
+			if sc.scale == state.MantissaScaleSmall {
+				want = tc.small
 			}
-		})
+			t.Run(sc.name+"/"+tc.name, func(t *testing.T) {
+				if got := nftIssuerCutXRP(tc.amount, tc.fee, nctx); got != want {
+					t.Errorf("nftIssuerCutXRP(%d, %d) = %d, want %d", tc.amount, tc.fee, got, want)
+				}
+			})
+		}
+	}
+}
+
+func TestNFTIssuerCutIOU(t *testing.T) {
+	tests := []struct {
+		name         string
+		mantissa     int64
+		exponent     int
+		fee          uint16
+		wantMantissa int64
+		wantExponent int
+	}{
+		// 0.01001000000000001001 rounds down.
+		{"round_down", 1_000_000_000_000_001, -15, 1001, 1_001_000_000_000_001, -17},
+		// 0.411111107411111181 rounds up.
+		{"round_up", 1_234_567_890_123_457, -13, 333, 4_111_111_074_111_112, -16},
+		{"exact", 1_000_000_000_000_000, -15, 50000, 5_000_000_000_000_000, -16},
+	}
+	for _, sc := range issuerCutScales {
+		nctx := state.NewNumberContext(sc.scale, true)
+		for _, tc := range tests {
+			t.Run(sc.name+"/"+tc.name, func(t *testing.T) {
+				amount := state.NewIssuedAmountFromValue(tc.mantissa, tc.exponent, "USD", "rIssuer")
+				got := nftIssuerCut(amount, tc.fee, nctx)
+				if got.Mantissa() != tc.wantMantissa || got.Exponent() != tc.wantExponent {
+					t.Errorf("nftIssuerCut = %de%d, want %de%d",
+						got.Mantissa(), got.Exponent(), tc.wantMantissa, tc.wantExponent)
+				}
+				if got.Currency != "USD" || got.Issuer != "rIssuer" {
+					t.Errorf("nftIssuerCut issue = %s/%s, want USD/rIssuer", got.Currency, got.Issuer)
+				}
+			})
+		}
 	}
 }
