@@ -294,14 +294,6 @@ func (o *OfferCreate) takerCross(
 		return crossOutcome{terminated: true, result: ter.TesSUCCESS, applyMain: true}
 	}
 
-	// Reference: line 744-745
-	// Use isAmountZeroOrNegative because FromEitherAmount returns "0" for zero amounts,
-	// not empty string ""
-	crossed := false
-	if !isAmountZeroOrNegative(placeOffer.in) || !isAmountZeroOrNegative(placeOffer.out) {
-		crossed = true
-	}
-
 	remainingGets, remainingPays := computePostCrossAmounts(
 		saTakerPays,
 		saTakerGets,
@@ -319,6 +311,10 @@ func (o *OfferCreate) takerCross(
 	if outcome, done := evaluatePostCrossTermination(rules, saTakerGets, grossPaid, remainingGets, remainingPays, bFillOrKill); done {
 		return outcome
 	}
+
+	// A cross too small to change the remainder at amount precision does not
+	// count as crossed, even though the flow moved funds.
+	crossed := remainingGets.Compare(saTakerGets) != 0 || remainingPays.Compare(saTakerPays) != 0
 
 	// Adjust amounts for remaining offer
 	// Reference: lines 766-767
