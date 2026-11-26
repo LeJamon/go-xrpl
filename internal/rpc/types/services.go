@@ -1668,6 +1668,7 @@ type AccountChannel struct {
 	CancelAfter        uint32 `json:"cancel_after,omitempty"`
 	SourceTag          uint32 `json:"source_tag,omitempty"`
 	DestinationTag     uint32 `json:"destination_tag,omitempty"`
+	HasCancelAfter     bool   `json:"-"` // Internal flag, not serialized
 	HasSourceTag       bool   `json:"-"` // Internal flag, not serialized
 	HasDestTag         bool   `json:"-"` // Internal flag, not serialized
 }

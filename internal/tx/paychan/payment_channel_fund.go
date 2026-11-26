@@ -141,8 +141,8 @@ func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Reference: rippled PayChan.cpp doApply() lines 345-360
 	rules := ctx.Rules()
 	closeTime := ctx.Config.ParentCloseTime
-	if isChannelExpired(rules, closeTime, channel.CancelAfter) ||
-		isChannelExpired(rules, closeTime, channel.Expiration) {
+	if isChannelExpired(rules, closeTime, channel.CancelAfter, channel.HasCancelAfter) ||
+		isChannelExpired(rules, closeTime, channel.Expiration, channel.Expiration != 0) {
 		return closeChannel(ctx, channelKey, channel)
 	}
 

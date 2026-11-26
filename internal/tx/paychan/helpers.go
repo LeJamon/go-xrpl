@@ -17,13 +17,13 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// isChannelExpired reports whether a channel time field (CancelAfter or
-// Expiration) has passed relative to the parent close time. A zero field is
-// treated as absent. fixCleanup3_2_0 makes the comparison strict, fixing an
-// off-by-one where an exact match at the close-time instant was treated as
-// already expired.
-func isChannelExpired(rules *amendment.Rules, closeTime, timeField uint32) bool {
-	if timeField == 0 {
+// isChannelExpired reports whether a present channel time field (CancelAfter or
+// Expiration) has passed relative to the parent close time. A present zero is
+// expired. fixCleanup3_2_0 makes the comparison strict, fixing an off-by-one
+// where an exact match at the close-time instant was treated as already
+// expired.
+func isChannelExpired(rules *amendment.Rules, closeTime, timeField uint32, present bool) bool {
+	if !present {
 		return false
 	}
 	if rules.FixCleanup3_2_0Enabled() {
@@ -71,6 +71,7 @@ func newPayChannelData(pcTx *PaymentChannelCreate, ownerID, destID [20]byte, amo
 	}
 	if pcTx.CancelAfter != nil {
 		cd.CancelAfter = *pcTx.CancelAfter
+		cd.HasCancelAfter = true
 	}
 	if pcTx.SourceTag != nil {
 		cd.SourceTag = *pcTx.SourceTag
