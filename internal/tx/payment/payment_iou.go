@@ -153,8 +153,11 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 			return ter.TefINTERNAL
 		}
 
-		// A freshly created account carries no flags, so destination-tag and
-		// deposit-authorization checks do not apply.
+		// A freshly created account carries no flags, but supplied credentials
+		// are still verified so that expired ones are removed (tecEXPIRED).
+		if result := p.checkFlowDestPreamble(ctx, senderID, destID, newAccount); result != ter.TesSUCCESS {
+			return result
+		}
 		return p.applyFlowPaymentWithPaths(ctx, senderID, destID)
 	}
 
