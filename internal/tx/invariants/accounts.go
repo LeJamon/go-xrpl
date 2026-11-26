@@ -17,7 +17,8 @@ import (
 //
 // finalize: For each deleted account, verify that no directly-derivable objects
 // remain in the view (account root, owner directory, signer list, NFT pages,
-// DID). If the account had sfAMMID, verify the AMM object is also gone.
+// DID). If the account was a pseudo-account, verify its linked object (AMM,
+// Vault or LoanBroker) is also gone.
 //
 // Gating: enforced when fixCleanup3_2_0, Sponsor, SingleAssetVault, or
 // LendingProtocol is enabled. The never-activatable InvariantsV1_1 placeholder
@@ -25,9 +26,8 @@ import (
 
 // deletedAccount holds info about a deleted AccountRoot entry.
 type deletedAccount struct {
-	accountID [20]byte
-	ammID     [32]byte
-	hasAMMID  bool
+	accountID     [20]byte
+	linkedObjects []keylet.Keylet
 }
 
 func checkAccountRootsDeletedClean(entries []InvariantEntry, view ReadView, rules *amendment.Rules) *InvariantViolation {
@@ -95,11 +95,15 @@ func checkAccountRootsDeletedClean(entries []InvariantEntry, view ReadView, rule
 		if err != nil {
 			continue
 		}
-		var zeroHash [32]byte
-		da := deletedAccount{
-			accountID: accID,
-			hasAMMID:  acct.AMMID != zeroHash,
-			ammID:     acct.AMMID,
+		da := deletedAccount{accountID: accID}
+		if acct.HasAMMID() {
+			da.linkedObjects = append(da.linkedObjects, keylet.AMMByID(acct.AMMID))
+		}
+		if acct.HasVaultID() {
+			da.linkedObjects = append(da.linkedObjects, keylet.VaultByID(acct.VaultID))
+		}
+		if acct.HasLoanBrokerID() {
+			da.linkedObjects = append(da.linkedObjects, keylet.LoanBrokerByID(acct.LoanBrokerID))
 		}
 		deletedAccounts = append(deletedAccounts, da)
 	}
@@ -154,11 +158,9 @@ func checkAccountRootsDeletedClean(entries []InvariantEntry, view ReadView, rule
 			}
 		}
 
-		// Check AMM object if sfAMMID was present.
-		// Reference: rippled lines 492-497
-		if da.hasAMMID {
-			ammKL := keylet.AMMByID(da.ammID)
-			exists, err := view.Exists(ammKL)
+		// A pseudo-account's linked object must be deleted with it.
+		for _, kl := range da.linkedObjects {
+			exists, err := view.Exists(kl)
 			if err == nil && exists {
 				return &InvariantViolation{
 					Name:    "AccountRootsDeletedClean",

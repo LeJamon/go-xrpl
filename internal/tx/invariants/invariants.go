@@ -37,6 +37,44 @@ type InvariantEntry struct {
 	images *imageCache
 }
 
+// finalImage returns the entry's state after the transaction, or for a deleted
+// entry its image immediately before deletion.
+func (e InvariantEntry) finalImage() []byte {
+	if !e.IsDelete {
+		return e.After
+	}
+	if e.DeleteFinal != nil {
+		return e.DeleteFinal
+	}
+	return e.Before
+}
+
+// violationSet records the violation found while visiting entries in key order.
+// Before fixCleanup3_1_3 some checks assigned their result for each entry
+// instead of accumulating it, so the last entry visited decides.
+type violationSet struct {
+	overwrite bool
+	found     *InvariantViolation
+}
+
+func newViolationSet(rules *amendment.Rules) violationSet {
+	return violationSet{overwrite: rules != nil && !rules.Enabled(amendment.FeatureFixCleanup3_1_3)}
+}
+
+func (s *violationSet) add(v *InvariantViolation) {
+	if s.found == nil {
+		s.found = v
+	}
+}
+
+func (s *violationSet) assign(v *InvariantViolation) {
+	if s.overwrite {
+		s.found = v
+		return
+	}
+	s.add(v)
+}
+
 // InvariantViolation holds the name and description of a detected invariant violation.
 type InvariantViolation struct {
 	Name    string
@@ -207,15 +245,15 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 		func() *InvariantViolation { return checkAccountRootsNotDeleted(txType, result, entries) },
 		func() *InvariantViolation { return checkLedgerEntryTypesMatch(entries) },
 		func() *InvariantViolation { return checkSponsorship(entries) },
-		func() *InvariantViolation { return checkNoXRPTrustLines(entries) },
+		func() *InvariantViolation { return checkNoXRPTrustLines(entries, rules) },
 		func() *InvariantViolation {
-			return checkNoDeepFreezeTrustLinesWithoutFreeze(entries)
+			return checkNoDeepFreezeTrustLinesWithoutFreeze(entries, rules)
 		},
 		func() *InvariantViolation {
 			return checkTransfersNotFrozen(tx, entries, view, rules, numberContext...)
 		},
 		func() *InvariantViolation { return checkNoBadOffers(entries) },
-		func() *InvariantViolation { return checkNoZeroEscrow(entries) },
+		func() *InvariantViolation { return checkNoZeroEscrow(entries, rules) },
 		func() *InvariantViolation {
 			return checkValidNewAccountRoot(txType, result, entries, view, rules)
 		},

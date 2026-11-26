@@ -326,7 +326,7 @@ func Flow(
 			// But the actual limit quality might be slightly off due to round off.
 			// Reference: rippled StrandFlow.h lines 720-731
 			if limitQuality != nil && q.WorseThan(*limitQuality) {
-				if !adjustedRemOut || !WithinRelativeDistance(q, *limitQuality, 1e-7) {
+				if !adjustedRemOut || !WithinRelativeDistance(numberContext, q, *limitQuality, numberContext.Number(1, -7, state.RoundToNearest)) {
 					continue
 				}
 			}

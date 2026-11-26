@@ -862,7 +862,8 @@ func (t *ApplyStateTable) DropsDestroyed() drops.XRPAmount {
 // Must be called BEFORE Apply() — entries are still in the table at this point.
 func (t *ApplyStateTable) CollectEntries() []invariants.InvariantEntry {
 	var entries []invariants.InvariantEntry
-	for key, entry := range t.items {
+	for _, key := range sortedLedgerKeys(t.items) {
+		entry := t.items[key]
 		if entry.Action == ActionCache {
 			continue
 		}
@@ -1055,35 +1056,8 @@ func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []by
 	}
 	currEntry.EmitPreviousFields(origEntry, node.PreviousFields)
 	currEntry.EmitFinalFields(node.FinalFields)
-	// Detect rippled's "prevs holds an STI_NOTPRESENT entry" case
-	// (ApplyStateTable.cpp:209-220, with the STObject iterator
-	// surfacing template NOTPRESENT placeholders per STObject.cpp:
-	// 156-168). When orig has an absent-in-instance template field
-	// that cur has set, and the field carries sMD_ChangeOrig, rippled
-	// emplaces the NOTPRESENT obj into prevs — making prevs.empty()
-	// false (so the `if (!prevs.empty()) emplace_back(prevs)` gate
-	// fires) while serializing zero inner bytes. The wire effect is
-	// an empty `PreviousFields: {}` (`E6 E1`).
-	//
-	// Goxrpl uses generated EmitChangeOrigFields to enumerate the
-	// MetaDefault (sMD_ChangeOrig-bearing) field set on each side.
-	// MetaAlways fields like RootIndex are excluded — they appear in
-	// FinalFields but lack sMD_ChangeOrig at the rippled level, so a
-	// future MetaAlways field that transitions absent→present on a
-	// Modify must not trip this heuristic. Only fires when no real
-	// PreviousFields diff exists — a non-empty PreviousFields already
-	// produces the wire wrapper.
 	if len(node.PreviousFields) == 0 {
-		origChangeOrig := make(map[string]any)
-		origEntry.EmitChangeOrigFields(origChangeOrig)
-		curChangeOrig := make(map[string]any)
-		currEntry.EmitChangeOrigFields(curChangeOrig)
-		for name := range curChangeOrig {
-			if _, hadInOrig := origChangeOrig[name]; !hadInOrig {
-				node.EmitEmptyPreviousFields = true
-				break
-			}
-		}
+		node.EmitEmptyPreviousFields = setsAbsentChangeOrigField(origEntry, currEntry)
 	}
 	if len(node.PreviousFields) == 0 {
 		node.PreviousFields = nil
@@ -1092,6 +1066,24 @@ func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []by
 		node.FinalFields = nil
 	}
 	return node, nil
+}
+
+// setsAbsentChangeOrigField reports whether cur sets an sMD_ChangeOrig field
+// that orig lacks. rippled records the original's not-present template slot
+// in PreviousFields for such a field; it serializes to nothing, so the node
+// carries an empty PreviousFields object. MetaAlways-only fields such as
+// RootIndex are excluded because they lack sMD_ChangeOrig.
+func setsAbsentChangeOrigField(orig, cur entry.Entry) bool {
+	origFields := make(map[string]any)
+	orig.EmitChangeOrigFields(origFields)
+	curFields := make(map[string]any)
+	cur.EmitChangeOrigFields(curFields)
+	for name := range curFields {
+		if _, ok := origFields[name]; !ok {
+			return true
+		}
+	}
+	return false
 }
 
 // buildDeletedNode creates metadata for a deleted entry
@@ -1130,6 +1122,7 @@ func (t *ApplyStateTable) buildDeletedNode(key [32]byte, original, current []byt
 	currEntry.EmitDeleteFinalFields(node.FinalFields)
 	restoreDeletedNodePrevTxn(node.FinalFields, node.PreviousTxnID, node.PreviousTxnLgrSeq)
 	if len(node.PreviousFields) == 0 {
+		node.EmitEmptyPreviousFields = setsAbsentChangeOrigField(origEntry, currEntry)
 		node.PreviousFields = nil
 	}
 	if len(node.FinalFields) == 0 {
