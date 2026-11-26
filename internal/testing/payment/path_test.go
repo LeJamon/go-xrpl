@@ -600,7 +600,7 @@ func TestPath_ViaGateway(t *testing.T) {
 	xrp100 := tx.NewXRPAmount(jtx.XRP(100))
 	payTx := PayIssued(alice, bob, aud10).
 		SendMax(xrp100).
-		PathsXRP().
+		PathsFrom(env, xrpSource).
 		Build()
 	result = env.Submit(payTx)
 	jtx.RequireTxSuccess(t, result)
@@ -2151,7 +2151,7 @@ func TestPath_ViaOffersViaGateway(t *testing.T) {
 	xrp100 := tx.NewXRPAmount(jtx.XRP(100))
 	payTx := PayIssued(alice, bob, aud10).
 		SendMax(xrp100).
-		PathsXRP().
+		PathsFrom(env, xrpSource).
 		Build()
 	result = env.Submit(payTx)
 	jtx.RequireTxSuccess(t, result)
