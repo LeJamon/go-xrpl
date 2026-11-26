@@ -124,12 +124,13 @@ func routerRoleSignedLoanSetWithMemo(t *testing.T, cleanup bool, memoData string
 	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
 	primary := jtx.MasterAccount()
-	counterparty := jtx.NewAccount("router-signature-counterparty")
 	txn := lending.NewLoanSet(
 		primary.Address,
 		"1111111111111111111111111111111111111111111111111111111111111111",
 		"1",
 	)
+	// The counter-signer must be authorised for the named Counterparty.
+	txn.Counterparty = primary.Address
 	sequence := uint32(1)
 	txn.GetCommon().Sequence = &sequence
 	// LoanSet with a counterparty signature has a two-base-fee minimum.
@@ -145,8 +146,8 @@ func routerRoleSignedLoanSetWithMemo(t *testing.T, cleanup bool, memoData string
 	}
 	roleSignature, err := txsign.SignCounterpartyWithRules(
 		txn,
-		counterparty.PublicKeyHex(),
-		"00"+counterparty.PrivateKeyHex(),
+		primary.PublicKeyHex(),
+		"00"+primary.PrivateKeyHex(),
 		rules,
 	)
 	require.NoError(t, err)

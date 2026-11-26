@@ -84,6 +84,9 @@ func (e *Engine) preclaimWithCause(tx txcore.Transaction, txHash [32]byte) (resu
 	if result := e.checkSign(tx, common, account); result != ter.TesSUCCESS {
 		return result, nil
 	}
+	if result, err := e.checkCounterSign(tx, common); result != ter.TesSUCCESS {
+		return result, err
+	}
 	// checkBatchSign is part of the signature stage (rippled Batch::checkSign =
 	// Transactor::checkSign + Transactor::checkBatchSign), so it moves ahead of
 	// checkFee together with checkSign. It verifies each BatchSigner is
@@ -464,23 +467,9 @@ func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common, account
 		return ter.TesSUCCESS
 	}
 	if sponsor := common.SponsorSignature; sponsor != nil {
-		if result := e.checkPseudoAccount(common.Sponsor); result != ter.TesSUCCESS {
-			return result
-		}
-		// Dry-run/test mode permits an empty signature object. Real submissions
-		// have already failed crypto verification in preflight.
-		skipSignatureVerification := e.config.SkipSignatureVerification ||
-			e.config.ApplyFlags&txcore.TapDRY_RUN != 0
 		sponsorHasSigners := len(sponsor.Signers) > 0 || sponsor.HasField("Signers")
-		if !(skipSignatureVerification &&
-			sponsor.SigningPubKey == "" && !sponsorHasSigners) {
-			if sponsorHasSigners {
-				if result := e.checkMultiSignForAccount(common.Sponsor, sponsor.Signers); result != ter.TesSUCCESS {
-					return result
-				}
-			} else if result := e.checkSingleSignForAccount(common.Sponsor, sponsor.SigningPubKey); result != ter.TesSUCCESS {
-				return result
-			}
+		if result := e.checkNestedSign(common.Sponsor, sponsor.SigningPubKey, sponsor.Signers, sponsorHasSigners); result != ter.TesSUCCESS {
+			return result
 		}
 	}
 	if sign.IsMultiSigned(tx) ||
@@ -491,6 +480,48 @@ func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common, account
 		return e.checkSingleSign(common, account)
 	}
 	return ter.TesSUCCESS
+}
+
+// checkNestedSign authorises a nested signature object (SponsorSignature,
+// CounterpartySignature) against idAccount with the same single-sign and
+// multi-sign rules as the transaction source.
+func (e *Engine) checkNestedSign(idAccount, signingPubKey string, signers []txcore.SignerWrapper, hasSigners bool) ter.Result {
+	if result := e.checkPseudoAccount(idAccount); result != ter.TesSUCCESS {
+		return result
+	}
+	// Dry-run/test mode permits an empty signature object. Real submissions
+	// have already failed crypto verification in preflight.
+	skipSignatureVerification := e.config.SkipSignatureVerification ||
+		e.config.ApplyFlags&txcore.TapDRY_RUN != 0
+	if skipSignatureVerification && signingPubKey == "" && !hasSigners {
+		return ter.TesSUCCESS
+	}
+	if hasSigners {
+		return e.checkMultiSignForAccount(idAccount, signers)
+	}
+	return e.checkSingleSignForAccount(idAccount, signingPubKey)
+}
+
+// checkCounterSign authorises the CounterpartySignature against the account the
+// transaction resolves as its counter-signer.
+func (e *Engine) checkCounterSign(tx txcore.Transaction, common *txcore.Common) (ter.Result, error) {
+	cs, ok := tx.(txcore.CounterSigner)
+	if !ok {
+		return ter.TesSUCCESS, nil
+	}
+	counterSigner, found, err := cs.CounterSigner(txcore.NewReadOnlyLedgerView(e.view))
+	if err != nil {
+		return ter.TefINTERNAL, err
+	}
+	if !found {
+		return ter.TemBAD_SIGNER, nil
+	}
+	sig := common.CounterpartySignature
+	if sig == nil {
+		return ter.TesSUCCESS, nil
+	}
+	hasSigners := len(sig.Signers) > 0 || sig.HasField("Signers")
+	return e.checkNestedSign(counterSigner, sig.SigningPubKey, sig.Signers, hasSigners), nil
 }
 
 // checkPseudoAccountSign rejects a pseudo-account initiator. account is the
