@@ -655,6 +655,14 @@ func PayChannel(srcAccountID, dstAccountID [20]byte, sequence uint32) Keylet {
 	}
 }
 
+// PayChannelByID returns a payment channel keylet for a known channel ID.
+func PayChannelByID(channelID [32]byte) Keylet {
+	return Keylet{
+		Type: entry.TypePayChannel,
+		Key:  channelID,
+	}
+}
+
 // AMM returns the keylet for an AMM entry.
 // Sort key mirrors rippled's Issue::operator<=>
 // (rippled/include/xrpl/protocol/Issue.h:99-108): compare currency; on a
