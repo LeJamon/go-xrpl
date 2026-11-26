@@ -944,80 +944,6 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 		}
 	}
 
-	// Reference: rippled preclaim checks accountHolds >= deposit for each IOU
-	if !isXRP1 && !depositAmount1.IsZero() {
-		if a.Asset.IsMPT() {
-			requested, ok := depositAmount1.MPTRaw()
-			if !ok {
-				return ter.TefINTERNAL
-			}
-			funds, result := mptFunds(ctx.View, accountID, depositAmount1, false)
-			if result == ter.TefINTERNAL {
-				return result
-			}
-			if result != ter.TesSUCCESS || funds < requested {
-				return TecUNFUNDED_AMM
-			}
-		} else {
-			// Skip the check if the depositor is the issuer (unlimited supply).
-			issuerID1, _ := state.DecodeAccountID(a.Asset.Issuer)
-			if accountID != issuerID1 {
-				depositorFunds := mptutil.AccountFunds(ctx.View, accountID, depositAmount1, false, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
-				if depositorFunds.Compare(depositAmount1) < 0 {
-					return TecUNFUNDED_AMM
-				}
-			}
-		}
-	}
-	if !isXRP2 && !depositAmount2.IsZero() {
-		if a.Asset2.IsMPT() {
-			requested, ok := depositAmount2.MPTRaw()
-			if !ok {
-				return ter.TefINTERNAL
-			}
-			funds, result := mptFunds(ctx.View, accountID, depositAmount2, false)
-			if result == ter.TefINTERNAL {
-				return result
-			}
-			if result != ter.TesSUCCESS || funds < requested {
-				return TecUNFUNDED_AMM
-			}
-		} else {
-			issuerID2, _ := state.DecodeAccountID(a.Asset2.Issuer)
-			if accountID != issuerID2 {
-				depositorFunds := mptutil.AccountFunds(ctx.View, accountID, depositAmount2, false, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
-				if depositorFunds.Compare(depositAmount2) < 0 {
-					return TecUNFUNDED_AMM
-				}
-			}
-		}
-	}
-
-	// Calculate total XRP needed for deposit and verify it against the depositor's
-	// LIQUID balance (balance minus reserve), not the raw balance. A deposit that
-	// would dip into the account reserve must fail tecUNFUNDED_AMM. The reserve
-	// accounts for the LP token trust line when the depositor doesn't already hold
-	// one (matching rippled's xrpLiquid(view, account, !sle) at apply time).
-	// Reference: rippled AMMDeposit.cpp deposit() checkBalance lines 512-525
-	totalXRPNeeded := int64(0)
-	if isXRP1 && !depositAmount1.IsZero() {
-		totalXRPNeeded += depositAmount1.Drops()
-	}
-	if isXRP2 && !depositAmount2.IsZero() {
-		totalXRPNeeded += depositAmount2.Drops()
-	}
-	if totalXRPNeeded > 0 {
-		ownerCountAdj := uint32(0)
-		if !lptExists {
-			ownerCountAdj = 1
-		}
-		reserve := ctx.AccountReserve(ctx.Account.OwnerCount + ownerCountAdj)
-		xrpLiquid := int64(ctx.Account.Balance) - int64(reserve)
-		if xrpLiquid < totalXRPNeeded {
-			return TecUNFUNDED_AMM
-		}
-	}
-
 	newLPBalance, err := amm.LPTokenBalance.AddWithNumberContext(lpTokensToIssue, math.ctx, state.RoundToNearest)
 	if err != nil {
 		return ter.TefINTERNAL
@@ -1039,59 +965,80 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	// Transfer assets from depositor to AMM after all amount conversions have
 	// succeeded, so cleanup can turn an arithmetic overflow into a TER result.
 	calculationComplete = true
-	if isXRP1 && !depositAmount1.IsZero() {
-		drops := uint64(depositAmount1.Drops())
-		ctx.Account.Balance -= drops
-		ammAccount.Balance += drops
-	}
-	if isXRP2 && !depositAmount2.IsZero() {
-		drops := uint64(depositAmount2.Drops())
-		ctx.Account.Balance -= drops
-		ammAccount.Balance += drops
-	}
-
-	// For IOU transfers, update trust lines for BOTH depositor and AMM
-	// Reference: rippled AMMDeposit.cpp - deposit handles token transfer via book::quality path
-	if !isXRP1 && !depositAmount1.IsZero() {
-		if a.Asset.IsMPT() {
-			if result := sendMPT(ctx.View, accountID, ammAccountID, depositAmount1, true); result != ter.TesSUCCESS {
-				return result
+	// Each asset's funds are checked immediately before it is sent, so reserve
+	// freed by the first send (an IOU line returning to default) counts toward
+	// the second asset's XRP sufficiency.
+	depositAsset := func(asset tx.Asset, amount tx.Amount, isXRP bool) ter.Result {
+		if isXRP {
+			ownerCount := ctx.Account.OwnerCount
+			if !lptExists {
+				ownerCount++
 			}
-		} else {
-			issuerID, err := state.DecodeAccountID(a.Asset.Issuer)
-			if err != nil {
+			drops := amount.Drops()
+			if int64(ctx.Account.Balance)-int64(ctx.AccountReserve(ownerCount)) < drops {
+				return TecUNFUNDED_AMM
+			}
+			ctx.Account.Balance -= uint64(drops)
+			ammAccount.Balance += uint64(drops)
+			return ter.TesSUCCESS
+		}
+		if asset.IsMPT() {
+			requested, ok := amount.MPTRaw()
+			if !ok {
 				return ter.TefINTERNAL
 			}
-			// Skip the depositor's debit if it IS the issuer — issuers issue from
-			// thin air. Reference: rippled accountSend() handles this internally.
-			if accountID != issuerID {
-				if result := debitDepositTrustline(ctx, accountID, issuerID, a.Asset.Currency, depositAmount1.Negate()); result != ter.TesSUCCESS {
-					return result
-				}
+			funds, result := mptFunds(ctx.View, accountID, amount, false)
+			if result == ter.TefINTERNAL {
+				return result
 			}
-			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset, depositAmount1, ctx.View, ctx.NumberContext()); err != nil {
-				return TecNO_LINE
+			if result != ter.TesSUCCESS || funds < requested {
+				return TecUNFUNDED_AMM
+			}
+			return sendMPT(ctx.View, accountID, ammAccountID, amount, true)
+		}
+		issuerID, err := state.DecodeAccountID(asset.Issuer)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		// The issuer deposits from unlimited supply; it has no line to debit.
+		if accountID != issuerID {
+			funds := mptutil.AccountFunds(ctx.View, accountID, amount, false, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+			if funds.Compare(amount) < 0 {
+				return TecUNFUNDED_AMM
+			}
+			if result := debitDepositTrustline(ctx, accountID, issuerID, asset.Currency, amount.Negate()); result != ter.TesSUCCESS {
+				return result
 			}
 		}
+		if err := createOrUpdateAMMTrustline(ammAccountID, asset, amount, ctx.View, ctx.NumberContext()); err != nil {
+			return TecNO_LINE
+		}
+		return ter.TesSUCCESS
 	}
-	if !isXRP2 && !depositAmount2.IsZero() {
-		if a.Asset2.IsMPT() {
-			if result := sendMPT(ctx.View, accountID, ammAccountID, depositAmount2, true); result != ter.TesSUCCESS {
-				return result
-			}
-		} else {
-			issuerID, err := state.DecodeAccountID(a.Asset2.Issuer)
-			if err != nil {
-				return ter.TefINTERNAL
-			}
-			if accountID != issuerID {
-				if result := debitDepositTrustline(ctx, accountID, issuerID, a.Asset2.Currency, depositAmount2.Negate()); result != ter.TesSUCCESS {
-					return result
-				}
-			}
-			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, depositAmount2, ctx.View, ctx.NumberContext()); err != nil {
-				return TecNO_LINE
-			}
+	type assetDeposit struct {
+		asset  tx.Asset
+		amount tx.Amount
+		isXRP  bool
+	}
+	deposits := [2]assetDeposit{
+		{a.Asset, depositAmount1, isXRP1},
+		{a.Asset2, depositAmount2, isXRP2},
+	}
+	// The Amount field's asset is sent first; without one, the AMM's own
+	// first asset is.
+	asset2First := !matchesAssetByIssue(amm.Asset, a.Asset)
+	if a.Amount != nil {
+		asset2First = !matchesAsset(a.Amount, a.Asset)
+	}
+	if asset2First {
+		deposits[0], deposits[1] = deposits[1], deposits[0]
+	}
+	for _, d := range deposits {
+		if d.amount.IsZero() {
+			continue
+		}
+		if result := depositAsset(d.asset, d.amount, d.isXRP); result != ter.TesSUCCESS {
+			return result
 		}
 	}
 
