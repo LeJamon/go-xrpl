@@ -1359,7 +1359,8 @@ func loadSnapshotLedger(snapshot snapshotLedger) (loadedSnapshotLedger, error) {
 		return loadedSnapshotLedger{}, errors.New("ledger TxHash does not match transaction map")
 	}
 
-	ids := make([][32]byte, len(snapshot.Rules))
+	permanentIDs := amendment.PermanentlyEnabledIDs()
+	ids := make([][32]byte, len(snapshot.Rules), len(snapshot.Rules)+len(permanentIDs))
 	for i, value := range snapshot.Rules {
 		id, err := decodeSnapshotHash(fmt.Sprintf("rules[%d]", i), value)
 		if err != nil {
@@ -1376,7 +1377,7 @@ func loadSnapshotLedger(snapshot snapshotLedger) (loadedSnapshotLedger, error) {
 	// Retired amendments are permanently enabled, exactly as when rules are
 	// loaded from a ledger. A snapshot recorded by an oracle that had not yet
 	// retired an amendment omits it whenever it was disabled there.
-	explicitRules := amendment.NewRules(append(ids, amendment.PermanentlyEnabledIDs()...))
+	explicitRules := amendment.NewRules(append(ids, permanentIDs...))
 	fees, err := parseSnapshotFees(snapshot.Fees)
 	if err != nil {
 		return loadedSnapshotLedger{}, err
