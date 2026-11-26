@@ -258,17 +258,15 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TemDST_IS_SRC
 	}
 
-	// Check issuer (destination) exists and load it for the flag checks below.
-	// Per rippled SetTrust.cpp: returns tecNO_DST when the destination doesn't exist.
+	// Without AMM or SingleAssetVault a missing destination is only rejected
+	// after the deep-freeze invariants, so issuerAccount stays nil until then.
+	var issuerAccount *state.AccountRoot
 	issuerData, err := ctx.View.Read(issuerKey)
 	if err != nil || issuerData == nil {
-		ctx.Log.Warn("trust set: issuer account does not exist",
-			"issuer", t.LimitAmount.Issuer,
-		)
-		return ter.TecNO_DST
-	}
-	issuerAccount, err := state.ParseAccountRoot(issuerData)
-	if err != nil {
+		if ctx.Rules().Enabled(amendment.FeatureAMM) || ctx.Rules().Enabled(amendment.FeatureSingleAssetVault) {
+			return ter.TecNO_DST
+		}
+	} else if issuerAccount, err = state.ParseAccountRoot(issuerData); err != nil {
 		return ter.TefINTERNAL
 	}
 
@@ -289,7 +287,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	bHigh := state.CompareAccountIDs(accountID, issuerAccountID) > 0
 
 	// If the destination has opted to disallow incoming trustlines, honour that flag.
-	if issuerAccount.Flags&state.LsfDisallowIncomingTrustline != 0 && !trustLineExists {
+	if issuerAccount != nil && issuerAccount.Flags&state.LsfDisallowIncomingTrustline != 0 && !trustLineExists {
 		return ter.TecNO_PERMISSION
 	}
 
@@ -297,7 +295,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	// unless the trust line already exists or it's an LP token trust line
 	// for a non-empty AMM.
 	// Reference: rippled SetTrust.cpp lines 273-309
-	if issuerAccount.IsPseudoAccount() {
+	if issuerAccount != nil && issuerAccount.IsPseudoAccount() {
 		if issuerAccount.AMMID != [32]byte{} {
 			if trustLineExists {
 				// Allow modification of existing trust lines to AMM accounts.
@@ -387,6 +385,10 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
+	if issuerAccount == nil {
+		return ter.TecNO_DST
+	}
+
 	// Parse quality values from transaction
 	var uQualityIn, uQualityOut uint32
 	bQualityIn := t.QualityIn != nil
@@ -446,8 +448,8 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 			LimitIssuer: accountID,
 			Auth:        bSetAuth,
 			NoRipple:    bSetNoRipple && !bClearNoRipple,
-			Freeze:      bSetFreeze && !bClearFreeze && !bNoFreeze,
-			DeepFreeze:  bSetDeepFreeze && !bClearDeepFreeze && !bNoFreeze,
+			Freeze:      bSetFreeze && !bClearFreeze,
+			DeepFreeze:  bSetDeepFreeze,
 			Balance:     tx.NewIssuedAmount(0, -100, t.LimitAmount.Currency, state.AccountOneAddress),
 			Limit:       tx.NewIssuedAmount(limitAmount.IOU().Mantissa(), limitAmount.IOU().Exponent(), t.LimitAmount.Currency, accountStr),
 			QualityIn:   uQualityIn,

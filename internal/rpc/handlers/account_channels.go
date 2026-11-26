@@ -96,7 +96,7 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		if ch.Expiration > 0 {
 			channel["expiration"] = ch.Expiration
 		}
-		if ch.CancelAfter > 0 {
+		if ch.HasCancelAfter {
 			channel["cancel_after"] = ch.CancelAfter
 		}
 		if ch.HasSourceTag {

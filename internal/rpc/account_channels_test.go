@@ -509,6 +509,7 @@ func TestAccountChannelsOptionalFields(t *testing.T) {
 					Balance:            "0",
 					SettleDelay:        100,
 					CancelAfter:        98765432,
+					HasCancelAfter:     true,
 				},
 			},
 			LedgerIndex: 3,

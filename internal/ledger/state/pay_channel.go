@@ -17,6 +17,7 @@ type PayChannelData struct {
 	PublicKey       string
 	Expiration      uint32
 	CancelAfter     uint32
+	HasCancelAfter  bool
 	SourceTag       uint32
 	DestinationTag  uint32
 	HasSourceTag    bool
@@ -81,7 +82,7 @@ func SerializePayChannelFromData(channel *PayChannelData) ([]byte, error) {
 		entry.ClearSponsor()
 	}
 
-	if channel.CancelAfter > 0 || (entry.HasCancelAfter() && channel.CancelAfter == entry.CancelAfter) {
+	if channel.HasCancelAfter {
 		entry.SetCancelAfterValue(channel.CancelAfter)
 	} else {
 		entry.ClearCancelAfter()
@@ -131,6 +132,7 @@ func ParsePayChannel(data []byte) (*PayChannelData, error) {
 		CancelAfter:       entry.CancelAfter,
 		Sequence:          entry.Sequence,
 		PreviousTxnLgrSeq: entry.PreviousTxnLgrSeq,
+		HasCancelAfter:    entry.HasCancelAfter(),
 		HasSourceTag:      entry.HasSourceTag(),
 		HasDestTag:        entry.HasDestinationTag(),
 		HasDestNode:       entry.HasDestinationNode(),

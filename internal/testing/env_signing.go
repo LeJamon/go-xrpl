@@ -110,6 +110,32 @@ func (e *TestEnv) SubmitSigned(txn tx.Transaction) TxResult {
 	return e.submitWithSigVerification(txn)
 }
 
+// SubmitSignedBinary signs the transaction like SubmitSigned, then submits the
+// transaction decoded from its signed binary blob, so the engine sees fields as
+// the binary codec renders them.
+func (e *TestEnv) SubmitSignedBinary(txn tx.Transaction) TxResult {
+	e.t.Helper()
+	if txn == nil || txn.GetCommon() == nil {
+		e.t.Fatal("SubmitSignedBinary: nil transaction")
+	}
+	acc := e.findAccountByAddress(txn.GetCommon().Account)
+	if acc == nil {
+		e.t.Fatalf("SubmitSignedBinary: account %s not registered in test env", txn.GetCommon().Account)
+	}
+
+	e.autoFillForSigning(txn)
+	e.signReal(txn, acc)
+	blob, err := tx.SerializeTransaction(txn)
+	if err != nil {
+		e.t.Fatalf("SubmitSignedBinary: serialize: %v", err)
+	}
+	parsed, err := tx.ParseFromBinary(blob)
+	if err != nil {
+		e.t.Fatalf("SubmitSignedBinary: parse: %v", err)
+	}
+	return e.submitWithSigVerification(parsed)
+}
+
 // SubmitSignedWith signs the transaction with a different key (e.g. a regular key)
 // and submits with signature verification enabled.
 // Reference: rippled's sig(account) -- sign with regular key.

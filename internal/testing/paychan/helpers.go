@@ -112,6 +112,20 @@ func chanExpiration(env *jtx.TestEnv, k keylet.Keylet) (uint32, bool) {
 	return channel.Expiration, channel.Expiration > 0
 }
 
+// chanCancelAfter returns the CancelAfter of a payment channel and whether the
+// field is present, which includes a present zero.
+func chanCancelAfter(env *jtx.TestEnv, k keylet.Keylet) (uint32, bool) {
+	data, err := env.LedgerEntry(k)
+	if err != nil {
+		return 0, false
+	}
+	channel, err := state.ParsePayChannel(data)
+	if err != nil {
+		return 0, false
+	}
+	return channel.CancelAfter, channel.HasCancelAfter
+}
+
 // ownerDirCount returns the number of entries in an account's owner directory.
 // This reads the account's OwnerCount field, which tracks the number of owned
 // ledger objects (channels, offers, escrows, etc.).

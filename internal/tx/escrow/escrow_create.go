@@ -260,7 +260,7 @@ func escrowCreateNonXRPPreflight(rules *amendment.Rules, amount tx.Amount) error
 	if amount.IsZero() || amount.IsNegative() {
 		return ter.Errorf(ter.TemBAD_AMOUNT, "Amount must be positive")
 	}
-	if amount.Currency == "" || amount.Currency == "XRP" {
+	if amount.Currency == "" || tx.IsBadCurrency(amount.Currency) {
 		return ter.Errorf(ter.TemBAD_CURRENCY, "cannot escrow XRP as IOU")
 	}
 	return nil

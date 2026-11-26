@@ -100,3 +100,58 @@ func requireDeletedNFTokenOffer(t *testing.T, result jtx.TxResult, offerKL keyle
 	}
 	t.Fatalf("expected a DeletedNode for NFTokenOffer %s in metadata, got %+v", want, result.Metadata.AffectedNodes)
 }
+
+// TestNFTokenAcceptOffer_ExpiredOfferRetryPass pins where tecEXPIRED comes
+// from on a retry pass. Without fixCleanup3_1_3 it is a preclaim result, so the
+// transaction is deferred (not applied). With the amendment it comes from
+// doApply, which commits tecEXPIRED and deletes the offer even when retrying.
+func TestNFTokenAcceptOffer_ExpiredOfferRetryPass(t *testing.T) {
+	for _, amendmentEnabled := range []bool{true, false} {
+		name := "amendment enabled applies"
+		if !amendmentEnabled {
+			name = "amendment disabled defers"
+		}
+		t.Run(name, func(t *testing.T) {
+			env := jtx.NewTestEnv(t)
+			if !amendmentEnabled {
+				env.DisableFeature("fixCleanup3_1_3")
+			}
+			alice := jtx.NewAccount("alice")
+			buyer := jtx.NewAccount("buyer")
+			env.Fund(alice, buyer)
+			env.Close()
+
+			nftID := nft.GetNextNFTokenID(env, alice, 0, nftoken.NFTokenFlagTransferable, 0)
+			jtx.RequireTxSuccess(t, env.Submit(nft.NFTokenMint(alice, 0).Transferable().Build()))
+			offerKL := keylet.NFTokenOffer(alice.ID, env.Seq(alice))
+			jtx.RequireTxSuccess(t, env.Submit(
+				nft.NFTokenCreateSellOffer(alice, nftID, tx.NewXRPAmount(0)).
+					Expiration(env.NowRipple()+100).
+					Build()))
+			env.Close()
+			env.AdvanceTime(300 * time.Second)
+			env.Close()
+
+			buyerSeq := env.Seq(buyer)
+			result := env.SubmitWithFlags(
+				nft.NFTokenAcceptSellOffer(buyer, hex.EncodeToString(offerKL.Key[:])).Build(),
+				tx.TapRETRY)
+			if result.Code != jtx.TecEXPIRED {
+				t.Fatalf("result = %s, want tecEXPIRED", result.Code)
+			}
+			if result.Applied != amendmentEnabled {
+				t.Fatalf("applied = %v, want %v", result.Applied, amendmentEnabled)
+			}
+			wantSeq := buyerSeq
+			if amendmentEnabled {
+				wantSeq++
+			}
+			if got := env.Seq(buyer); got != wantSeq {
+				t.Fatalf("buyer sequence = %d, want %d", got, wantSeq)
+			}
+			if exists := env.LedgerEntryExists(offerKL); exists == amendmentEnabled {
+				t.Fatalf("offer exists = %v, want %v", exists, !amendmentEnabled)
+			}
+		})
+	}
+}

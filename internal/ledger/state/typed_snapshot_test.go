@@ -114,9 +114,18 @@ func TestPayChannelSnapshotTimesClearAndTagsRoundTrip(t *testing.T) {
 	if !bytes.Equal(raw, unchanged) {
 		t.Fatalf("unchanged channel differs: %X != %X", raw, unchanged)
 	}
-	channel.Expiration = 0
 	channel.CancelAfter = 0
 	encoded, err := SerializePayChannelFromData(channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := decodeSLE(t, encoded)["CancelAfter"]; !ok || got != uint32(0) {
+		t.Fatalf("present-zero CancelAfter = %v (present %v), want 0 present", got, ok)
+	}
+
+	channel.Expiration = 0
+	channel.HasCancelAfter = false
+	encoded, err = SerializePayChannelFromData(channel)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -274,6 +274,7 @@ func (a *LedgerServiceAdapter) GetAccountChannels(ctx context.Context, account s
 			CancelAfter:        ch.CancelAfter,
 			SourceTag:          ch.SourceTag,
 			DestinationTag:     ch.DestinationTag,
+			HasCancelAfter:     ch.HasCancelAfter,
 			HasSourceTag:       ch.HasSourceTag,
 			HasDestTag:         ch.HasDestTag,
 		}

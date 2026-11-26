@@ -251,8 +251,8 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Auto-close on expiration
 	// Reference: rippled PayChan.cpp doApply() lines 466-469
 	closeTime := ctx.Config.ParentCloseTime
-	if isChannelExpired(rules, closeTime, channel.CancelAfter) ||
-		isChannelExpired(rules, closeTime, channel.Expiration) {
+	if isChannelExpired(rules, closeTime, channel.CancelAfter, channel.HasCancelAfter) ||
+		isChannelExpired(rules, closeTime, channel.Expiration, channel.Expiration != 0) {
 		return closeChannel(ctx, channelKey, channel)
 	}
 
