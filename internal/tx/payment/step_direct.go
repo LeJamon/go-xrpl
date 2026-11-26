@@ -655,13 +655,30 @@ func (s *DirectStepI) DirectStepSrcAcct() *[20]byte {
 	return &s.src
 }
 
+// Check validates the step without strand loop detection.
 func (s *DirectStepI) Check(sb *PaymentSandbox) ter.Result {
-	// Check freeze status — applies to BOTH payments and offer crossing.
-	// Skip for pure issue/redeem (single-step strand).
-	// Reference: rippled DirectStepI<TDerived>::check() lines 906-912
-	//   if (!(ctx.isLast && ctx.isFirst))
-	//       checkFreeze(ctx.view, src_, dst_, currency_);
-	// This runs in the BASE class check(), before delegating to derived class.
+	if result := s.checkAccounts(sb); result != ter.TesSUCCESS {
+		return result
+	}
+	return s.checkLine(sb)
+}
+
+// checkAccounts runs the checks rippled performs before loop detection:
+// endpoint validity, source existence, freeze and NoRipple.
+func (s *DirectStepI) checkAccounts(sb *PaymentSandbox) ter.Result {
+	if s.src == ([20]byte{}) || s.dst == ([20]byte{}) || s.src == s.dst {
+		return ter.TemBAD_PATH
+	}
+
+	exists, err := sb.Exists(keylet.Account(s.src))
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if !exists {
+		return ter.TerNO_ACCOUNT
+	}
+
+	// Pure issue/redeem (single-step strand) can't be frozen.
 	if !(s.isFirst && s.isLast) {
 		if result := checkFreezeAndLPToken(sb, s.src, s.dst, s.currency); result != ter.TesSUCCESS {
 			return result
@@ -674,10 +691,12 @@ func (s *DirectStepI) Check(sb *PaymentSandbox) ter.Result {
 		}
 	}
 
-	// Offer crossing skips trust line existence and authorization checks after
-	// the common base checks above. Trust lines are created on demand during
-	// crossing via rippleCredit.
-	// Reference: rippled DirectIOfferCrossingStep::check() lines 462-470
+	return ter.TesSUCCESS
+}
+
+// checkLine runs the trust line checks rippled performs after loop detection.
+func (s *DirectStepI) checkLine(sb *PaymentSandbox) ter.Result {
+	// Offer crossing creates trust lines on demand, so it has nothing to check.
 	if s.offerCrossing {
 		return ter.TesSUCCESS
 	}

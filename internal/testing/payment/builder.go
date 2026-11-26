@@ -6,10 +6,15 @@ package payment
 import (
 	"fmt"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/payment/pathfinder"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
+
+var xrpSource = payment.Issue{Currency: "XRP"}
 
 // PaymentBuilder provides a fluent interface for building Payment transactions.
 type PaymentBuilder struct {
@@ -105,6 +110,35 @@ func (b *PaymentBuilder) PathsXRP() *PaymentBuilder {
 	b.paths = [][]payment.PathStep{{
 		{Currency: "XRP", Type: int(payment.PathTypeCurrency)},
 	}}
+	return b
+}
+
+// PathsFrom sets the paths the pathfinder finds from src on env's open ledger,
+// leaving them unset when only the default path is found. It mirrors rippled's
+// jtx paths(asset), which never emits a leading element for the source asset.
+func (b *PaymentBuilder) PathsFrom(env *jtx.TestEnv, src payment.Issue) *PaymentBuilder {
+	deliver := tx.NewXRPAmount(int64(b.amount))
+	if b.issuedAmt != nil {
+		deliver = *b.issuedAmt
+	}
+	srcAmount := tx.NewXRPAmount(99_999_999_999)
+	if !src.IsXRP() {
+		srcAmount = tx.NewIssuedAmountFromFloat64(9999999999999999e80, src.Currency, state.EncodeAccountIDSafe(src.Issuer))
+	}
+
+	view := env.Ledger()
+	pf := pathfinder.NewPathfinderForIssue(
+		view, pathfinder.NewRippleLineCache(view),
+		b.from.ID, b.to.ID, deliver, srcAmount, src, false,
+		protocol.ToRippleTime(view.ParentCloseTime()),
+	)
+	if !pf.FindPaths(7) {
+		return b
+	}
+	pf.ComputePathRanks(4)
+	if best, _ := pf.GetBestPaths(4, nil, src.Issuer); len(best) > 0 {
+		b.paths = best
+	}
 	return b
 }
 

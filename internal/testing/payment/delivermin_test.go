@@ -225,7 +225,7 @@ func TestDeliverMin_PathPartial(t *testing.T) {
 	usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)
 	usd7 := tx.NewIssuedAmountFromFloat64(7, "USD", gw.Address)
 	result = env.Submit(PayIssued(alice, bob, usd10).
-		PathsXRP().
+		PathsFrom(env, xrpSource).
 		DeliverMin(usd7).
 		PartialPayment().
 		SendMax(xrp5).
@@ -273,7 +273,7 @@ func TestDeliverMin_SelfPayment(t *testing.T) {
 	// This acquires USD from bob's offer
 	usd10000 := tx.NewIssuedAmountFromFloat64(10000, "USD", gw.Address)
 	result = env.Submit(PayIssued(alice, alice, usd10000).
-		PathsXRP().
+		PathsFrom(env, xrpSource).
 		DeliverMin(usd100).
 		PartialPayment().
 		SendMax(xrp100).
@@ -342,7 +342,7 @@ func TestDeliverMin_MultipleOffers(t *testing.T) {
 	// leaving 900 XRP which isn't enough for second offer (1000 XRP needed)
 	usd10000 := tx.NewIssuedAmountFromFloat64(10000, "USD", gw.Address)
 	result = env.Submit(PayIssued(alice, carol, usd10000).
-		PathsXRP().
+		PathsFrom(env, xrpSource).
 		DeliverMin(usd200).
 		PartialPayment().
 		SendMax(xrp1000).
@@ -353,7 +353,7 @@ func TestDeliverMin_MultipleOffers(t *testing.T) {
 	// With sendmax(1100 XRP), should succeed - consuming both first and second offers
 	xrp1100 := tx.NewXRPAmount(1100_000_000)
 	result = env.Submit(PayIssued(alice, carol, usd10000).
-		PathsXRP().
+		PathsFrom(env, xrpSource).
 		DeliverMin(usd200).
 		PartialPayment().
 		SendMax(xrp1100).
@@ -427,7 +427,7 @@ func TestDeliverMin_MultipleProviders(t *testing.T) {
 	usd200 := tx.NewIssuedAmountFromFloat64(200, "USD", gw.Address)
 	usd10000 := tx.NewIssuedAmountFromFloat64(10000, "USD", gw.Address)
 	result = env.Submit(PayIssued(alice, carol, usd10000).
-		PathsXRP().
+		PathsFrom(env, xrpSource).
 		DeliverMin(usd200).
 		PartialPayment().
 		SendMax(xrp200).

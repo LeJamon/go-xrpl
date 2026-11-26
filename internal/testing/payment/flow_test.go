@@ -302,7 +302,7 @@ func TestFlow_BookStep(t *testing.T) {
 
 		// alice pays carol 100 USD using XRP through the offer
 		result = env.Submit(PayIssued(alice, carol, usd100).
-			PathsXRP().
+			PathsFrom(env, xrpSource).
 			SendMax(xrp100).
 			Build())
 		jtx.RequireTxSuccess(t, result)
@@ -360,7 +360,7 @@ func TestFlow_TransferRate(t *testing.T) {
 	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
 	xrp200 := tx.NewXRPAmount(200_000_000)
 	paymentTx := PayIssued(alice, bob, usd100).
-		PathsXRP().
+		PathsFrom(env, xrpSource).
 		SendMax(xrp200).
 		Build()
 	result = env.Submit(paymentTx)

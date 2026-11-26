@@ -50,28 +50,26 @@ func NewStrandContext(view *PaymentSandbox, src, dst [20]byte) *StrandContext {
 	}
 }
 
-// CheckDirectStepLoop checks and records a DirectStep for loops.
-// Returns temBAD_PATH_LOOP if a loop is detected.
-// Reference: rippled DirectStep.cpp make_DirectStepI() lines 949-955
-func (ctx *StrandContext) CheckDirectStepLoop(srcAcct, dstAcct [20]byte, currency string) ter.Result {
+// CheckDirectStepLoop checks and records a DirectStep for loops. An issue
+// already output by a book is only allowed when the previous step is that
+// book. Each account may appear at most once as a source and once as a
+// destination in a currency, strand endpoints included.
+func (ctx *StrandContext) CheckDirectStepLoop(srcAcct, dstAcct [20]byte, currency string, prevStep Step) ter.Result {
 	srcIssue := Issue{Currency: currency, Issuer: srcAcct}
 	dstIssue := Issue{Currency: currency, Issuer: dstAcct}
 
-	// Check if source issue already seen as source (except for strand endpoints)
-	if srcAcct != ctx.StrandSrc && srcAcct != ctx.StrandDst {
-		if ctx.SeenDirectIssues[0][srcIssue] {
+	if ctx.SeenBookOuts[srcIssue] {
+		if prevStep == nil {
+			return ter.TemBAD_PATH_LOOP
+		}
+		if book := prevStep.BookStepBook(); book != nil && !book.Out.Equal(srcIssue) {
 			return ter.TemBAD_PATH_LOOP
 		}
 	}
 
-	// Check if dest issue already seen as dest (except for strand endpoints)
-	if dstAcct != ctx.StrandSrc && dstAcct != ctx.StrandDst {
-		if ctx.SeenDirectIssues[1][dstIssue] {
-			return ter.TemBAD_PATH_LOOP
-		}
+	if ctx.SeenDirectIssues[0][srcIssue] || ctx.SeenDirectIssues[1][dstIssue] {
+		return ter.TemBAD_PATH_LOOP
 	}
-
-	// Insert into seen sets
 	ctx.SeenDirectIssues[0][srcIssue] = true
 	ctx.SeenDirectIssues[1][dstIssue] = true
 
@@ -662,26 +660,15 @@ func (ctx *StrandContext) buildStrandSteps(
 			// Per rippled: if curIssue.account != cur.account AND curIssue.account != next.account
 			if !curIssue.IsXRP() && curIssue.Issuer != cur.account && curIssue.Issuer != next.account {
 				// Insert implied DirectStep to curIssue.Issuer first
-				// Check for loop BEFORE creating step
-				if result := ctx.CheckDirectStepLoop(cur.account, curIssue.Issuer, curIssue.Currency); result != ter.TesSUCCESS {
-					return nil, result
-				}
-				directStep := ctx.newDirectStepI(cur.account, curIssue.Issuer, curIssue.Currency, prevStep, len(strand) == 0, false)
-				// Check NoRipple constraint
-				if result := directStep.Check(view); result != ter.TesSUCCESS {
+				directStep, result := ctx.newDirectStepI(cur.account, curIssue.Issuer, curIssue.Currency, prevStep, len(strand) == 0, false)
+				if result != ter.TesSUCCESS {
 					return nil, result
 				}
 				strand = append(strand, directStep)
 				prevStep = directStep
 
-				// Check for loop BEFORE creating step
-				if result := ctx.CheckDirectStepLoop(curIssue.Issuer, next.account, curIssue.Currency); result != ter.TesSUCCESS {
-					return nil, result
-				}
-				// Now create step from curIssue.Issuer to next
-				directStep = ctx.newDirectStepI(curIssue.Issuer, next.account, curIssue.Currency, prevStep, false, isLast)
-				// Check NoRipple constraint
-				if result := directStep.Check(view); result != ter.TesSUCCESS {
+				directStep, result = ctx.newDirectStepI(curIssue.Issuer, next.account, curIssue.Currency, prevStep, false, isLast)
+				if result != ter.TesSUCCESS {
 					return nil, result
 				}
 				strand = append(strand, directStep)
@@ -706,13 +693,8 @@ func (ctx *StrandContext) buildStrandSteps(
 						strand = append(strand, step)
 					}
 				} else {
-					// Check for loop BEFORE creating step
-					if result := ctx.CheckDirectStepLoop(cur.account, next.account, curIssue.Currency); result != ter.TesSUCCESS {
-						return nil, result
-					}
-					directStep := ctx.newDirectStepI(cur.account, next.account, curIssue.Currency, prevStep, len(strand) == 0, isLast)
-					// Check NoRipple constraint
-					if result := directStep.Check(view); result != ter.TesSUCCESS {
+					directStep, result := ctx.newDirectStepI(cur.account, next.account, curIssue.Currency, prevStep, len(strand) == 0, isLast)
+					if result != ter.TesSUCCESS {
 						return nil, result
 					}
 					strand = append(strand, directStep)
@@ -752,21 +734,10 @@ func (ctx *StrandContext) buildStrandSteps(
 				}
 				strand = append(strand, xrpStep)
 				prevStep = xrpStep
-				// If output is also XRP, defer book step to next iteration
-				// (matching rippled's toStep which returns after XRPEndpointStep).
-				// The next iteration handles the offer→offer transition.
-				if outIssue.IsXRP() {
-					continue
-				}
 			} else if !curIssue.IsXRP() && !curIssue.IsMPT && curIssue.Issuer != cur.account {
 				// May need implied DirectStep first for IOU
-				// Check for loop BEFORE creating step
-				if result := ctx.CheckDirectStepLoop(cur.account, curIssue.Issuer, curIssue.Currency); result != ter.TesSUCCESS {
-					return nil, result
-				}
-				directStep := ctx.newDirectStepI(cur.account, curIssue.Issuer, curIssue.Currency, prevStep, len(strand) == 0, false)
-				// Check NoRipple constraint
-				if result := directStep.Check(view); result != ter.TesSUCCESS {
+				directStep, result := ctx.newDirectStepI(cur.account, curIssue.Issuer, curIssue.Currency, prevStep, len(strand) == 0, false)
+				if result != ter.TesSUCCESS {
 					return nil, result
 				}
 				strand = append(strand, directStep)
@@ -816,13 +787,8 @@ func (ctx *StrandContext) buildStrandSteps(
 				}
 			} else if curIssue.Issuer != next.account {
 				// IOU: implied DirectStep from curIssue.Issuer to next account
-				// Check for loop BEFORE creating step
-				if result := ctx.CheckDirectStepLoop(curIssue.Issuer, next.account, curIssue.Currency); result != ter.TesSUCCESS {
-					return nil, result
-				}
-				directStep := ctx.newDirectStepI(curIssue.Issuer, next.account, curIssue.Currency, prevStep, len(strand) == 0, isLast)
-				// Check NoRipple constraint
-				if result := directStep.Check(view); result != ter.TesSUCCESS {
+				directStep, result := ctx.newDirectStepI(curIssue.Issuer, next.account, curIssue.Currency, prevStep, len(strand) == 0, isLast)
+				if result != ter.TesSUCCESS {
 					return nil, result
 				}
 				strand = append(strand, directStep)
@@ -974,9 +940,20 @@ func GetStrandQuality(strand Strand, view *PaymentSandbox) *Quality {
 	return &composedQuality
 }
 
-// newDirectStepI creates a DirectStepI with the context's offerCrossing flag set.
-func (ctx *StrandContext) newDirectStepI(src, dst [20]byte, currency string, prevStep Step, isFirst, isLast bool) *DirectStepI {
+// newDirectStepI creates and checks a DirectStepI for the strand. Loop
+// detection runs after the account, freeze and NoRipple checks and before the
+// trust line checks, so a strand fails with the same code as in rippled.
+func (ctx *StrandContext) newDirectStepI(src, dst [20]byte, currency string, prevStep Step, isFirst, isLast bool) (*DirectStepI, ter.Result) {
 	step := NewDirectStepI(src, dst, currency, prevStep, isFirst, isLast)
 	step.offerCrossing = ctx.OfferCrossing
-	return step
+	if result := step.checkAccounts(ctx.View); result != ter.TesSUCCESS {
+		return nil, result
+	}
+	if result := ctx.CheckDirectStepLoop(src, dst, currency, prevStep); result != ter.TesSUCCESS {
+		return nil, result
+	}
+	if result := step.checkLine(ctx.View); result != ter.TesSUCCESS {
+		return nil, result
+	}
+	return step, ter.TesSUCCESS
 }
