@@ -90,8 +90,10 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 		// stops the *crossing* at a FUNDED, non-groomable beyond-limit tip. So
 		// at a beyond-limit page we yield an offer only when step() would groom
 		// it — zero funds, a tiny-quality offer whose funds are unchanged from
-		// the pristine afView, an expired offer, or a domain-removed offer —
-		// and let forEachOffer / the expiry/domain branch remove it. The taker's OWN
+		// the pristine afView, an expired offer, a domain-removed offer, or
+		// one whose owner may not hold TakerPays (execOffer's auth check runs
+		// before checkQualityThreshold) — and let forEachOffer / the
+		// expiry/domain branch remove it. The taker's OWN
 		// offer on the default path (a self-cross) is also yielded: rippled
 		// removes a self-crossed own offer "even if no crossing occurs". A
 		// FUNDED, non-groomable non-own beyond-limit offer (and any BECAME-
@@ -137,6 +139,16 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 							groomable, err = s.isFoundPermGroomable(sb, afView, probeOffer)
 							if err != nil {
 								return nil, [32]byte{}, err
+							}
+						}
+						if !groomable {
+							ownerID, decodeErr := state.DecodeAccountID(probeOffer.Account)
+							if decodeErr == nil {
+								mayHold, holdErr := s.offerOwnerMayHoldIn(sb, afView, ownerID)
+								if holdErr != nil {
+									return nil, [32]byte{}, holdErr
+								}
+								groomable = !mayHold
 							}
 						}
 					}
@@ -591,6 +603,30 @@ func (s *BookStep) isOfferOwnerAuthorized(
 	}
 
 	return false, nil
+}
+
+// offerOwnerMayHoldIn reports whether the offer owner may hold the book's
+// input asset and trade its MPTs. An offer that fails this is removed whether
+// or not it would cross, because the check runs ahead of the quality threshold.
+func (s *BookStep) offerOwnerMayHoldIn(sb, afView *PaymentSandbox, owner [20]byte) (bool, error) {
+	if owner != s.book.In.Issuer {
+		authView := afView
+		if rules := sb.Rules(); rules != nil && rules.MPTokensV2Enabled() {
+			authView = sb
+		}
+		switch {
+		case s.book.In.IsMPT:
+			if mptutil.RequireAuthAt(authView, s.book.In.MPTID, owner, false, s.parentCloseTime) != ter.TesSUCCESS {
+				return false, nil
+			}
+		case !s.book.In.IsXRP():
+			authorized, err := s.isOfferOwnerAuthorized(authView, owner, s.book.In.Issuer, s.book.In.Currency)
+			if err != nil || !authorized {
+				return false, err
+			}
+		}
+	}
+	return s.checkMPTDEX(sb, owner), nil
 }
 
 func (s *BookStep) isDeepFrozenIssue(sb *PaymentSandbox, account [20]byte, issue Issue) (bool, error) {

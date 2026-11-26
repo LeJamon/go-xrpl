@@ -503,6 +503,9 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 			tokens = adjustLPTokens(math, lptBalance, tokens, false)
 		}
 		if tokens.IsZero() {
+			if !fixV1_3 {
+				return ter.TecAMM_FAILED
+			}
 			return ter.TecAMM_INVALID_TOKENS
 		}
 		// factor in the adjusted tokens

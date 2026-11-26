@@ -334,14 +334,14 @@ func TestParseError_HardFails(t *testing.T) {
 
 	t.Run("NoXRPTrustLines", func(t *testing.T) {
 		entries := []InvariantEntry{{EntryType: entry.TypeRippleState, After: rsBad}}
-		if v := checkNoXRPTrustLines(entries); v == nil {
+		if v := checkNoXRPTrustLines(entries, nil); v == nil {
 			t.Fatal("expected NoXRPTrustLines violation for unparseable RippleState")
 		}
 	})
 
 	t.Run("NoDeepFreeze", func(t *testing.T) {
 		entries := []InvariantEntry{{EntryType: entry.TypeRippleState, After: rsBad}}
-		if v := checkNoDeepFreezeTrustLinesWithoutFreeze(entries); v == nil {
+		if v := checkNoDeepFreezeTrustLinesWithoutFreeze(entries, nil); v == nil {
 			t.Fatal("expected NoDeepFreezeTrustLinesWithoutFreeze violation for unparseable RippleState")
 		}
 	})

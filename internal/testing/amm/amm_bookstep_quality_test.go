@@ -124,6 +124,7 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 		return amount
 	}
 
+	legacyCtx := state.NewNumberContext(state.MantissaScaleSmall, false)
 	for _, fixAMMv1_1 := range []bool{false, true} {
 		label := "PreFix"
 		if fixAMMv1_1 {
@@ -160,7 +161,7 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 						}
 					case Succeed:
 						if !fixAMMv1_1 {
-							if offerQ.WorseThan(tc.quality) && !paymenttx.WithinRelativeDistance(offerQ, tc.quality, 1e-7) {
+							if offerQ.WorseThan(tc.quality) && !paymenttx.WithinRelativeDistance(legacyCtx, offerQ, tc.quality, legacyCtx.Number(1, -7, state.RoundToNearest)) {
 								t.Errorf("[%d] PreFix Succeed: quality worse and not within tolerance, got q=%d target=%d", i, offerQ.Value, tc.quality.Value)
 							}
 						} else {
@@ -183,7 +184,7 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 							if !(offerQ.WorseThan(tc.quality)) {
 								t.Errorf("[%d] PreFix SucceedShouldFail: expected quality < target", i)
 							}
-							if !paymenttx.WithinRelativeDistance(offerQ, tc.quality, 1e-7) {
+							if !paymenttx.WithinRelativeDistance(legacyCtx, offerQ, tc.quality, legacyCtx.Number(1, -7, state.RoundToNearest)) {
 								t.Errorf("[%d] PreFix SucceedShouldFail: expected within tolerance", i)
 							}
 						}

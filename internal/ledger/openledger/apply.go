@@ -166,6 +166,18 @@ type ApplyConfig struct {
 // inline-queueing during a replay would re-enter the queue path we are
 // supposed to be draining.
 
+// errTransactionApply marks a failure confined to one transaction's staged
+// apply; the view is left untouched.
+var errTransactionApply = errors.New("transaction apply failed")
+
+// dropsTransaction reports whether err drops only the failing transaction, as
+// rippled does for an exception while building a ledger or on the open
+// ledger's initial pass. Storage causes stay fatal: without the read the node
+// cannot know the transaction's outcome, so it must not close without it.
+func dropsTransaction(err error, mode Mode, retryPass bool) bool {
+	return errors.Is(err, errTransactionApply) && (mode == BuildLedgerMode || !retryPass)
+}
+
 // applyAndClassify runs a single transaction through bp. Applied results are
 // successful regardless of TER; tef/tem/tel results fail; all other non-applied
 // results retry. The engine's apply flags decide whether a tec result is applied.
@@ -182,7 +194,7 @@ func applyAndClassify(bp *txengine.BlockProcessor, transaction tx.Transaction, b
 			"mode", mode,
 			"hash", fmt.Sprintf("%x", result.Hash[:8]),
 			"err", applyErr)
-		return ResultFailure, applyErr
+		return ResultFailure, fmt.Errorf("%w: %w", errTransactionApply, applyErr)
 	}
 	if result.ApplyResult.Cause != nil {
 		logger.Warn("transaction execution cause — staged ledger discarded",
@@ -519,6 +531,9 @@ func applyTxsWithOwnership(
 		}
 		class, err := applyObserved(bp, parsed[i], ptx.Blob, "initial", 0, ptx.Hash)
 		if err != nil {
+			if dropsTransaction(err, cfg.Mode, false) {
+				continue
+			}
 			return fmt.Errorf("openledger.ApplyTxs: apply transaction %x on initial pass: %w", ptx.Hash, err)
 		}
 		switch class {
@@ -559,6 +574,9 @@ func applyTxsWithOwnership(
 			ptx := candidate.pending
 			class, err := applyObserved(bp, candidate.parsed, ptx.Blob, "retry", pass+1, ptx.Hash)
 			if err != nil {
+				if dropsTransaction(err, cfg.Mode, true) {
+					continue
+				}
 				return fmt.Errorf(
 					"openledger.ApplyTxs: apply transaction %x on retry pass %d: %w",
 					ptx.Hash,

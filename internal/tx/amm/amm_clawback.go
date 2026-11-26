@@ -333,6 +333,14 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 		}
 	}
 
+	if !withdrawAllActive {
+		fixV1_1 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_1)
+		amount2Ptr := &withdrawAmount2
+		withdrawAmount1, amount2Ptr, lpTokensToWithdraw = adjustAmountsByLPTokens(math,
+			assetBalance1, withdrawAmount1, amount2Ptr, lptAMMBalance, lpTokensToWithdraw, 0, false, fixV1_3, fixV1_1)
+		withdrawAmount2 = *amount2Ptr
+	}
+
 	if lpTokensToWithdraw.IsZero() || lpTokensToWithdraw.IsNegative() || isGreater(lpTokensToWithdraw, holdLPTokens) {
 		return ter.TecAMM_INVALID_TOKENS
 	}
