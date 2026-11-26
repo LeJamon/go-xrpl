@@ -188,12 +188,7 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 			if r := checkIssuerTrustLineForAccept(ctx, nftIssuerID, buyAmount, nftFlags); r != ter.TesSUCCESS {
 				return r
 			}
-			issuerCut := buyAmount.MulRatioWithNumberContext(
-				uint32(transferFee),
-				transferFeeDivisor32,
-				true,
-				ctx.NumberContext(),
-			)
+			issuerCut := nftIssuerCut(buyAmount, transferFee, ctx.NumberContext())
 			if !issuerCut.IsZero() {
 				if r := payIOU(ctx, buyerID, nftIssuerID, issuerCut); r != ter.TesSUCCESS {
 					return r
@@ -237,7 +232,7 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 
 		var issuerCut uint64
 		if transferFee != 0 && amount > 0 {
-			issuerCut = nftTransferFeeXRP(amount-brokerFee, transferFee)
+			issuerCut = nftIssuerCutXRP(amount-brokerFee, transferFee, ctx.NumberContext())
 			if sellerID == nftIssuerID || buyerID == nftIssuerID {
 				issuerCut = 0
 			}
@@ -335,12 +330,7 @@ func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, 
 			if r := checkIssuerTrustLineForAccept(ctx, nftIssuerID, sellAmount, nftFlags); r != ter.TesSUCCESS {
 				return r
 			}
-			issuerCut := sellAmount.MulRatioWithNumberContext(
-				uint32(transferFee),
-				transferFeeDivisor32,
-				true,
-				ctx.NumberContext(),
-			)
+			issuerCut := nftIssuerCut(sellAmount, transferFee, ctx.NumberContext())
 			if !issuerCut.IsZero() {
 				if r := payIOU(ctx, accountID, nftIssuerID, issuerCut); r != ter.TesSUCCESS {
 					return r
@@ -368,7 +358,7 @@ func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, 
 		var issuerCut uint64
 
 		if transferFee != 0 && amount > 0 {
-			issuerCut = nftTransferFeeXRP(amount, transferFee)
+			issuerCut = nftIssuerCutXRP(amount, transferFee, ctx.NumberContext())
 			if sellerID == nftIssuerID || accountID == nftIssuerID {
 				issuerCut = 0
 			}
@@ -444,12 +434,7 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 			if r := checkIssuerTrustLineForAccept(ctx, nftIssuerID, buyAmount, nftFlags); r != ter.TesSUCCESS {
 				return r
 			}
-			issuerCut := buyAmount.MulRatioWithNumberContext(
-				uint32(transferFee),
-				transferFeeDivisor32,
-				true,
-				ctx.NumberContext(),
-			)
+			issuerCut := nftIssuerCut(buyAmount, transferFee, ctx.NumberContext())
 			if !issuerCut.IsZero() {
 				if r := payIOU(ctx, buyerID, nftIssuerID, issuerCut); r != ter.TesSUCCESS {
 					return r
@@ -476,7 +461,7 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 
 		var issuerCut uint64
 		if transferFee != 0 && amount > 0 {
-			issuerCut = nftTransferFeeXRP(amount, transferFee)
+			issuerCut = nftIssuerCutXRP(amount, transferFee, ctx.NumberContext())
 			if accountID == nftIssuerID || buyerID == nftIssuerID {
 				issuerCut = 0
 			}
