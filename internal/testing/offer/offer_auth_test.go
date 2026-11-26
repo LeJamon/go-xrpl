@@ -268,3 +268,75 @@ func testSelfAuth(t *testing.T, disabledFeatures []string) {
 
 	RequireOfferCount(t, env, gw, 0)
 }
+
+// TestOffer_UnauthorizedBehindExpired checks that an unauthorized offer beyond
+// the taker's quality limit is removed once an expired within-limit offer ahead
+// of it has been groomed, and is left alone when it is the book tip itself.
+func TestOffer_UnauthorizedBehindExpired(t *testing.T) {
+	for _, fs := range offerFeatureSets {
+		t.Run(fs.name, func(t *testing.T) {
+			t.Run("BehindExpired", func(t *testing.T) {
+				testUnauthorizedBeyondLimit(t, fs.disabled, true)
+			})
+			t.Run("AtTip", func(t *testing.T) {
+				testUnauthorizedBeyondLimit(t, fs.disabled, false)
+			})
+		})
+	}
+}
+
+func testUnauthorizedBeyondLimit(t *testing.T, disabledFeatures []string, withExpired bool) {
+	env := newEnvWithFeatures(t, disabledFeatures)
+
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
+
+	USD := func(amount float64) tx.Amount { return jtx.USD(gw, amount) }
+
+	for _, acct := range []*jtx.Account{gw, alice, bob, carol} {
+		env.FundAmount(acct, uint64(jtx.XRP(400000)))
+	}
+	env.Close()
+
+	// Alice has no USD line, so she loses authorization once gw requires it.
+	// Her offer pays 5 XRP/USD, worse than bob's limit of 8 XRP/USD.
+	result := env.Submit(OfferCreate(alice, USD(10), jtx.XRPTxAmountFromXRP(50)).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	env.EnableRequireAuth(gw)
+	env.AuthorizeTrustLine(gw, bob, "USD")
+	env.Trust(bob, USD(100))
+	env.Close()
+	result = env.Submit(payment.PayIssued(gw, bob, USD(50)).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	if withExpired {
+		// Carol's offer pays 10 XRP/USD, inside bob's limit, but expires
+		// before bob's offer is placed.
+		env.AuthorizeTrustLine(gw, carol, "USD")
+		env.Trust(carol, USD(100))
+		env.Close()
+		result = env.Submit(OfferCreate(carol, USD(10), jtx.XRPTxAmountFromXRP(100)).
+			Expiration(LastClose(env) + 1).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		RequireOfferCount(t, env, carol, 1)
+	}
+
+	result = env.Submit(OfferCreate(bob, jtx.XRPTxAmountFromXRP(80), USD(10)).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	RequireOfferCount(t, env, bob, 1)
+	RequireOfferCount(t, env, carol, 0)
+	if withExpired {
+		RequireOfferCount(t, env, alice, 0)
+	} else {
+		RequireOfferCount(t, env, alice, 1)
+	}
+	jtx.RequireIOUBalance(t, env, bob, gw, "USD", 50)
+}

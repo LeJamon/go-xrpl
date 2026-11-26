@@ -365,26 +365,11 @@ func (s *BookStep) forEachOffer(
 			}
 		}
 
-		authView := afView
-		if rules := sb.Rules(); rules != nil && rules.MPTokensV2Enabled() {
-			authView = sb
+		mayHold, err := s.offerOwnerMayHoldIn(sb, afView, offerOwner)
+		if err != nil {
+			throwConsumeFailure(err)
 		}
-		authorized := true
-		if offerOwner != s.book.In.Issuer {
-			switch {
-			case s.book.In.IsMPT:
-				authorized = mptutil.RequireAuthAt(authView, s.book.In.MPTID, offerOwner, false, s.parentCloseTime) == ter.TesSUCCESS
-			case !s.book.In.IsXRP():
-				var err error
-				authorized, err = s.isOfferOwnerAuthorized(
-					authView, offerOwner, s.book.In.Issuer, s.book.In.Currency,
-				)
-				if err != nil {
-					throwConsumeFailure(err)
-				}
-			}
-		}
-		if !authorized || !s.checkMPTDEX(sb, offerOwner) {
+		if !mayHold {
 			if !isAMM {
 				ofrsToRm[clobKey] = true
 				s.recordPermRm(clobKey)
