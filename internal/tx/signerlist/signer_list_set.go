@@ -227,14 +227,9 @@ func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) ter.Result {
 		ctx.Account.RegularKey = ""
 	}
 
-	// Set lsfPasswordSpent iff this SetRegularKey received the free
-	// password-change discount (its computed base fee was waived). rippled
-	// binds the flag to !minimumFee(ctx_.baseFee) — the SAME base fee that
-	// drives the preclaim fee floor — so the fee charged and the flag can
-	// never disagree. Re-deriving "signed with master" here independently is
-	// what let the two drift and fork account_hash (#732).
-	// Reference: rippled SetRegularKey.cpp doApply lines 83-84.
-	if tx.SetRegularKeyFeeWaived(ctx.Config.SkipSignatureVerification, s.GetCommon(), ctx.Account) {
+	// A zero computed fee spends the free password change, whether it was
+	// waived or the reference fee itself is zero.
+	if ctx.BaseFee == 0 {
 		ctx.Account.Flags |= state.LsfPasswordSpent
 	}
 
