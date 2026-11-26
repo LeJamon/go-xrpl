@@ -45,6 +45,27 @@ func (l *LoanSet) loanSetValueFields() []string {
 	return fields
 }
 
+// CounterSigner returns the account that must authorise CounterpartySignature:
+// Counterparty when set, otherwise the LoanBroker owner.
+func (l *LoanSet) CounterSigner(view tx.ReadOnlyLedgerView) (string, bool, error) {
+	if l.Counterparty != "" {
+		return l.Counterparty, true, nil
+	}
+	brokerID, ok := hashBytes(l.LoanBrokerID)
+	if !ok {
+		return "", false, nil
+	}
+	b, err := readLoanBroker(view, keylet.LoanBrokerByID(brokerID))
+	if err != nil || b == nil {
+		return "", false, err
+	}
+	owner, err := state.EncodeAccountID(b.Owner)
+	if err != nil {
+		return "", false, err
+	}
+	return owner, true, nil
+}
+
 // CalculateBaseFee includes transaction and sponsor signers through the common
 // fee, then adds the nested counterparty signers.
 func (l *LoanSet) CalculateBaseFee(_ tx.ReadOnlyLedgerView, config tx.EngineConfig) (uint64, error) {

@@ -220,6 +220,13 @@ type CounterpartyProvider interface {
 	GetCounterparty() string
 }
 
+// CounterSigner is implemented by transactions whose CounterpartySignature must
+// be authorised against an account resolved from the ledger. ok is false when
+// no counter-signing account can be resolved.
+type CounterSigner interface {
+	CounterSigner(view ReadOnlyLedgerView) (account string, ok bool, err error)
+}
+
 // Amount is an alias for state.Amount — represents either XRP (as drops int64) or an issued currency amount
 type Amount = state.Amount
 
