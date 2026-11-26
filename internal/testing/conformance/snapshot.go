@@ -1370,10 +1370,13 @@ func loadSnapshotLedger(snapshot snapshotLedger) (loadedSnapshotLedger, error) {
 		}
 		ids[i] = id
 	}
-	explicitRules := amendment.NewRules(ids)
-	if explicitRules.EnabledCount() != len(ids) {
+	if amendment.NewRules(ids).EnabledCount() != len(ids) {
 		return loadedSnapshotLedger{}, errors.New("duplicate amendment IDs")
 	}
+	// Retired amendments are permanently enabled, exactly as when rules are
+	// loaded from a ledger. A snapshot recorded by an oracle that had not yet
+	// retired an amendment omits it whenever it was disabled there.
+	explicitRules := amendment.NewRules(append(ids, amendment.PermanentlyEnabledIDs()...))
 	fees, err := parseSnapshotFees(snapshot.Fees)
 	if err != nil {
 		return loadedSnapshotLedger{}, err

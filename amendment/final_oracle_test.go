@@ -56,6 +56,15 @@ var privateV341GoOnlyFeatures = []struct {
 	{name: "fixNFTokenNegOffer", supported: SupportedYes, vote: VoteObsolete},
 }
 
+// privateV341RetiredAhead lists amendments the Go registry retires ahead of
+// the pinned 3.4.1 oracle because a later rippled release running on a live
+// network retires them. Such networks never write the amendment to the
+// Amendments object of a fresh ledger, so it must be permanently enabled.
+var privateV341RetiredAhead = map[string]string{
+	// rippled 3.5 XRPL_RETIRE_FIX(AMMv1_1); the reset testnet runs 3.5.
+	"fixAMMv1_1": "rippled 3.5",
+}
+
 func loadPrivateV341Fixture(t *testing.T) privateV341Fixture {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", filepath.FromSlash(rippled.Pin.AmendmentRegistry)))
@@ -172,14 +181,21 @@ func TestPrivateV341FeatureRegistry(t *testing.T) {
 				wantSupported = SupportedYes
 			}
 		}
+		wantRetired := expected.Retired
+		if release, ahead := privateV341RetiredAhead[expected.Name]; ahead {
+			if expected.Retired {
+				t.Errorf("feature %q is retired by the pinned oracle; drop its %s retired-ahead exception", expected.Name, release)
+			}
+			wantVote, wantRetired = VoteObsolete, true
+		}
 		if feature.Supported != wantSupported {
 			t.Errorf("feature %q support = %v, want %v (native backend available=%v)", expected.Name, feature.Supported, wantSupported, mptcrypto.Available())
 		}
 		if feature.Vote != wantVote {
 			t.Errorf("feature %q vote = %v, want %v", expected.Name, feature.Vote, wantVote)
 		}
-		if feature.Retired != expected.Retired {
-			t.Errorf("feature %q retired = %v, want %v", expected.Name, feature.Retired, expected.Retired)
+		if feature.Retired != wantRetired {
+			t.Errorf("feature %q retired = %v, want %v", expected.Name, feature.Retired, wantRetired)
 		}
 	}
 

@@ -29,7 +29,7 @@
   "source_sha256": {
     "protocol/transaction_type.go": "2b8eb3a4d313eaa22d0a2a98cfbf371593c90969f8e76c6ffcf66824d5271daf",
     "internal/tx/template.go": "9ced629bf6c44537686a3d80b2a590bfbdf16ba424259dc489bbda161936b32e",
-    "amendment/registry.go": "4cb315e95cae13c39297f64e40dbc7ac6e61d6357d6e908f039206bbb54a072d"
+    "amendment/registry.go": "b2f4fbc7a108b308ceb9f3949e20f5690720eb04822d7afd8c9815a4d61a62ba"
   },
   "engine": {
     "registry": {
@@ -2197,7 +2197,7 @@
       "name": "fixAMMv1_1",
       "go": {
         "name": "fixAMMv1_1",
-        "kind": "fix",
+        "kind": "retired",
         "supported": "yes",
         "support_condition": null
       },
