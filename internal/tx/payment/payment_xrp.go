@@ -149,6 +149,14 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 		newAccount.HasSponsor = true
 	}
 
+	// The new account's balance starts at zero, so the wedge-prevention
+	// exemption reduces to the payment amount alone.
+	if amountDrops > ctx.Config.ReserveBase {
+		if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, ctx.AccountID, destAccountID, newAccount); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+
 	// Debit sender
 	ctx.Account.Balance -= amountDrops
 

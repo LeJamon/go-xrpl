@@ -12,9 +12,11 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/credential"
 	dp "github.com/LeJamon/go-xrpl/internal/testing/depositpreauth"
 	"github.com/LeJamon/go-xrpl/internal/testing/mpt"
+	"github.com/LeJamon/go-xrpl/internal/testing/offer"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
 
@@ -220,4 +222,113 @@ func TestMPTPayment_CanTransferCheckedBeforeDepositPreauth(t *testing.T) {
 	env.Close()
 	require.True(t, env.LedgerEntryExists(credKey),
 		"credential must be untouched when CanTransfer fails first")
+}
+
+// expiredCredential creates a credential issued to holder by issuer, accepted
+// by holder, and advances the ledger past its expiration. It returns the
+// credential index hex and its keylet. Self-issued credentials are accepted
+// on creation.
+func expiredCredential(t *testing.T, env *jtx.TestEnv, issuer, holder *jtx.Account, credType string) (string, keylet.Keylet) {
+	t.Helper()
+	result := env.Submit(
+		credential.CredentialCreateText(issuer, holder, credType).
+			Expiration(env.NowRipple() + 50).
+			Build(),
+	)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	if issuer != holder {
+		result = env.Submit(credential.CredentialAcceptText(holder, issuer, credType).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+	}
+
+	env.AdvanceTime(60 * time.Second)
+	env.Close()
+	return dp.CredentialIndexHex(holder, issuer, credType), jtx.CredentialKeylet(holder, issuer, credType)
+}
+
+// TestPayment_ExpiredCredentialsNewDestinationXRP verifies that a direct XRP
+// payment creating its destination still runs the expired-credential removal
+// when the amount exceeds the base reserve: it fails with tecEXPIRED, the
+// credential deletion survives the fee-claim reset, and the destination is not
+// created. At exactly the base reserve the wedge exemption skips the check.
+func TestPayment_ExpiredCredentialsNewDestinationXRP(t *testing.T) {
+	const credType = "abcde"
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
+
+	env := jtx.NewTestEnv(t)
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.Close()
+
+	credIdx, credKey := expiredCredential(t, env, alice, alice, credType)
+
+	result := env.Submit(
+		payment.Pay(alice, carol, reserve(env, 0)).
+			CredentialIDs([]string{credIdx}).
+			Build(),
+	)
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	require.True(t, env.Exists(carol))
+	require.True(t, env.LedgerEntryExists(credKey),
+		"expired credential must survive a payment inside the reserve exemption")
+
+	before := env.Balance(alice)
+	result = env.Submit(
+		payment.Pay(alice, bob, uint64(jtx.XRP(1000))).
+			CredentialIDs([]string{credIdx}).
+			Build(),
+	)
+	require.Equal(t, "tecEXPIRED", result.Code)
+	env.Close()
+
+	require.False(t, env.LedgerEntryExists(credKey),
+		"expired credential must be deleted despite the fee-claim reset")
+	require.False(t, env.Exists(bob), "destination must not be created")
+	require.Equal(t, before-env.BaseFee(), env.Balance(alice))
+}
+
+// TestPayment_ExpiredCredentialsNewDestinationPath verifies that a
+// cross-currency payment delivering XRP to a not-yet-existing destination runs
+// the expired-credential removal unconditionally.
+func TestPayment_ExpiredCredentialsNewDestinationPath(t *testing.T) {
+	const credType = "abcde"
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	gw := jtx.NewAccount("gw")
+	mm := jtx.NewAccount("mm")
+
+	env := jtx.NewTestEnv(t)
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(mm, uint64(jtx.XRP(10000)))
+	env.Close()
+
+	jtx.RequireTxSuccess(t, env.Submit(trustset.TrustLine(alice, "USD", gw, "10000").Build()))
+	jtx.RequireTxSuccess(t, env.Submit(trustset.TrustLine(mm, "USD", gw, "10000").Build()))
+	env.Close()
+	jtx.RequireTxSuccess(t, env.Submit(
+		payment.PayIssued(gw, alice, tx.NewIssuedAmountFromFloat64(5000, "USD", gw.Address)).Build()))
+	jtx.RequireTxSuccess(t, env.Submit(
+		offer.OfferCreate(mm, tx.NewIssuedAmountFromFloat64(1000, "USD", gw.Address), jtx.XRPTxAmountFromXRP(1000)).Build()))
+	env.Close()
+
+	credIdx, credKey := expiredCredential(t, env, alice, alice, credType)
+
+	result := env.Submit(
+		payment.PayIssued(alice, bob, jtx.XRPTxAmountFromXRP(500)).
+			SendMax(tx.NewIssuedAmountFromFloat64(600, "USD", gw.Address)).
+			CredentialIDs([]string{credIdx}).
+			Build(),
+	)
+	require.Equal(t, "tecEXPIRED", result.Code)
+	env.Close()
+
+	require.False(t, env.LedgerEntryExists(credKey),
+		"expired credential must be deleted despite the fee-claim reset")
+	require.False(t, env.Exists(bob), "destination must not be created")
+	require.InDelta(t, 5000.0, env.BalanceIOU(alice, "USD", gw), 1e-10)
 }
