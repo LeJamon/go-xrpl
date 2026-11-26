@@ -480,10 +480,12 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	// If Amount's issue matches a.Asset2 (not a.Asset), swap the amounts so that
 	// amount1 corresponds to a.Asset and amount2 corresponds to a.Asset2.
 	// This matches rippled's ammHolds issue-hint reordering behavior.
+	amountIsAsset2 := false
 	if a.Amount != nil && a.Amount2 != nil {
 		amountIssue := amountAsset(*a.Amount)
 		if matchesAssetByIssue(a.Asset2, amountIssue) && !matchesAssetByIssue(a.Asset, amountIssue) {
 			amount1, amount2 = amount2, amount1
+			amountIsAsset2 = true
 		}
 	}
 
@@ -583,56 +585,20 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 		}
 
 	case flags&tfTwoAsset != 0:
-		// Two asset deposit with limits (equalDepositLimit)
-		// Reference: rippled AMMDeposit.cpp equalDepositLimit()
-		lpTokensDepositMin := a.LPTokenOut // optional minimum
-
-		frac := math.div(math.fromAmount(amount1), math.fromAmount(assetBalance1), state.RoundToNearest)
-		tokensAdj := getRoundedLPTokens(math, fixV1_3, lptBalance, frac, true)
-
-		if tokensAdj.IsZero() {
-			if fixV1_3 {
-				return ter.TecAMM_INVALID_TOKENS
-			}
-			return ter.TecAMM_FAILED
+		// Two asset deposit with limits. Amount is held exact first, so the
+		// computation runs in Amount/Amount2 order, not pool order.
+		balance, balance2, amt, amt2 := assetBalance1, assetBalance2, amount1, amount2
+		if amountIsAsset2 {
+			balance, balance2, amt, amt2 = balance2, balance, amt2, amt
 		}
-		// factor in the adjusted tokens
-		frac = adjustFracByTokens(math, fixV1_3, lptBalance, tokensAdj, frac)
-		amount2Deposit := getRoundedAsset(math, fixV1_3, assetBalance2, frac, true)
-
-		if math.fromAmount(amount2Deposit).Cmp(math.fromAmount(amount2)) <= 0 {
-			depositAmount1 = amount1
-			depositAmount2 = amount2Deposit
-			lpTokensToIssue = tokensAdj
-			// Check lpTokensDepositMin
-			if lpTokensDepositMin != nil && math.fromAmount(lpTokensToIssue).Cmp(math.fromAmount(*lpTokensDepositMin)) < 0 {
-				return ter.TecAMM_FAILED
-			}
-		} else {
-			// Try the other way
-			frac = math.div(math.fromAmount(amount2), math.fromAmount(assetBalance2), state.RoundToNearest)
-			tokensAdj = getRoundedLPTokens(math, fixV1_3, lptBalance, frac, true)
-
-			if tokensAdj.IsZero() {
-				if fixV1_3 {
-					return ter.TecAMM_INVALID_TOKENS
-				}
-				return ter.TecAMM_FAILED
-			}
-			frac = adjustFracByTokens(math, fixV1_3, lptBalance, tokensAdj, frac)
-			amountDeposit := getRoundedAsset(math, fixV1_3, assetBalance1, frac, true)
-
-			if math.fromAmount(amountDeposit).Cmp(math.fromAmount(amount1)) <= 0 {
-				depositAmount1 = amountDeposit
-				depositAmount2 = amount2
-				lpTokensToIssue = tokensAdj
-				if lpTokensDepositMin != nil && math.fromAmount(lpTokensToIssue).Cmp(math.fromAmount(*lpTokensDepositMin)) < 0 {
-					return ter.TecAMM_FAILED
-				}
-			} else {
-				return ter.TecAMM_FAILED
-			}
+		dep, dep2, tokens, res := equalDepositLimit(math, fixV1_3, balance, balance2, lptBalance, amt, amt2)
+		if res != ter.TesSUCCESS {
+			return res
 		}
+		if amountIsAsset2 {
+			dep, dep2 = dep2, dep
+		}
+		depositAmount1, depositAmount2, lpTokensToIssue = dep, dep2, tokens
 
 	case flags&tfOneAssetLPToken != 0:
 		// Single asset deposit for specific LP tokens (singleDepositTokens)
@@ -1099,6 +1065,44 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) (result ter.Result) {
 	}
 
 	return ter.TesSUCCESS
+}
+
+// equalDepositLimit sizes a proportional deposit capped by amount and amount2.
+// It first holds amount exact and derives the matching amount2 share; if that
+// exceeds amount2 it holds amount2 exact instead. Balances and results are in
+// the same order as the amount arguments.
+func equalDepositLimit(
+	math numberMath,
+	fixV1_3 bool,
+	balance, balance2, lptBalance, amount, amount2 tx.Amount,
+) (deposit, deposit2, tokens tx.Amount, result ter.Result) {
+	noTokens := ter.TecAMM_FAILED
+	if fixV1_3 {
+		noTokens = ter.TecAMM_INVALID_TOKENS
+	}
+
+	frac := math.div(math.fromAmount(amount), math.fromAmount(balance), state.RoundToNearest)
+	tokens = getRoundedLPTokens(math, fixV1_3, lptBalance, frac, true)
+	if tokens.IsZero() {
+		return deposit, deposit2, tokens, noTokens
+	}
+	frac = adjustFracByTokens(math, fixV1_3, lptBalance, tokens, frac)
+	deposit2 = getRoundedAsset(math, fixV1_3, balance2, frac, true)
+	if math.fromAmount(deposit2).Cmp(math.fromAmount(amount2)) <= 0 {
+		return amount, deposit2, tokens, ter.TesSUCCESS
+	}
+
+	frac = math.div(math.fromAmount(amount2), math.fromAmount(balance2), state.RoundToNearest)
+	tokens = getRoundedLPTokens(math, fixV1_3, lptBalance, frac, true)
+	if tokens.IsZero() {
+		return deposit, deposit2, tokens, noTokens
+	}
+	frac = adjustFracByTokens(math, fixV1_3, lptBalance, tokens, frac)
+	deposit = getRoundedAsset(math, fixV1_3, balance, frac, true)
+	if math.fromAmount(deposit).Cmp(math.fromAmount(amount)) <= 0 {
+		return deposit, amount2, tokens, ter.TesSUCCESS
+	}
+	return deposit, deposit2, tokens, ter.TecAMM_FAILED
 }
 
 func debitDepositTrustline(ctx *tx.ApplyContext, accountID, issuerID [20]byte, currency string, amount tx.Amount) ter.Result {
